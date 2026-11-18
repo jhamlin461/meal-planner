@@ -25,8 +25,21 @@ def test_fake_chore_with_no_stock_still_completes():
     g = _g()
     c = g.create("chores", {"name": "Trash", "period_type": "daily", "consume_product_on_chore_execution": 1,
                             "product_id": 5, "product_amount": 1})
+    g.add_stock(5, 0.5, None, None)
     g.execute_chore(c, None)
-    assert g.chores_status()[0]["last_tracked_time"].startswith("2026-11-18")
+    assert g.stock_amounts()[5] == 0.5
+    row = g.chores_status()[0]
+    assert row["last_tracked_time"].startswith("2026-11-18")
+    assert row["next_estimated_execution_time"].startswith("2026-11-19")
+
+
+def test_fake_unknown_period_type_raises():
+    import pytest
+    g = _g()
+    c = g.create("chores", {"name": "x", "period_type": "fortnightly"})
+    g.execute_chore(c, None)
+    with pytest.raises(ValueError):
+        g.chores_status()
 
 
 def test_fake_rotation_who_least_did_first():

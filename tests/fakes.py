@@ -134,7 +134,9 @@ class FakeGrocy:
             else:
                 y, m = last.year + (last.month == 12), last.month % 12 + 1
             return date(y, m, min(want, calendar.monthrange(y, m)[1]))
-        return last + timedelta(days=365)  # yearly
+        if pt == "yearly":
+            return last + timedelta(days=365)
+        raise ValueError(f"unknown period_type {pt!r}")
 
     def chores_status(self):
         out = []
@@ -158,10 +160,9 @@ class FakeGrocy:
         c = self.get_object("chores", chore_id)
         self.chore_log.append({"chore_id": chore_id, "done_by": done_by, "skipped": skipped, "date": self.today})
         if not skipped and int(c.get("consume_product_on_chore_execution") or 0) == 1:
-            try:
-                self.consume(int(c["product_id"]), float(c.get("product_amount") or 1))
-            except Exception:
-                pass  # no stock: the chore still completes
+            pid, amt = int(c["product_id"]), float(c.get("product_amount") or 1)
+            if self.stock_amounts().get(pid, 0) >= amt:  # real Grocy rejects a short consume entirely
+                self.consume(pid, amt)
 
     def open_tasks(self):
         return [t for t in self.objects("tasks") if int(t.get("done") or 0) == 0]
