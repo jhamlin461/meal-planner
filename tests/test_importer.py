@@ -192,6 +192,22 @@ def test_add_conversion_rejects_non_positive_factor(factor):
     assert g.objects("quantity_unit_conversions") == before
 
 
+@pytest.mark.parametrize("unit", ["packet", "Packets"])
+def test_add_conversion_rejects_packaging_unit(unit):
+    g = grocy()
+    pid = product(g, "Sour cream", "g")
+    before = g.objects("quantity_unit_conversions")
+    with pytest.raises(ValueError, match="packet|packaging"):
+        add_conversion(g, pid, unit, 30)
+    assert g.objects("quantity_unit_conversions") == before
+    assert "packet" not in ids(g).unit
+
+
+def test_cfe_prompt_forbids_packets():
+    from app.ai import CFE_PROMPT
+    assert "packet" in CFE_PROMPT.lower() and "est." in CFE_PROMPT
+
+
 def test_save_blocks_invalid_table_and_missing_match():
     g = grocy()
     pid = product(g, "Egg", "piece")

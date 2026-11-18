@@ -68,7 +68,12 @@ Table rules:
 - Every ingredient is used by exactly one op.
 - An op's inputs must cover contiguous ingredient rows, so order ingredients accordingly.
 - An ingredient used in two steps becomes two rows with partial amounts.
-- Oven preheat and pan prep go in `pre`, not in ops."""
+- Oven preheat and pan prep go in `pre`, not in ops.
+- Never use a packaging unit (packet, pouch, sachet, container, package, bag, box). Convert each packet to a real unit
+  (g, ml, tbsp, tsp, cup, oz) using the size printed on the card; if none is printed, use the typical meal-kit packet
+  size and put "est." in the note.
+- Replace kit-only seasoning blends (e.g. "Southwest Spice Blend") with their component spices: one row each, amounts
+  estimated, note "est., from <blend name>". Ops must still cover those rows contiguously."""
 
 PRODUCT_PROMPT = """You fill in pantry product details for a grocery inventory.
 Use the given product info (barcode database data or a package photo). Prefer an existing generic name from

@@ -25,6 +25,7 @@
     <input type="hidden" name="prev_{{ i }}" value="{{ row.prev or '' }}">
     <label><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for i{{ i }}"> {{ row.stock_unit }}</label>
   </div>
+  {% if row.packaging %}<p class="muted">Packet sizes vary — enter the real amount</p>{% endif %}
   {% if not row.product_id %}<div class="row">
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="secondary" name="action" value="create:{{ i }}">Create new product</button>
@@ -34,7 +35,7 @@
     <input type="text" name="factor_{{ i }}" value="{{ row.factor }}" size="6" inputmode="decimal" aria-label="Conversion factor">
     <span>{{ row.stock_unit }}</span>
     <button class="secondary" name="action" value="suggest:{{ i }}">Suggest</button>
-  </div>{% else %}<input type="hidden" name="factor_{{ i }}" value="{{ row.factor }}">{% endif %}
+  </div>{% elif not row.packaging %}<input type="hidden" name="factor_{{ i }}" value="{{ row.factor }}">{% endif %}
   {% if row.note %}<p class="muted">{{ row.note }}</p>{% endif %}
   {% if row.error %}<p class="error">{{ row.error }}</p>{% endif %}
 </li>

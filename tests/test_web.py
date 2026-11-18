@@ -295,6 +295,30 @@ def test_grocy_down_shows_503(tmp_path, exc):
     assert r.status_code == 503 and "Can't reach Grocy — nothing was saved. Try again in a minute." in r.text
 
 
+def test_review_packet_row_asks_for_amount_not_factor(env):
+    g, ai, store, c, _ = env
+    sour = product(g, "Sour cream")
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0"])])
+    ai.draft = RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t)
+    c.post("/import", data={"urls": "https://example.com/tacos"})
+    pid = store.all()[0].id
+    form = dict(product_0=sour, prev_0=sour, amount_0="", factor_0="", new_name_0="sour cream", op_id=["o1"],
+                op_label=["mix"], op_inputs=["i0"])
+    html = c.post(f"/import/{pid}", data={**form, "action": "update"}).text
+    assert 'name="amount_0"' in html and "factor_0" not in html and "Suggest" not in html
+    assert "Packet sizes vary — enter the real amount" in html
+    # a posted factor for a packet row is ignored: no error, no conversion row
+    html = c.post(f"/import/{pid}", data={**form, "action": "update", "factor_0": "30"}).text
+    assert 'class="error"' not in html and not g.objects("quantity_unit_conversions", product_id=sour)
+    r = c.post(f"/import/{pid}", data={**form, "action": "save", "amount_0": "30", "factor_0": "30"},
+               follow_redirects=False)
+    assert r.status_code == 303
+    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert [p["amount"] for p in g.objects("recipes_pos", recipe_id=rid)] == [30]
+    assert not g.objects("quantity_unit_conversions", product_id=sour)
+
+
 def test_review_factor_is_not_applied_to_a_newly_picked_product(env):
     g, ai, store, c, _ = env
     flour, sugar = product(g, "Flour"), product(g, "Sugar")

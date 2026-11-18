@@ -1,4 +1,4 @@
-from app.qty import format_qty, normalize_unit, parse_qty, to_stock_amount
+from app.qty import format_qty, is_packaging, normalize_unit, parse_qty, to_stock_amount
 
 
 def test_parse_qty():
@@ -32,3 +32,8 @@ def test_alias_targets_are_canonical_units():
     from app.qty import _ALIASES
     from app.setup_grocy import UNITS
     assert set(_ALIASES.values()) <= set(UNITS)
+
+
+def test_is_packaging():
+    assert all(is_packaging(u) for u in ("packet", "Packets", "pouch"))
+    assert not any(is_packaging(u) for u in ("can", "g", "tbsp"))

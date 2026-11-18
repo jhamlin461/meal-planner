@@ -17,7 +17,7 @@ from app.ai import AIError, RecipeDraft
 from app.barcode import _generics, _product_fields
 from app.cfe import ingredient_text, validate
 from app.nutrition import fill_missing_nutrition
-from app.qty import normalize_unit, to_stock_amount
+from app.qty import is_packaging, normalize_unit, to_stock_amount
 from app.setup_grocy import LOCATIONS, ids
 
 UA = "MealPlanner/1.0"
@@ -243,6 +243,8 @@ def stock_amount_for(grocy, product_id: int, qty: float | None, unit: str) -> fl
 
 def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> None:
     """Product-specific `from_unit` -> stock unit conversion (1 from_unit = factor stock units); upserts."""
+    if is_packaging(from_unit):  # packets vary by brand and card; they must never become a stored conversion
+        raise ValueError(f"'{from_unit}' is packaging, not a measurement; enter the real amount instead")
     if not factor > 0:  # 0 breaks to_stock_amount's 1/f reverse edge; negatives poison shopping sums
         raise ValueError(f"conversion factor must be positive, got {factor}")
     name = _unit(from_unit)

@@ -25,6 +25,7 @@ from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
+from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids
@@ -342,7 +343,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["text"] = ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")
             row["unit"] = ing.unit or "piece"
             row["stock_unit"] = units.get(_int(prod.get("qu_id_stock")), "") if prod else ""
-            row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None
+            row["packaging"] = is_packaging(row["unit"])
+            row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     table_errors=validate(table), errors=errors)
 
@@ -380,7 +382,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 if pid_ and pid_ != _int(f("prev")):  # product changed: amount must be in its stock unit
                     row["amount"] = stock_amount_for(grocy, pid_, ing.qty, ing.unit)
                     row["factor"] = ""  # a factor typed for the old product must never be stored for this one
-                if pid_ and row["amount"] is None and ing.qty is not None:
+                if pid_ and row["amount"] is None and ing.qty is not None and not is_packaging(ing.unit):
                     if action == f"suggest:{i}":
                         prod = grocy.get_object("products", pid_)
                         g = ai.guess_conversion(prod["name"], ing.unit or "piece",
