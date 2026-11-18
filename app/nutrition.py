@@ -3,7 +3,8 @@ from dataclasses import dataclass, field
 import httpx
 
 FDC_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
-NUTRIENTS = {"1008": "kcal_100", "1003": "protein_100", "1005": "carbs_100", "1004": "fat_100"}
+NUTRIENTS = {1008: "kcal_100", 1003: "protein_100", 1005: "carbs_100", 1004: "fat_100"}
+KCAL_FALLBACKS = (2047, 2048)  # Atwater energy ids; Foundation foods often lack 1008
 
 
 @dataclass
@@ -52,9 +53,14 @@ def fdc_lookup(name: str, api_key: str, http) -> dict | None:
         return None
     if not foods:
         return None
-    out = {NUTRIENTS[str(n.get("nutrientNumber"))]: n["value"]
-           for n in foods[0].get("foodNutrients", [])
-           if str(n.get("nutrientNumber")) in NUTRIENTS and n.get("value") is not None}
+    by_id = {n.get("nutrientId"): n for n in foods[0].get("foodNutrients", []) if n.get("value") is not None}
+    out = {key: by_id[nid]["value"] for nid, key in NUTRIENTS.items() if nid in by_id}
+    if "kcal_100" not in out:
+        for nid in KCAL_FALLBACKS:
+            n = by_id.get(nid)
+            if n and str(n.get("unitName", "")).upper() == "KCAL":
+                out["kcal_100"] = n["value"]
+                break
     return out or None
 
 

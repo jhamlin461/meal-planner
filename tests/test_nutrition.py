@@ -27,10 +27,12 @@ def test_missing_nutrition_listed():
     assert m.kcal == pytest.approx(364)
 
 
+def _nut(nid, value, unit="G"):
+    return {"nutrientId": nid, "nutrientNumber": "x", "nutrientName": "n", "unitName": unit, "value": value}
+
+
 FDC = {"foods": [{"foodNutrients": [
-    {"nutrientNumber": "1008", "value": 364}, {"nutrientNumber": "1003", "value": 10.3},
-    {"nutrientNumber": "1005", "value": 76.3}, {"nutrientNumber": "1004", "value": 1.0},
-    {"nutrientNumber": "9999", "value": 5}]}]}
+    _nut(1008, 364, "KCAL"), _nut(1003, 10.3), _nut(1005, 76.3), _nut(1004, 1.0), _nut(9999, 5)]}]}
 
 
 def _http(status=200, body=FDC, seen=None):
@@ -69,3 +71,10 @@ def test_fill_missing_nutrition():
     g.entities["products"][7] = {"id": 7, "name": "Oats"}
     assert fill_missing_nutrition(g, 7, "K", _http(500)) is False
     assert g.userfields("products", 7) == {}
+
+
+def test_fdc_kcal_fallback_2047():
+    body = {"foods": [{"foodNutrients": [_nut(2048, 999, "kJ"), _nut(2047, 360, "KCAL"), _nut(1003, 10.3)]}]}
+    assert fdc_lookup("x", "K", _http(body=body)) == {"kcal_100": 360, "protein_100": 10.3}
+    body = {"foods": [{"foodNutrients": [_nut(2047, 1500, "kJ"), _nut(2048, 355, "KCAL")]}]}
+    assert fdc_lookup("x", "K", _http(body=body)) == {"kcal_100": 355}
