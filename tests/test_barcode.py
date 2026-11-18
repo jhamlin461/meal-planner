@@ -72,7 +72,7 @@ def test_resolve_off_without_quantity():
     off = {"status": 1, "product": {"product_name": "Mystery Flour"}}
     r = resolve(g, FakeAI(guess=guess(package_amount=None)), http(off=off), CODE)
     uf = g.userfields("products", r.product_id)
-    assert float(uf["package_amount"]) == 1
+    assert "package_amount" not in uf  # unknown size: never pretend it is 1 g
     assert "kcal_100" not in uf
 
 

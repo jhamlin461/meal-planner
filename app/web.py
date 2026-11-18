@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError
 from app.barcode import Resolved, _generics, relink, resolve, resolve_from_photo
@@ -209,25 +209,29 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def scan(request: Request):
         return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)))
 
-    def apply_scan(r: Resolved, action: str) -> dict:
-        """Add or use one package of a resolved product."""
-        pkg = _num(grocy.userfields("products", r.product_id).get("package_amount")) or 1.0
+    def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
+        """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
+        p = grocy.get_object("products", r.product_id) or {}
+        info = {"product": r.name, "generic": r.generic_name, "created": r.created, "product_id": r.product_id,
+                "action": action}
+        pkg = amount or _num(grocy.userfields("products", r.product_id).get("package_amount"))
+        if pkg is None:
+            return {"status": "need_amount", **info, "unit": unit_names().get(_int(p.get("qu_id_stock")), "")}
         if action == "add":
-            p = grocy.get_object("products", r.product_id) or {}
             days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
             grocy.add_stock(r.product_id, pkg, date.today() + timedelta(days=days) if days > 0 else None,
                             _int(p.get("location_id")))
-            amount = pkg
+            done = pkg
         else:
-            amount = min(pkg, grocy.stock_amounts().get(r.product_id, 0.0))
-            if amount > 0:
-                grocy.consume(r.product_id, amount)
-        return {"status": "ok", "product": r.name, "generic": r.generic_name, "created": r.created,
-                "product_id": r.product_id, "action": action, "amount": amount}
+            done = min(pkg, grocy.stock_amounts().get(r.product_id, 0.0))
+            if done > 0:
+                grocy.consume(r.product_id, done)
+        return {"status": "ok", **info, "amount": done}
 
     class ScanIn(BaseModel):
         code: str
         action: Literal["add", "use"] = "add"
+        amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # typed when the size is unknown
 
     @app.post("/api/scan")
     def api_scan(body: ScanIn):
@@ -235,7 +239,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             r = resolve(grocy, ai, http, body.code.strip())
         except AIError as e:
             return {"status": "error", "message": str(e)}
-        return apply_scan(r, body.action) if r else {"status": "unknown"}
+        return apply_scan(r, body.action, body.amount) if r else {"status": "unknown"}
 
     @app.post("/api/scan/photo")
     def api_scan_photo(code: str = Form(), image: UploadFile = File(), action: Literal["add", "use"] = Form("add")):

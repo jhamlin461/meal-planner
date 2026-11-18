@@ -614,3 +614,30 @@ def test_relink_refused_when_stock_is_in_another_unit(env):
     g.add_stock(child, 500, None, None)
     r = c.post("/api/relink", json={"product_id": child, "generic_name": "Noodles"})
     assert r.status_code == 400 and "in stock in another unit" in r.json()["message"]
+
+
+def test_scan_with_unknown_package_size_asks_for_amount(env):
+    g, _, _, c, _ = env
+    pid = product(g, "Brand Rice", parent_product_id=product(g, "Rice"))
+    g.create("product_barcodes", {"product_id": pid, "barcode": "321"})
+    for action in ("add", "use"):
+        r = c.post("/api/scan", json={"code": "321", "action": action}).json()
+        assert r["status"] == "need_amount" and r["unit"] == "g" and r["product"] == "Brand Rice"
+        assert r["action"] == action
+    assert pid not in g.stock
+    r = c.post("/api/scan", json={"code": "321", "action": "add", "amount": 300}).json()
+    assert r["status"] == "ok" and r["amount"] == 300 and g.stock_amounts()[pid] == 300
+    assert c.post("/api/scan", json={"code": "321", "action": "use", "amount": 120}).json()["amount"] == 120
+    assert g.stock_amounts()[pid] == 180
+    for bad in (0, -5, "inf", "nan"):
+        assert c.post("/api/scan", json={"code": "321", "action": "add", "amount": bad}).status_code == 422
+
+
+def test_bought_without_package_size_adds_row_amount(env):
+    g, _, _, c, _ = env
+    pid, rid = flour_recipe(g)  # no package_amount
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})  # needs 300 g
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
+    c.post(f"/shopping/{row['id']}/toggle")
+    c.post("/shopping/bought")
+    assert g.stock_amounts()[pid] == 300

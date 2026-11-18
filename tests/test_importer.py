@@ -258,7 +258,7 @@ def test_create_generic_creates_and_reuses():
     assert p["qu_id_stock"] == ids(g).unit["g"] and p["location_id"] == ids(g).location["Pantry"]
     assert p["default_best_before_days"] == 700
     uf = g.userfields("products", pid)
-    assert uf["package_amount"] == 1 and uf["g_per_unit"] == 1 and uf["kcal_100"] == 20
+    assert "package_amount" not in uf and uf["g_per_unit"] == 1 and uf["kcal_100"] == 20
     assert create_generic(g, FakeAI(error=AIError("not called")), http, settings, "crushed TOMATOES") == pid
 
 

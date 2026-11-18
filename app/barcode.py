@@ -98,7 +98,8 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
     fields = {"location_id": loc, "qu_id_stock": unit, "qu_id_purchase": unit, "qu_id_consume": unit,
               "qu_id_price": unit, "default_best_before_days": g.best_before_days}
     gpu = g.g_per_unit if g.g_per_unit is not None else (None if g.stock_unit == "piece" else 1)
-    uf = {"package_amount": g.package_amount or 1, **({"g_per_unit": gpu} if gpu is not None else {})}
+    uf = {**({"package_amount": g.package_amount} if g.package_amount and g.package_amount > 0 else {}),
+          **({"g_per_unit": gpu} if gpu is not None else {})}  # unknown size: the scan screen asks for the amount
     return fields, uf
 
 

@@ -67,8 +67,12 @@ if (video) {
     dlg.showModal();
   }
 
-  function show(d, code) {
-    if (d.status === "unknown") {
+  async function show(d, code) {
+    if (d.status === "need_amount") {  // package size unknown: ask, then send the same scan with the amount
+      const n = Number(prompt(`How much ${d.product} (${d.unit})?`));
+      if (n > 0 && Number.isFinite(n)) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
+      toast(`Nothing changed for ${d.product}.`);
+    } else if (d.status === "unknown") {
       unknownCode = code;
       document.getElementById("unknown-code").textContent = code;
       unknown.hidden = false;
@@ -98,7 +102,7 @@ if (video) {
       fd.append("code", unknownCode);
       fd.append("action", action());
       fd.append("image", await shrink(file), "photo.jpg");
-      show(await post("/api/scan/photo", fd), unknownCode);
+      await show(await post("/api/scan/photo", fd), unknownCode);
     });
   });
 
