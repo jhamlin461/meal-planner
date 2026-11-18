@@ -1,5 +1,5 @@
 import secrets
-from datetime import date
+from datetime import date, datetime
 
 import httpx
 
@@ -100,3 +100,28 @@ class Grocy:
 
     def volatile(self, days: int) -> dict:
         return self._req("GET", "/stock/volatile", params={"due_soon_days": days})
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def chores_status(self) -> list[dict]:
+        return self._req("GET", "/chores")
+
+    def execute_chore(self, chore_id: int, done_by: int | None, skipped: bool = False) -> None:
+        body: dict = {"tracked_time": self._now(), "skipped": skipped}
+        if done_by is not None:
+            body["done_by"] = done_by
+        self._req("POST", f"/chores/{chore_id}/execute", json=body)
+
+    def open_tasks(self) -> list[dict]:
+        return self._req("GET", "/tasks")
+
+    def complete_task(self, task_id: int) -> None:
+        self._req("POST", f"/tasks/{task_id}/complete", json={"done_time": self._now()})
+
+    def batteries_status(self) -> list[dict]:
+        return self._req("GET", "/batteries")
+
+    def charge_battery(self, battery_id: int) -> None:
+        self._req("POST", f"/batteries/{battery_id}/charge", json={"tracked_time": self._now()})

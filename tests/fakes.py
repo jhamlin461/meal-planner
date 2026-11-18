@@ -1,4 +1,5 @@
-from datetime import date
+import calendar
+from datetime import date, timedelta
 
 import pytest
 
@@ -14,6 +15,9 @@ class FakeGrocy:
         self.volatile_result: dict = {"due_products": [], "overdue_products": [],
                                       "expired_products": [], "missing_products": []}
         self.user_rows: list[dict] = []
+        self.today = date.today()  # tests may move this; schedule math is dates only
+        self.chore_log: list[dict] = []
+        self.battery_log: list[dict] = []
         self._next_id = 1
 
     def users(self):
@@ -104,6 +108,81 @@ class FakeGrocy:
 
     def volatile(self, days):
         return self.volatile_result
+
+    _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+    def _next_due(self, c, last: date | None) -> date | None:
+        pt = c.get("period_type", "manually")
+        n = int(c.get("period_interval") or 1)
+        if pt == "manually":
+            return None
+        if last is None:
+            return self.today
+        if pt in ("daily", "dynamic-regular"):
+            return last + timedelta(days=n)
+        if pt == "weekly":
+            names = [d.strip() for d in str(c.get("period_config") or "").split(",") if d.strip()]
+            for k in range(1, 8):
+                d = last + timedelta(days=k)
+                if self._DAYS[d.weekday()] in names:
+                    return d
+            return last + timedelta(days=7)
+        if pt == "monthly":
+            want = int(c.get("period_days") or 1)
+            if last.day < want:
+                y, m = last.year, last.month
+            else:
+                y, m = last.year + (last.month == 12), last.month % 12 + 1
+            return date(y, m, min(want, calendar.monthrange(y, m)[1]))
+        return last + timedelta(days=365)  # yearly
+
+    def chores_status(self):
+        out = []
+        for c in self.objects("chores"):
+            runs = [r for r in self.chore_log if r["chore_id"] == c["id"]]
+            last = runs[-1]["date"] if runs else None
+            due = self._next_due(c, last)
+            who = c.get("next_execution_assigned_to_user_id")
+            if c.get("assignment_type") == "who-least-did-first":
+                ids = [int(x) for x in str(c.get("assignment_config") or "").split(",") if x.strip()]
+                if ids:
+                    done = [r["done_by"] for r in runs]
+                    who = min(ids, key=lambda u: done.count(u))
+            out.append({"chore_id": c["id"], "chore_name": c.get("name"),
+                        "next_estimated_execution_time": f"{due.isoformat()} 00:00:00" if due else None,
+                        "next_execution_assigned_to_user_id": who,
+                        "last_tracked_time": f"{last.isoformat()} 00:00:00" if last else None})
+        return out
+
+    def execute_chore(self, chore_id, done_by, skipped=False):
+        c = self.get_object("chores", chore_id)
+        self.chore_log.append({"chore_id": chore_id, "done_by": done_by, "skipped": skipped, "date": self.today})
+        if not skipped and int(c.get("consume_product_on_chore_execution") or 0) == 1:
+            try:
+                self.consume(int(c["product_id"]), float(c.get("product_amount") or 1))
+            except Exception:
+                pass  # no stock: the chore still completes
+
+    def open_tasks(self):
+        return [t for t in self.objects("tasks") if int(t.get("done") or 0) == 0]
+
+    def complete_task(self, task_id):
+        self._table("tasks")[task_id]["done"] = 1
+
+    def batteries_status(self):
+        out = []
+        for b in self.objects("batteries"):
+            runs = [r for r in self.battery_log if r["battery_id"] == b["id"]]
+            last = runs[-1]["date"] if runs else None
+            days = int(b.get("charge_interval_days") or 0)
+            due = (last or self.today) + timedelta(days=days) if days else None
+            out.append({"battery_id": b["id"],
+                        "next_estimated_charge_time": f"{due.isoformat()} 00:00:00" if due else None,
+                        "last_tracked_time": f"{last.isoformat()} 00:00:00" if last else None})
+        return out
+
+    def charge_battery(self, battery_id):
+        self.battery_log.append({"battery_id": battery_id, "date": self.today})
 
 
 @pytest.fixture

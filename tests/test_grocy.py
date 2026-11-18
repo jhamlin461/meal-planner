@@ -112,3 +112,38 @@ def test_create_user_not_found_raises():
     h = lambda req: httpx.Response(204) if req.method == "POST" else httpx.Response(200, json=[])  # noqa: E731
     with pytest.raises(GrocyError, match="user not created"):
         Grocy("http://g", "k", transport=httpx.MockTransport(h)).create_user("josh", "Josh")
+
+
+def test_execute_chore_posts_done_by():
+    seen = {}
+    def handler(req):
+        seen["path"] = req.url.path; seen["body"] = json.loads(req.read())
+        return httpx.Response(204)
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    g.execute_chore(3, 2, skipped=True)
+    assert seen["path"] == "/api/chores/3/execute"
+    assert seen["body"]["done_by"] == 2 and seen["body"]["skipped"] is True and seen["body"]["tracked_time"]
+    g.execute_chore(3, None)
+    assert "done_by" not in seen["body"]
+
+
+def test_open_tasks_and_complete():
+    calls = []
+    def handler(req):
+        calls.append((req.method, req.url.path, req.read().decode()))
+        return httpx.Response(200, json=[{"id": 4}]) if req.method == "GET" else httpx.Response(204)
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    assert g.open_tasks() == [{"id": 4}]
+    g.complete_task(4)
+    assert calls[1][:2] == ("POST", "/api/tasks/4/complete") and "done_time" in calls[1][2]
+
+
+def test_battery_charge():
+    calls = []
+    def handler(req):
+        calls.append((req.method, req.url.path, req.read().decode()))
+        return httpx.Response(200, json=[{"battery_id": 1}]) if req.method == "GET" else httpx.Response(204)
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    assert g.batteries_status() == [{"battery_id": 1}]
+    g.charge_battery(1)
+    assert calls[1][:2] == ("POST", "/api/batteries/1/charge") and "tracked_time" in calls[1][2]

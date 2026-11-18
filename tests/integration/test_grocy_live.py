@@ -151,3 +151,16 @@ def test_userfield_roundtrip(grocy, i, made):
     grocy.set_userfields("products", pid, {"kcal_100": 52, "walmart_item_id": "12345"})
     uf = grocy.userfields("products", pid)
     assert float(uf["kcal_100"]) == 52 and uf["walmart_item_id"] == "12345"
+
+
+def test_chore_execute_consumes_supply_and_moves_date(grocy, i, made):
+    pid = _product(grocy, i, made, "supply")
+    grocy.add_stock(pid, 4, None, i.location["Pantry"])
+    cid = grocy.create("chores", {
+        "name": f"zz-test-chore-{uuid.uuid4().hex[:8]}", "period_type": "daily", "period_interval": 1,
+        "consume_product_on_chore_execution": 1, "product_id": pid, "product_amount": 1})
+    made.append(("chores", cid))  # after the product, so it is deleted first
+    grocy.execute_chore(cid, None)
+    assert grocy.stock_amounts()[pid] == pytest.approx(3)
+    row = next(r for r in grocy.chores_status() if int(r["chore_id"]) == cid)
+    assert row["last_tracked_time"] and row["next_estimated_execution_time"] > row["last_tracked_time"]
