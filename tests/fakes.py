@@ -45,7 +45,8 @@ class FakeGrocy:
         self.userfield_data.setdefault((entity, id), {}).update(data)
 
     def product_by_barcode(self, code):
-        pid = self.barcodes.get(code)
+        rows = self.objects("product_barcodes", barcode=code)
+        pid = rows[0]["product_id"] if rows else self.barcodes.get(code)
         return {"product": self.get_object("products", pid)} if pid else None
 
     def stock_amounts(self):
