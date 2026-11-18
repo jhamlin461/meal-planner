@@ -23,6 +23,8 @@ from app.barcode import Resolved, _generics, relink, resolve, resolve_from_photo
 from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
+from app.ha import HA, HAError
+from app.house import HouseStore, Person
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
 from app.qty import is_packaging
@@ -109,8 +111,12 @@ def _cfe(table: CfeTable | None, scale: float = 1.0) -> dict | None:
         return None
 
 
-def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: PendingStore) -> FastAPI:
+def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: PendingStore, *,
+               house: HouseStore | None = None, ha=None) -> FastAPI:
     app = FastAPI(title="Meal planner")
+    house = house or HouseStore(settings.data_dir / "house.db")
+    if ha is None and settings.ha_url:
+        ha = HA(settings.ha_url, settings.ha_token)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters["num"] = _fmt
@@ -168,6 +174,66 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/home")
     def home(request: Request):
         return page(request, "home.html")
+
+    # ---- people and device identity -----------------------------------------------------------------------------
+    def current_who(request: Request) -> Person | str | None:
+        """The person this device belongs to, "kitchen" for the shared screen, or None when not chosen yet."""
+        v = request.cookies.get("who")
+        return "kitchen" if v == "kitchen" else house.person(_int(v)) if _int(v) is not None else None
+
+    @app.get("/who")
+    def who_get(request: Request):
+        return page(request, "who.html", people=house.people(), who=current_who(request))
+
+    @app.post("/who")
+    def who_post(who: str = Form()):
+        if who != "kitchen" and house.person(_int(who) or 0) is None:
+            raise HTTPException(400, "No such person")
+        r = back("/")
+        r.set_cookie("who", who, max_age=400 * 24 * 3600, samesite="lax")
+        return r
+
+    def ha_choices() -> dict:
+        """HA persons, phones and each person's own phone; empty (and `ha_ok` False) when HA is missing or down."""
+        if ha is None:
+            return {"ha_ok": False, "ha_persons": {}, "ha_services": [], "phone_of": {}}
+        try:
+            persons, services, trackers = ha.persons(), ha.notify_services(), ha.person_trackers()
+        except HAError as e:
+            log.warning("Home Assistant unavailable: %s", e)
+            return {"ha_ok": False, "ha_persons": {}, "ha_services": [], "phone_of": {}}
+        phone_of = {p: next((s for t in ts for s in services if s == t.replace("device_tracker.", "mobile_app_", 1)), "")
+                    for p, ts in trackers.items()}
+        return {"ha_ok": True, "ha_persons": persons, "ha_services": services, "phone_of": phone_of}
+
+    def match_person(name: str, persons: dict[str, str]) -> str:
+        n = name.strip().lower()
+        return next((e for e, f in persons.items() if n and (n in f.lower() or n in e.lower())), "")
+
+    @app.get("/home/people")
+    def people_get(request: Request, name: str = "", ha_person: str = ""):
+        c = ha_choices()
+        ha_person = ha_person or match_person(name, c["ha_persons"])
+        return page(request, "people.html", people=house.people(), who=current_who(request), typed=name,
+                    sel_person=ha_person, sel_service=c["phone_of"].get(ha_person, ""), **c)
+
+    @app.post("/home/people")
+    def people_post(name: str = Form(), ha_person: str = Form(""), notify_service: str = Form("")):
+        name = name.strip()
+        if not name:
+            raise HTTPException(400, "Type a name")
+        c = ha_choices()
+        ha_person = ha_person or match_person(name, c["ha_persons"])
+        notify_service = notify_service or c["phone_of"].get(ha_person, "")
+        username = name.lower().replace(" ", "")
+        uid = next((int(u["id"]) for u in grocy.users() if u["username"] == username), None)             or grocy.create_user(username, name)
+        house.save_person(name, uid, ha_person, notify_service)
+        return back("/home/people")
+
+    @app.post("/home/people/{pid}/delete")
+    def people_delete(pid: int):
+        house.delete_person(pid)  # the Grocy user stays: it may own history there
+        return back("/home/people")
 
     @app.post("/settings/theme")
     def set_theme(request: Request, theme: Literal["dark", "light"] = Form()):

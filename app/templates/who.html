@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% set section = "" %}
+{% block title %}Whose device is this?{% endblock %}
+{% block content %}
+<h1>Whose device is this?</h1>
+<p class="muted">Reminders for you will come to this device's owner.</p>
+<form method="post" action="/who">
+{% for p in people %}<div class="card"><div class="card-actions"><button class="btn{% if who and who != 'kitchen' and who.id == p.id %} btn-primary{% endif %}" name="who" value="{{ p.id }}">{{ p.name }}</button></div></div>
+{% endfor %}
+<div class="card"><div class="card-actions"><button class="btn{% if who == 'kitchen' %} btn-primary{% endif %}" name="who" value="kitchen">Kitchen (everyone)</button></div></div>
+</form>
+{% if not people %}<p class="empty">No one is set up yet. <a href="/home/people">Add people</a>.</p>{% endif %}
+{% endblock %}

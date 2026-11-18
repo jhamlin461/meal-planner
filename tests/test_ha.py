@@ -75,3 +75,14 @@ def test_http_error_raises_haerror():
 def test_non_json_reply_raises_haerror():
     with pytest.raises(HAError):
         make(lambda r: httpx.Response(200, text="<html>", headers={"content-type": "text/html"})).home_states()
+
+
+def test_person_trackers():
+    states = [
+        {"entity_id": "person.jhamlin", "state": "home",
+         "attributes": {"friendly_name": "Jhamlin", "device_trackers": ["device_tracker.pixel_10_pro"]}},
+        {"entity_id": "person.guest", "state": "home", "attributes": {}},
+        {"entity_id": "light.kitchen", "state": "on", "attributes": {}},
+    ]
+    ha = make(lambda r: httpx.Response(200, json=states))
+    assert ha.person_trackers() == {"person.jhamlin": ["device_tracker.pixel_10_pro"], "person.guest": []}

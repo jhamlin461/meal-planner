@@ -90,3 +90,19 @@ def test_transfer_posts_locations():
     Grocy("http://g/api", "k", transport=httpx.MockTransport(handler)).transfer(5, 2.5, 1, 3)
     assert seen["path"] == "/api/stock/products/5/transfer"
     assert json.loads(seen["body"]) == {"amount": 2.5, "location_id_from": 1, "location_id_to": 3}
+
+
+def test_create_user_posts_then_finds_id():
+    seen = []
+
+    def h(req):
+        seen.append((req.method, req.url.path, json.loads(req.content) if req.content else None))
+        if req.method == "POST":
+            return httpx.Response(204)
+        return httpx.Response(200, json=[{"id": 1, "username": "admin"}, {"id": 5, "username": "josh"}])
+
+    g = Grocy("http://g", "k", transport=httpx.MockTransport(h))
+    assert g.create_user("josh", "Josh") == 5
+    body = seen[0][2]
+    assert seen[0][:2] == ("POST", "/users") and body["username"] == "josh" and body["first_name"] == "Josh"
+    assert len(body["password"]) >= 20

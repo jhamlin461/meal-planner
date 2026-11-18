@@ -32,6 +32,9 @@ class HA:
     def persons(self) -> dict[str, str]:
         return {s["entity_id"]: s.get("attributes", {}).get("friendly_name", s["entity_id"]) for s in self._persons()}
 
+    def person_trackers(self) -> dict[str, list[str]]:
+        return {s["entity_id"]: list(s.get("attributes", {}).get("device_trackers") or []) for s in self._persons()}
+
     def home_states(self) -> dict[str, str]:
         return {s["entity_id"]: s["state"] for s in self._persons()}
 

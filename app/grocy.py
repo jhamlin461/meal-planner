@@ -1,3 +1,4 @@
+import secrets
 from datetime import date
 
 import httpx
@@ -44,6 +45,15 @@ class Grocy:
 
     def delete(self, entity: str, id: int) -> None:
         self._req("DELETE", f"/objects/{entity}/{id}")
+
+    def users(self) -> list[dict]:
+        return self._req("GET", "/users")
+
+    def create_user(self, username: str, first_name: str) -> int:
+        """Grocy returns no id for a new user, so find it again by username."""
+        self._req("POST", "/users", json={"username": username, "first_name": first_name, "last_name": "",
+                                          "password": secrets.token_urlsafe(24)})
+        return next(int(u["id"]) for u in self.users() if u["username"] == username)
 
     def userfields(self, entity: str, id: int) -> dict:
         return self._req("GET", f"/userfields/{entity}/{id}") or {}

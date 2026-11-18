@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}People{% endblock %}
+{% block content %}
+<h1>People</h1>
+<p class="muted">{% if who == 'kitchen' %}This device is the kitchen screen.{% elif who %}This device is {{ who.name }}.{% else %}This device isn't set to anyone. {% endif %}<a href="/who">Change</a></p>
+{% if people %}<ul class="rows">
+{% for p in people %}<li class="row"><b class="grow">{{ p.name }}</b><span class="muted">{{ p.notify_service or 'no phone' }}</span>
+  <form method="post" action="/home/people/{{ p.id }}/delete"><button class="btn">Remove</button></form></li>
+{% endfor %}</ul>{% else %}<p class="empty">No one yet.</p>{% endif %}
+<h2>Add a person</h2>
+{% if not ha_ok %}<p class="muted">Home Assistant isn't set up (or can't be reached), so there is nothing to choose from. You can still add a name.</p>{% endif %}
+<form method="get" action="/home/people" class="card">
+  <label>Name <input name="name" value="{{ typed }}" required></label>
+  {% if ha_ok %}<label>Home Assistant person <select name="ha_person"><option value="">None</option>
+  {% for e, f in ha_persons.items() %}<option value="{{ e }}"{% if e == sel_person %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></label>{% endif %}
+  <div class="card-actions"><button class="btn">Suggest phone</button></div>
+</form>
+<form method="post" action="/home/people" class="card">
+  <label>Name <input name="name" value="{{ typed }}" required></label>
+  {% if ha_ok %}
+  <label>Home Assistant person <select name="ha_person"><option value="">None</option>
+  {% for e, f in ha_persons.items() %}<option value="{{ e }}"{% if e == sel_person %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></label>
+  <label>Phone for reminders <select name="notify_service"><option value="">None</option>
+  {% for s in ha_services %}<option value="{{ s }}"{% if s == sel_service %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+  {% endif %}
+  <div class="card-actions"><button class="btn btn-primary">Add person</button></div>
+</form>
+{% endblock %}

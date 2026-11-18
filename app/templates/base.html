@@ -1,6 +1,6 @@
 {% from "_icon.html" import icon %}
 {%- set path = request.url.path -%}
-{%- set section = section|default("today" if path == "/" else "home" if path.startswith("/home") else "scan" if path.startswith("/scan") else "kitchen") -%}
+{%- set section = section|default("today" if path == "/" else "home" if path == "/home" or path.startswith("/home/") else "scan" if path.startswith("/scan") else "kitchen") -%}
 {%- set subnav = subnav|default([("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else []) -%}
 {%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>

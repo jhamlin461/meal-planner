@@ -13,7 +13,16 @@ class FakeGrocy:
         self.barcodes: dict[str, int] = {}  # barcode -> product id
         self.volatile_result: dict = {"due_products": [], "overdue_products": [],
                                       "expired_products": [], "missing_products": []}
+        self.user_rows: list[dict] = []
         self._next_id = 1
+
+    def users(self):
+        return [dict(u) for u in self.user_rows]
+
+    def create_user(self, username, first_name):
+        uid = max([u["id"] for u in self.user_rows], default=0) + 1
+        self.user_rows.append({"id": uid, "username": username, "first_name": first_name})
+        return uid
 
     def _table(self, entity):
         return self.entities.setdefault(entity, {})
@@ -152,6 +161,7 @@ class FakeHA:
 
     def __init__(self):
         self.persons_map: dict[str, str] = {}
+        self.trackers: dict[str, list[str]] = {}  # person entity -> device_tracker entities
         self.states: dict[str, str] = {}
         self.services: list[str] = []
         self.sent: list[dict] = []
@@ -166,6 +176,10 @@ class FakeHA:
     def persons(self):
         self._check()
         return dict(self.persons_map)
+
+    def person_trackers(self):
+        self._check()
+        return {p: list(self.trackers.get(p, [])) for p in self.persons_map}
 
     def home_states(self):
         self._check()

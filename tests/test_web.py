@@ -744,3 +744,85 @@ def test_saved_table_has_real_amount_for_packet_rows(env):
     [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients
     assert (ing.qty, ing.unit, ing.name, ing.note) == (57, "g", "sour cream", "est.")
     assert "1 packet" not in c.get(f"/recipes/{rid}").text
+
+
+# ---- people and device identity -------------------------------------------------------------------------------------
+from app.house import HouseStore  # noqa: E402
+from tests.fakes import FakeHA  # noqa: E402
+
+
+@pytest.fixture
+def hv(tmp_path):
+    g = FakeGrocy()
+    bootstrap(g)
+    ha = FakeHA()
+    ha.persons_map = {"person.jhamlin": "Jhamlin", "person.catherine": "Catherine"}
+    ha.trackers = {"person.jhamlin": ["device_tracker.pixel_10_pro"], "person.catherine": ["device_tracker.cat_s_pixel_10"]}
+    ha.services = ["mobile_app_pixel_10_pro", "mobile_app_cat_s_pixel_10"]
+    house = HouseStore(tmp_path / "house.db")
+    app = create_app(g, FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)),
+                     Settings("", "", "", "KEY", None, 6, tmp_path, 3), PendingStore(tmp_path / "pending"),
+                     house=house, ha=ha)
+    return g, house, ha, TestClient(app)
+
+
+def test_people_form_creates_grocy_user(hv):
+    g, house, ha, c = hv
+    r = c.post("/home/people", data={"name": "Josh", "ha_person": "person.jhamlin",
+                                     "notify_service": "mobile_app_pixel_10_pro"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert [u["first_name"] for u in g.users()] == ["Josh"]
+    (p,) = house.people()
+    assert (p.name, p.ha_person, p.notify_service, p.grocy_user_id) == (
+        "Josh", "person.jhamlin", "mobile_app_pixel_10_pro", g.users()[0]["id"])
+
+
+def test_people_form_fills_phone_from_chosen_person(hv):
+    _, house, _, c = hv
+    c.post("/home/people", data={"name": "Cat", "ha_person": "person.catherine", "notify_service": ""})
+    assert house.people()[0].notify_service == "mobile_app_cat_s_pixel_10"
+    c.post("/home/people", data={"name": "Jham", "ha_person": "", "notify_service": ""})  # person matched by name
+    assert house.people()[1].ha_person == "person.jhamlin"
+    assert house.people()[1].notify_service == "mobile_app_pixel_10_pro"
+
+
+def test_people_form_preselects_from_typed_name(hv):
+    html = hv[3].get("/home/people?name=Cat").text
+    assert '<option value="person.catherine" selected>' in html
+    assert '<option value="mobile_app_cat_s_pixel_10" selected>' in html
+
+
+def test_who_cookie_set_and_used(hv):
+    _, house, _, c = hv
+    pid = house.save_person("Josh", 1, "person.jhamlin", "mobile_app_pixel_10_pro")
+    assert "Josh" in c.get("/who").text and "Kitchen (everyone)" in c.get("/who").text
+    r = c.post("/who", data={"who": str(pid)}, follow_redirects=False)
+    assert r.status_code == 303 and "who=" in r.headers["set-cookie"]
+    assert "This device is Josh" in c.get("/home/people").text
+    c.post("/who", data={"who": "kitchen"})
+    assert "This device is the kitchen" in c.get("/home/people").text
+
+
+def test_people_form_lists_ha_choices(hv):
+    html = hv[3].get("/home/people").text
+    for v in ("person.jhamlin", "person.catherine", "mobile_app_pixel_10_pro", "mobile_app_cat_s_pixel_10"):
+        assert f'value="{v}"' in html
+
+
+def test_people_page_without_ha_says_so(env):
+    html = env[3].get("/home/people").text
+    assert "Home Assistant isn't set up" in html
+
+
+def test_delete_person(hv):
+    _, house, _, c = hv
+    pid = house.save_person("Josh", 1, "", "")
+    c.post(f"/home/people/{pid}/delete")
+    assert house.people() == []
+
+
+def test_section_override_and_tight_home_match(hv):
+    c = hv[3]
+    who = c.get("/who").text
+    assert "aria-current" not in who  # who.html sets section "" -> no active destination
+    assert 'href="/home" aria-current="page"' in c.get("/home/people").text
