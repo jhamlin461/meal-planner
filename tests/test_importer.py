@@ -182,6 +182,16 @@ def test_add_conversion_creates_unknown_unit_and_updates_existing():
     assert rows[0]["to_qu_id"] == ids(g).unit["g"]
 
 
+@pytest.mark.parametrize("factor", [0, -1])
+def test_add_conversion_rejects_non_positive_factor(factor):
+    g = grocy()
+    pid = product(g, "Beans", "g")
+    before = g.objects("quantity_unit_conversions")
+    with pytest.raises(ValueError, match="positive"):
+        add_conversion(g, pid, "can", factor)
+    assert g.objects("quantity_unit_conversions") == before
+
+
 def test_save_blocks_invalid_table_and_missing_match():
     g = grocy()
     pid = product(g, "Egg", "piece")

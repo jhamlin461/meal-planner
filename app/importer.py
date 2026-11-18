@@ -234,6 +234,8 @@ def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
 
 def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> None:
     """Product-specific `from_unit` -> stock unit conversion (1 from_unit = factor stock units); upserts."""
+    if not factor > 0:  # 0 breaks to_stock_amount's 1/f reverse edge; negatives poison shopping sums
+        raise ValueError(f"conversion factor must be positive, got {factor}")
     name = _unit(from_unit)
     qu = ids(grocy).unit.get(name) or grocy.create("quantity_units", {"name": name, "name_plural": name})
     to = int(grocy.get_object("products", product_id)["qu_id_stock"])
