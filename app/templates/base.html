@@ -1,24 +1,42 @@
+{% from "_icon.html" import icon %}
+{%- set path = request.url.path -%}
+{%- set section = section|default("today" if path == "/" else "home" if path.startswith("/home") else "scan" if path.startswith("/scan") else "kitchen") -%}
+{%- set subnav = subnav|default([("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else []) -%}
+{%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#2e7d32">
-<title>{% block title %}Meals{% endblock %}</title>
+<meta name="theme-color" content="{{ '#E2E5EA' if theme == 'light' else '#2E333A' }}">
+<title>{% block title %}House{% endblock %}</title>
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="preload" href="/static/fonts/RobotoFlex.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if subnav %} class="has-subnav"{% endif %}>
+<nav class="rail" aria-label="Main">
+<ul>
+{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Kitchen", "silverware-fork-knife"), ("home", "/home", "Home", "home-outline"), ("scan", "/scan", "Scan", "barcode-scan")] %}
+<li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
+{%- if section == key and subnav %}
+<ul class="subnav" aria-label="{{ label }}">
+{% for s_href, s_label in subnav %}<li><a href="{{ s_href }}"{% if path.startswith(s_href) %} aria-current="page"{% endif %}>{{ s_label }}</a></li>{% endfor %}
+</ul>
+{%- endif %}</li>
+{% endfor %}
+</ul>
+</nav>
 <main{% block main_attrs %}{% endblock %}>
 {% block content %}{% endblock %}
+<form class="theme-switch" method="post" action="/settings/theme">
+<button class="btn" name="theme" value="{{ 'dark' if theme == 'light' else 'light' }}">Use {{ 'dark' if theme == 'light' else 'light' }} theme</button>
+</form>
 </main>
-<nav class="bottom">
-{% for href, label in [("/plan", "Plan"), ("/pantry", "Pantry"), ("/scan", "Scan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] %}<a href="{{ href }}"{% if request.url.path.startswith(href) %} aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}
-</nav>
 <div id="toast" role="status" hidden></div>
 {% block scripts %}{% endblock %}
 <script src="/static/app.js" defer></script>

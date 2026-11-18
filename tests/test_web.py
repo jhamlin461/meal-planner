@@ -1,6 +1,7 @@
 import threading
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -55,9 +56,49 @@ def soup_draft():
     return RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
 
 
-def test_root_redirects_to_plan(env):
+def test_root_renders_today_in_shell(env):
     r = env[3].get("/", follow_redirects=False)
-    assert r.status_code in (302, 303, 307) and r.headers["location"] == "/plan"
+    assert r.status_code == 200 and "<h1" in r.text and 'class="rail"' in r.text
+    assert 'href="/" aria-current="page"' in r.text
+
+
+def test_shell_has_four_destinations(env):
+    html = env[3].get("/pantry").text
+    for href, label in [("/", "Today"), ("/plan", "Kitchen"), ("/home", "Home"), ("/scan", "Scan")]:
+        assert f'href="{href}"' in html and f"<span>{label}</span>" in html, label
+    assert 'href="/plan" aria-current="page"' in html
+    assert env[3].get("/home").status_code == 200
+
+
+def test_kitchen_subnav_lists_kitchen_pages(env):
+    html = env[3].get("/plan").text
+    sub = html[html.index('class="subnav"'):]
+    for href in ["/plan", "/pantry", "/recipes", "/shopping"]:
+        assert f'href="{href}"' in sub, href
+
+
+def test_theme_cookie_switches_to_light(env):
+    c = env[3]
+    assert 'data-theme="dark"' in c.get("/pantry").text
+    r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/pantry"},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/pantry"
+    assert "max-age=34560000" in r.headers["set-cookie"].lower()
+    assert 'data-theme="light"' in c.get("/pantry").text
+    assert c.post("/settings/theme", data={"theme": "pink"}).status_code == 422
+    r = c.post("/settings/theme", data={"theme": "dark"}, headers={"referer": "http://evil.example//evil.example/x"},
+               follow_redirects=False)
+    assert r.headers["location"] == "/"
+
+
+def test_self_hosted_assets_served(env):
+    c = env[3]
+    assert c.get("/static/icons.svg").status_code == 200
+    assert c.get("/static/fonts/RobotoFlex.woff2").status_code == 200
+    assert 'id="silverware-fork-knife"' in c.get("/static/icons.svg").text
+    base = (Path(__file__).parent.parent / "app/templates/base.html").read_text()
+    css = c.get("/static/style.css").text
+    assert "http://" not in base + css and "https://" not in base + css
 
 
 def test_pages_render(env):

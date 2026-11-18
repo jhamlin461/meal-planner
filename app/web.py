@@ -4,7 +4,7 @@ import math
 import mimetypes
 import threading
 from datetime import date, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from pathlib import Path
 from typing import Literal
 
@@ -162,8 +162,21 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 for p in positions]
 
     @app.get("/")
-    def home():
-        return back("/plan")
+    def today(request: Request):
+        return page(request, "today.html")
+
+    @app.get("/home")
+    def home(request: Request):
+        return page(request, "home.html")
+
+    @app.post("/settings/theme")
+    def set_theme(request: Request, theme: Literal["dark", "light"] = Form()):
+        """Per-device theme; back to the page it was switched on (same-site paths only)."""
+        ref = urlsplit(request.headers.get("referer", ""))
+        ok = ref.path.startswith("/") and not ref.path.startswith(("//", "/\\"))
+        r = back(ref.path + (f"?{ref.query}" if ref.query else "") if ok else "/")
+        r.set_cookie("theme", theme, max_age=400 * 24 * 3600, samesite="lax")
+        return r
 
     # ---- pantry -------------------------------------------------------------------------------------------------
     @app.get("/pantry")
