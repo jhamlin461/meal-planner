@@ -29,11 +29,24 @@ tailscale serve --bg 8000
 
 ## 3. Start the stack
 
+The repo has no remote, so send it over Tailscale. On the PC with the repo:
+
 ```
-git clone <this repo> && cd <repo>/deploy
+git bundle create meal-planner.bundle main
+tailscale file cp meal-planner.bundle meal-planner:
+```
+
+Inside the LXC:
+
+```
+tailscale file get /root/
+git clone /root/meal-planner.bundle /root/Recipes && cd /root/Recipes/deploy
 cp .env.example .env        # fill in below (set TZ to your own time zone)
 docker compose up -d
 ```
+
+To update later: send a new bundle the same way, then in `/root/Recipes` run
+`git pull /root/meal-planner.bundle main` and `docker compose up -d --build` in `deploy/`.
 
 Find `<lxc-ip>` with `hostname -I` inside the LXC (use the LAN address).
 Open Grocy once at `http://<lxc-ip>:9283` (login `admin`/`admin`): change the password, then create an API key
