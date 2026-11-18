@@ -21,7 +21,8 @@ class Resolved:
 def _get_json(http: httpx.Client, url: str, **kw) -> dict | None:
     try:
         r = http.get(url, headers={"User-Agent": "MealPlanner/1.0"}, **kw)
-        return r.json() if r.status_code == 200 else None
+        data = r.json() if r.status_code == 200 else None
+        return data if isinstance(data, dict) else None
     except (httpx.HTTPError, ValueError):
         return None
 
@@ -56,7 +57,7 @@ def _find_or_create_generic(grocy, name: str, fields: dict, uf: dict, nutrition:
     parent = next((p for p in _generics(grocy) if p["name"].lower() == name.lower()), None)
     if parent:
         pid = int(parent["id"])
-        if nutrition and not grocy.userfields("products", pid).get("kcal_100"):
+        if nutrition and grocy.userfields("products", pid).get("kcal_100") in (None, ""):
             grocy.set_userfields("products", pid, nutrition)
         return pid
     pid = grocy.create("products", {"name": name, **fields})
@@ -70,8 +71,11 @@ def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
     loc = i.location[g.location if g.location in LOCATIONS else "Pantry"]
     fields = {"location_id": loc, "qu_id_stock": unit, "qu_id_purchase": unit, "qu_id_consume": unit,
               "qu_id_price": unit, "default_best_before_days": g.best_before_days}
-    uf = {"package_amount": g.package_amount or 1, "g_per_unit": g.g_per_unit}
+    gpu = g.g_per_unit if g.g_per_unit is not None else (None if g.stock_unit == "piece" else 1)
+    uf = {"package_amount": g.package_amount or 1, **({"g_per_unit": gpu} if gpu is not None else {})}
     parent_id = _find_or_create_generic(grocy, g.generic_name, fields, uf, nutrition)
+    if any(p["name"].lower() == name.lower() for p in grocy.objects("products")):
+        name = f"{name} ({code})"
     pid = grocy.create("products", {"name": name, **fields, "parent_product_id": parent_id})
     grocy.set_userfields("products", pid, {**uf, **nutrition})
     grocy.create("product_barcodes", {"product_id": pid, "barcode": code})
@@ -84,7 +88,10 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
         p = hit["product"]
         parent = grocy.get_object("products", p["parent_product_id"]) if p.get("parent_product_id") else None
         return Resolved(int(p["id"]), p["name"], (parent or p)["name"], False)
-    info = off_lookup(code, http) or upc_lookup(code, http)
+    info = off_lookup(code, http)
+    if not info or not info.get("name"):
+        upc = upc_lookup(code, http)
+        info = {**(info or {}), **{k: upc[k] for k in ("name", "brand")}} if upc else None
     if not info or not info.get("name"):
         return None
     g = ai.guess_product(info, [p["name"] for p in _generics(grocy)], LOCATIONS)
@@ -98,6 +105,9 @@ def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -
 
 def relink(grocy, product_id: int, generic_name: str) -> None:
     child = grocy.get_object("products", product_id)
+    clash = next((p for p in grocy.objects("products") if p["name"].lower() == generic_name.lower()), None)
+    if clash and clash.get("parent_product_id"):
+        raise ValueError(f"'{generic_name}' is already a child product, not a generic; pick a generic name")
     keep = ("location_id", "qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price",
             "default_best_before_days")
     uf = grocy.userfields("products", product_id)

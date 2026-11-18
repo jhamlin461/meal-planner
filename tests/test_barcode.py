@@ -25,7 +25,7 @@ def http(off=None, upc=None):
 def guess(**kw):
     d = dict(generic_name="All-purpose flour", is_new_generic=True, stock_unit="g", package_amount=2268,
              location="Pantry", best_before_days=365, g_per_unit=1)
-    return ProductGuess(**{**d, **kw})
+    return ProductGuess.model_construct(**{**d, **kw})  # construct: allows g_per_unit=None
 
 
 def grocy():
@@ -114,3 +114,60 @@ def test_relink_moves_child():
     new = next(p for p in g.objects("products") if p["name"] == "Bread flour")
     assert g.get_object("products", r.product_id)["parent_product_id"] == new["id"]
     assert new["qu_id_stock"] == g.get_object("products", r.product_id)["qu_id_stock"]
+
+
+def test_duplicate_child_name_gets_barcode_suffix():
+    g = grocy()
+    resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), "555")
+    assert r.name == "Great Value All Purpose Flour (555)"
+
+
+def test_off_without_name_falls_through_to_upc():
+    g = grocy()
+    off = {"status": 1, "product": {"nutriments": {"energy-kcal_100g": 350}}}
+    upc = {"items": [{"title": "Bob's Flour", "brand": "Bob's"}]}
+    r = resolve(g, FakeAI(guess=guess()), http(off=off, upc=upc), CODE)
+    assert r.name == "Bob's Flour"
+    assert float(g.userfields("products", r.product_id)["kcal_100"]) == 350
+
+
+def test_zero_parent_nutrition_not_overwritten():
+    g = grocy()
+    resolve(g, FakeAI(guess=guess()), http(off={"status": 1, "product": {
+        "product_name": "A", "nutriments": {"energy-kcal_100g": 0}}}), "1")
+    resolve(g, FakeAI(guess=guess(is_new_generic=False)), http(off=OFF), "2")
+    parent = next(p for p in g.objects("products") if not p.get("parent_product_id"))
+    assert float(g.userfields("products", parent["id"])["kcal_100"]) == 0
+
+
+def test_g_per_unit_none_defaults():
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess(g_per_unit=None)), http(off=OFF), CODE)
+    assert float(g.userfields("products", r.product_id)["g_per_unit"]) == 1
+    r2 = resolve_from_photo(g, FakeAI(guess=guess(generic_name="Eggs", stock_unit="piece", g_per_unit=None)),
+                            http(), "7", b"x")
+    assert "g_per_unit" not in g.userfields("products", r2.product_id)
+
+
+def test_non_dict_json_is_not_found():
+    c = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[1])))
+    assert resolve(grocy(), FakeAI(guess=guess()), c, CODE) is None
+
+
+def test_user_agent_sent():
+    seen = []
+    def handler(req):
+        seen.append(req.headers["user-agent"])
+        return httpx.Response(404)
+    resolve(grocy(), FakeAI(guess=guess()), httpx.Client(transport=httpx.MockTransport(handler)), CODE)
+    assert seen and set(seen) == {"MealPlanner/1.0"}
+
+
+def test_relink_to_child_name_raises():
+    import pytest
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)
+    r2 = resolve(g, FakeAI(guess=guess()), http(off=OFF), "555")
+    with pytest.raises(ValueError, match="child"):
+        relink(g, r2.product_id, "Great Value All Purpose Flour")
