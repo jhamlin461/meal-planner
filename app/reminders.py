@@ -222,18 +222,18 @@ def _current(open_: dict, key: str, due: str | None) -> bool:
 
 
 def complete(grocy, house: HouseStore, ha, key: str, person: Person | None, due: str | None,
-             open_: dict | None = None) -> bool:
+             open_: dict | None = None, skipped: bool = False) -> bool:
     """Done for the occurrence due on `due`: run the chore (credited to `person`) / complete the task / charge the
     upkeep item, and clear it on every phone. When that occurrence is already done (the other phone, the app, Grocy)
     nothing runs; the phones are still cleared. A recurring item keeps its settings; a done task's reminder is dropped.
-    `open_` is open_items(grocy) read under the caller's LOCK. True when it ran."""
+    `open_` is open_items(grocy) read under the caller's LOCK; `skipped` skips a chore instead. True when it ran."""
     kind, num = key.split(":")
     with LOCK:
         open_ = open_items(grocy) if open_ is None else open_
         run = _current(open_, key, due)
         if run:
             if kind == "chore":
-                grocy.execute_chore(int(num), person.grocy_user_id if person else None)
+                grocy.execute_chore(int(num), person.grocy_user_id if person else None, skipped)
             elif kind == "task":
                 grocy.complete_task(int(num))
             else:

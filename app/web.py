@@ -206,13 +206,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return next((p for p in house.people() if str(p.grocy_user_id) == str(assigned)), None)
         return who if isinstance(who, Person) else None
 
-    def done(request: Request, kind: str, id: int, due: str | None) -> bool:
-        """In-app Done for the occurrence the page showed (`due`); a page older than the item's last Done is a no-op."""
+    def done(request: Request, kind: str, id: int, due: str | None, skipped: bool = False) -> bool:
+        """In-app Done (or a chore's Skip) for the occurrence the page showed (`due`); a page older than the item's last
+        Done or Skip is a no-op."""
         key = f"{kind}:{id}"
         with LOCK:  # one read of Grocy, and two taps can't both pass the due check
             open_ = rm.open_items(grocy)
             who = credit(request, open_.get(key, (None, None, None))[2])
-            return rm.complete(grocy, house, ha, key, who, due, open_)
+            return rm.complete(grocy, house, ha, key, who, due, open_, skipped)
 
     def done_msg(ran: bool) -> str:
         return "Done." if ran else "Already done."
@@ -222,13 +223,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return home_back(done_msg(done(request, "chore", cid, due)))
 
     @app.post("/home/chores/{cid}/skip")
-    def chore_skip_post(request: Request, cid: int):
-        row = next((r for r in grocy.chores_status() if r["chore_id"] == cid), None)
-        if row is None:
-            raise HTTPException(404, "No such chore")
-        p = credit(request, row.get("next_execution_assigned_to_user_id"))
-        grocy.execute_chore(cid, p.grocy_user_id if p else None, True)
-        return home_back("Skipped.")
+    def chore_skip_post(request: Request, cid: int, due: str | None = Form(None)):
+        return home_back("Skipped." if done(request, "chore", cid, due, skipped=True) else "Already done.")
 
     @app.post("/home/tasks/{tid}/done")
     def task_done_post(request: Request, tid: int, due: str | None = Form(None)):

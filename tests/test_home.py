@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import unquote_plus
 
 import httpx
 from starlette.datastructures import FormData as MultiDict
@@ -143,7 +144,8 @@ def test_skip_moves_date_without_consuming(hv):
     g.add_stock(pid, 3, None, None)
     cid = g.create("chores", {"name": "Trash", "period_type": "daily", "period_interval": 1,
                               "consume_product_on_chore_execution": 1, "product_id": pid, "product_amount": 1})
-    c.post(f"/home/chores/{cid}/skip", cookies={"who": str(pa)})
+    assert f'action="/home/chores/{cid}/skip"><input type="hidden" name="due" value="2026-11-18">' in c.get("/home").text
+    c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
     assert g.stock_amounts()[pid] == 3 and g.chore_log[-1]["skipped"]
     assert g.chores_status()[0]["next_estimated_execution_time"].startswith("2026-11-19")
 
@@ -269,3 +271,24 @@ def test_no_done_button_without_due_date(hv):
     assert f"/home/chores/{cid}/done" not in html and f"/home/chores/{cid}/skip" not in html
     assert f"/home/upkeep/{bid}/done" not in html and html.count("Mark this one in Grocy.") == 2
     assert f"/home/tasks/{tid}/done" in html  # a task with no date still has its one occurrence
+
+
+def test_double_skip_skips_once(hv):
+    g, house, c, (pa, a), _ = hv
+    cid = g.create("chores", {"name": "Dishes", "period_type": "daily", "period_interval": 1})
+    r = c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
+    assert "Skipped." in unquote_plus(r.headers["location"])
+    r = c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
+    assert "Already done." in unquote_plus(r.headers["location"]) and len(g.chore_log) == 1
+    c.post(f"/home/chores/{cid}/skip", cookies={"who": str(pa)})  # no due (an old cached page): never skips
+    assert len(g.chore_log) == 1
+
+
+def test_skip_after_notification_done_is_a_no_op(hv):
+    from app.reminders import complete
+    g, house, c, (pa, a), _ = hv
+    cid = g.create("chores", {"name": "Dishes", "period_type": "daily", "period_interval": 1})
+    assert complete(g, house, FakeHA(), f"chore:{cid}", None, "2026-11-18")  # the phone's Done ran first
+    r = c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
+    assert "Already done." in unquote_plus(r.headers["location"])
+    assert [x["skipped"] for x in g.chore_log] == [False]

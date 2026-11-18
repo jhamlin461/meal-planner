@@ -9,7 +9,7 @@
   {% if r.date or kind == "tasks" %}{# no date: nothing tells one Done from the next, except a task's single occurrence #}
   <div class="card-actions">
     <form method="post" action="/home/{{ kind }}/{{ r.id }}/done"><input type="hidden" name="due" value="{{ r.date.isoformat() if r.date else '' }}"><button class="btn btn-primary">Done</button></form>
-    {% if skip %}<form method="post" action="/home/{{ kind }}/{{ r.id }}/skip"><button class="btn">Skip</button></form>{% endif %}
+    {% if skip %}<form method="post" action="/home/{{ kind }}/{{ r.id }}/skip"><input type="hidden" name="due" value="{{ r.date.isoformat() if r.date else '' }}"><button class="btn">Skip</button></form>{% endif %}
   </div>
   {% else %}<p class="muted">Mark this one in Grocy.</p>{% endif %}
 </div>
