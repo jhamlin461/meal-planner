@@ -210,3 +210,26 @@ def test_done_on_an_unreminded_item_leaves_no_reminder_row(tmp_path):
     c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(josh)})
     c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(josh)})  # stale
     assert len(g.chore_log) == 1 and house.keys() == []
+
+
+def test_manual_chore_has_no_occurrence_so_app_done_never_double_runs(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    c = client(tmp_path, g, house, ha)
+    cid, pid = trash(g, house)
+    g.update("chores", cid, {"period_type": "manually"})  # Grocy gives it no next date
+    for data in ({}, {"due": ""}, {"due": "2026-11-18"}, {}):  # stale page, blank, old date, double tap
+        r = c.post(f"/home/chores/{cid}/done", data=data, cookies={"who": str(josh)})
+        assert r.status_code == 303 and "Already+done" in r.headers["location"]
+    assert g.chore_log == [] and g.stock_amounts()[pid] == 5
+
+
+def test_unparseable_due_is_stale_not_500(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    c = client(tmp_path, g, house, ha)
+    cid, pid = trash(g, house)
+    for bad in ("abc", "2026-13-45", "\u0662\u0660\u0662\u0666-11-18"):
+        r = c.post(f"/home/chores/{cid}/done", data={"due": bad}, cookies={"who": str(josh)})
+        assert r.status_code == 303 and "Already+done" in r.headers["location"], bad
+        r = c.post(f"/today/chore/{cid}/done", data={"due": bad}, cookies={"who": str(josh)})
+        assert r.status_code == 303 and "Already+done" in r.headers["location"], bad
+    assert g.chore_log == []

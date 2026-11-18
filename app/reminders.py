@@ -207,11 +207,18 @@ def _report(house: HouseStore, errors: list[HAError]) -> None:
 
 
 def _current(open_: dict, key: str, due: str | None) -> bool:
-    """`due` (the ISO date a button or notification was for) is still the item's open occurrence. None (no occurrence
-    given, e.g. an old cached page) never is, except for an open item with no due date: it only has the one."""
+    """`due` (the ISO date a button or notification was for) is still the item's open occurrence. None or garbage
+    (an old cached page, a forged form) never is. An open task with no due date has only the one occurrence; a chore
+    with none (scheduled manually) has nothing to tell one Done from the next, so it is never current."""
     if key not in open_:
         return False
-    return open_[key][1] is None or (due is not None and _due(due) == open_[key][1])
+    current = open_[key][1]
+    if current is None:
+        return key.startswith("task:")
+    try:
+        return due is not None and due.isascii() and _due(due) == current
+    except ValueError:
+        return False
 
 
 def complete(grocy, house: HouseStore, ha, key: str, person: Person | None, due: str | None,
