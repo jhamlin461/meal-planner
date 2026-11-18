@@ -151,6 +151,31 @@ def test_running_low_list_rebuilt_in_place(fake_grocy_with_week):
     assert rebuild_meal_plan_list(g, TODAY, 6) == {10: 200} and _list(g, "Running low") == []
 
 
+def test_two_brands_count_toward_the_generic_keep_at_least(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    bags = g.create("products", {"name": "Trash bags", "min_stock_amount": 2,
+                                 "cumulate_min_stock_amount_of_sub_products": 1})
+    glad = g.create("products", {"name": "Glad bags", "parent_product_id": bags})
+    hefty = g.create("products", {"name": "Hefty bags", "parent_product_id": bags})
+    g.add_stock(glad, 1, None, None)
+    g.add_stock(hefty, 1, None, None)
+    assert rebuild_running_low(g) == {}  # one of each brand: 2 in all
+    g.consume(bags, 2)  # used from the generic: Grocy takes it from the brands
+    assert g.stock_amounts()[bags] == 0
+    assert rebuild_running_low(g) == {bags: 2}
+    assert [r["product_id"] for r in _list(g, "Running low")] == [bags]
+
+
+def test_running_low_rebuild_leaves_meal_plan_rows_alone(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    rebuild_meal_plan_list(g, TODAY, 6)
+    [row] = _list(g, "Meal plan")
+    g.update("shopping_list", row["id"], {"done": 1})
+    _supply(g, stock=1)
+    rebuild_running_low(g)
+    assert _list(g, "Meal plan") == [{**row, "done": 1}]
+
+
 def test_trash_chore_drives_running_low(fake_grocy_with_week):
     g = fake_grocy_with_week
     bags = _supply(g, stock=3)

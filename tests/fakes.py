@@ -81,14 +81,17 @@ class FakeGrocy:
              "location_id": location_id})
 
     def consume(self, product_id, amount):
+        """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends)."""
         left = amount
-        entries = self.stock.get(product_id, [])
-        while left > 0 and entries:
-            take = min(left, entries[0]["amount"])
-            entries[0]["amount"] -= take
-            left -= take
-            if entries[0]["amount"] <= 0:
-                entries.pop(0)
+        kids = [p["id"] for p in self.objects("products") if p.get("parent_product_id") == product_id]
+        for pid in [product_id, *kids]:
+            entries = self.stock.get(pid, [])
+            while left > 0 and entries:
+                take = min(left, entries[0]["amount"])
+                entries[0]["amount"] -= take
+                left -= take
+                if entries[0]["amount"] <= 0:
+                    entries.pop(0)
 
     def transfer(self, product_id, amount, from_location, to_location):
         for e in self.stock.get(product_id, []):
@@ -107,14 +110,19 @@ class FakeGrocy:
                                   if new_amount > 0 else [])
 
     def volatile(self, days):
-        """The fixed result tests set; once any product has a min stock amount, missing_products is computed."""
+        """The fixed result tests set; once any product has a min stock amount, missing_products is computed
+        (a parent with cumulate_min_stock_amount_of_sub_products counts its sub products' stock too)."""
         mins = [p for p in self.objects("products") if float(p.get("min_stock_amount") or 0) > 0]
         if not mins:
             return self.volatile_result
-        stock = self.stock_amounts()
-        missing = [{"id": p["id"], "name": p["name"], "amount_missing": float(p["min_stock_amount"]) - stock.get(p["id"], 0),
-                    "is_partly_in_stock": int(stock.get(p["id"], 0) > 0)}
-                   for p in mins if stock.get(p["id"], 0) < float(p["min_stock_amount"])]
+        total = self.stock_amounts()
+        missing = []
+        for p in mins:
+            cumulate = int(p.get("cumulate_min_stock_amount_of_sub_products") or 0)
+            have = total.get(p["id"], 0) if cumulate else sum(e["amount"] for e in self.stock.get(p["id"], []))
+            if have < float(p["min_stock_amount"]):
+                missing.append({"id": p["id"], "name": p["name"], "amount_missing": float(p["min_stock_amount"]) - have,
+                                "is_partly_in_stock": int(have > 0)})
         return {**self.volatile_result, "missing_products": missing}
 
     _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]

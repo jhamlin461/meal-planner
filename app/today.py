@@ -7,7 +7,6 @@ from app import reminders as rm
 from app.ha import HAError
 from app.house import HouseStore, Person
 from app.mealplan import LEFTOVER_PREFIX, week_view
-from app.setup_grocy import ids
 
 HA_WARNING = "Phone reminders aren't reaching Home Assistant"
 
@@ -52,8 +51,8 @@ def _context(it: rm.Item, who, names: dict[str, str], washer_at: str | None, tod
     return f"{whose}, {late or 'due today'}."
 
 
-def _food(grocy, names: dict[int, str], warn_days: int, today: date) -> list[tuple[datetime, dict]]:
-    vol, out = grocy.volatile(warn_days), {}
+def _food(vol: dict, names: dict[int, str], today: date) -> list[tuple[datetime, dict]]:
+    out = {}
     for key in ("expired_products", "overdue_products", "due_products"):
         for r in vol.get(key) or []:
             pid = int(r["product_id"])
@@ -69,11 +68,10 @@ def _food(grocy, names: dict[int, str], warn_days: int, today: date) -> list[tup
     return list(out.values())
 
 
-def _running_low(grocy, names: dict[int, str]) -> list[dict]:
-    rows = grocy.objects("shopping_list", shopping_list_id=ids(grocy).list["Running low"])
-    return [{"title": names.get(int(r.get("product_id") or 0)) or r.get("note") or "(item)",
-             "when": "Running low", "soon": False, "icon": "basket-outline"}
-            for r in rows if not int(float(r.get("done") or 0))]
+def _running_low(vol: dict, names: dict[int, str]) -> list[dict]:
+    """Below keep-at-least, straight from Grocy: Today reads, it never rebuilds the Running low list."""
+    return [{"title": names.get(int(r["id"])) or r.get("name") or "(item)", "when": "Running low", "soon": False,
+             "icon": "basket-outline"} for r in vol.get("missing_products") or []]
 
 
 def _tonight(grocy, today: date) -> dict | None:
@@ -117,9 +115,10 @@ def today_view(grocy, house: HouseStore, who: Person | Literal["kitchen"], now: 
             later.append((at, when, it))
     later.sort(key=lambda x: x[0])
     names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
+    vol = grocy.volatile(warn_days)
     coming = [(at, {"title": it.title, "when": _cap(when), "soon": at.date() <= today, "icon": it.icon})
-              for at, when, it in later] + _food(grocy, names, warn_days, today)
-    coming = [c for _, c in sorted(coming, key=lambda c: c[0])] + _running_low(grocy, names)
+              for at, when, it in later] + _food(vol, names, today)
+    coming = [c for _, c in sorted(coming, key=lambda c: c[0])] + _running_low(vol, names)
     if now_items:
         note = "For everyone" if who == "kitchen" else f"For {who.name}" if home is None else \
             f"{who.name}, you're {'home' if home.get(who.ha_person) == 'home' else 'out'}"

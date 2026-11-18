@@ -2,8 +2,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.home import supplies_group
-from app.setup_grocy import LOCATIONS, ids
+from app.setup_grocy import LOCATIONS, ids, supplies_group
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{}.json"
 UPC_URL = "https://api.upcitemdb.com/prod/trial/lookup"

@@ -7,6 +7,7 @@ import anthropic
 from pydantic import BaseModel
 
 from app.cfe import CfeTable
+from app.setup_grocy import HOME_LOCATIONS
 
 MODEL = "claude-opus-5-5"
 BETAS = ["server-side-fallback-2026-07-01"]
@@ -85,7 +86,7 @@ stock_unit (e.g. count the tortillas when the generic is in piece), or null if u
 stock unit (1 for g, about 1 for ml of water-like liquids, grams per piece for piece).
 category is supply for non-food household consumables (trash bags, toilet paper, detergent, cat litter,
 cleaning products), else food. Supplies never expire (best_before_days -1) and go where they are kept at home
-(Bathroom, Laundry, Under sink, Garage, Closet)."""
+(""" + ", ".join(HOME_LOCATIONS) + ")."
 
 CONVERSION_PROMPT = """Give the multiplier that converts an amount of the named cooking ingredient from
 from_unit to to_unit (to = from * factor), with a one-sentence explanation."""

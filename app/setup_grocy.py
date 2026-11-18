@@ -6,10 +6,11 @@ from app.grocy import Grocy
 UNITS = ["g", "kg", "ml", "l", "piece", "cup", "tbsp", "tsp", "oz", "lb", "fl oz", "can", "pinch"]
 GLOBAL_CONVERSIONS = {("kg", "g"): 1000, ("l", "ml"): 1000, ("cup", "ml"): 236.6, ("tbsp", "ml"): 14.79,
                       ("tsp", "ml"): 4.93, ("fl oz", "ml"): 29.57, ("oz", "g"): 28.35, ("lb", "g"): 453.6}
-LOCATIONS = ["Fridge", "Freezer", "Pantry", "Spice rack", "Counter", "Bathroom", "Laundry", "Under sink", "Garage",
-             "Closet"]
+HOME_LOCATIONS = ["Bathroom", "Laundry", "Under sink", "Garage", "Closet"]  # where household supplies live
+LOCATIONS = ["Fridge", "Freezer", "Pantry", "Spice rack", "Counter", *HOME_LOCATIONS]
 SECTIONS = ["Lunch", "Dinner"]
 LISTS = ["Meal plan", "Extras", "Running low"]
+SUPPLIES = "Household supplies"  # product group
 TEXT, MULTI, NUM, CHECK = "text-single-line", "text-multi-line", "number-decimal", "checkbox"
 USERFIELDS = (
     [("recipes", "cfe_table", MULTI), ("recipes", "source_url", TEXT), ("recipes", "source_pdf", TEXT),
@@ -35,6 +36,10 @@ def ids(grocy) -> Ids:
                _by_name(grocy, "meal_plan_sections"), _by_name(grocy, "shopping_lists"))
 
 
+def supplies_group(grocy) -> int | None:
+    return next((g["id"] for g in grocy.objects("product_groups") if g["name"] == SUPPLIES), None)
+
+
 def _ensure_named(grocy, entity, names, extra=lambda i, n: {}):
     have = _by_name(grocy, entity)
     for i, n in enumerate(names):
@@ -48,7 +53,7 @@ def bootstrap(grocy) -> None:
     _ensure_named(grocy, "meal_plan_sections", SECTIONS, lambda i, n: {"sort_number": i + 1})
     _ensure_named(grocy, "shopping_lists", LISTS)
     _ensure_named(grocy, "task_categories", ["Household"])
-    _ensure_named(grocy, "product_groups", ["Household supplies"])
+    _ensure_named(grocy, "product_groups", [SUPPLIES])
     unit = _by_name(grocy, "quantity_units")
     # filter in Python: Grocy's query[] can't express "product_id is null"
     have = {(int(c["from_qu_id"]), int(c["to_qu_id"])) for c in grocy.objects("quantity_unit_conversions")

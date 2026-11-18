@@ -34,7 +34,7 @@ from app.importer import (IngredientMatch, PendingStore, add_conversion, create_
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
-from app.setup_grocy import LOCATIONS, SECTIONS, ids
+from app.setup_grocy import LOCATIONS, SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import today_view
@@ -180,8 +180,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if who is None:
             return back("/who")
         now = datetime.now()
-        with plan_lock:  # a chore may have used up a supply since: Coming up shows Running low
-            rebuild_running_low(grocy)
         return page(request, "today.html", msg=msg, date=f"{now:%A, %B} {now.day}",
                     **today_view(grocy, house, who, now, ha=ha, warn_days=settings.expiry_warn_days))
 
@@ -428,34 +426,36 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def me(request: Request):
         return page(request, "me.html", who=current_who(request))
 
-    # ---- household supplies (Grocy product group; keep-at-least is Grocy's min stock amount) -----------------------
+    # ---- household supplies (Grocy product group; keep-at-least is the generic's min stock amount, counting the stock
+    # of every brand under it) ------------------------------------------------------------------------------------
     def product_or_404(pid: int) -> dict:
         p = grocy.get_object("products", pid)
         if p is None:
             raise HTTPException(404, "No such product")
         return p
 
+    def generic_of(p: dict) -> dict:
+        parent = grocy.get_object("products", int(p["parent_product_id"])) if p.get("parent_product_id") else None
+        return parent or p
+
     def set_min(pid: int, amount: float) -> None:
-        # ponytail: per product, so each brand under one generic has its own keep-at-least; move it to the generic
-        # (Grocy's cumulate_min_stock_amount_of_sub_products) if two brands of one supply become normal
-        product_or_404(pid)
-        grocy.update("products", pid, {"min_stock_amount": amount})
+        gid = generic_of(product_or_404(pid))["id"]
+        grocy.update("products", gid, {"min_stock_amount": amount, "cumulate_min_stock_amount_of_sub_products": 1})
         with plan_lock:
             rebuild_running_low(grocy)
 
     @app.get("/home/supplies")
     def supplies(request: Request, msg: str = ""):
-        items, units, stock = hm.supplies(grocy), unit_names(), grocy.stock_amounts()
-        parents = {str(p.get("parent_product_id")) for p in items}  # a generic's stock lives in its brands
+        units, stock = unit_names(), grocy.stock_amounts()  # a generic's amount includes its brands
         rows = [{"id": p["id"], "name": p["name"], "amount": stock.get(int(p["id"]), 0.0),
                  "min": float(p.get("min_stock_amount") or 0), "unit": units.get(_int(p.get("qu_id_stock")), "")}
-                for p in items if str(p["id"]) not in parents]
+                for p in hm.supplies(grocy) if not p.get("parent_product_id")]
         return page(request, "supplies.html", msg=msg, supplies=sorted(rows, key=lambda r: r["name"].lower()))
 
     @app.post("/home/supplies/{pid}/used")
     def supply_used(pid: int):
         """One package when its size is known, else one unit; never more than is in stock (Grocy refuses that)."""
-        p = product_or_404(pid)
+        p = product_or_404(pid)  # a generic: Grocy takes the stock from its brands
         pkg = _num(grocy.userfields("products", pid).get("package_amount")) or 1
         with plan_lock:
             use = min(pkg, grocy.stock_amounts().get(pid, 0.0))
@@ -544,8 +544,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 "action": action}
         pkg = amount or _num(grocy.userfields("products", r.product_id).get("package_amount"))
         unit = unit_names().get(_int(p.get("qu_id_stock")), "")
-        if action == "add" and r.created and p.get("product_group_id") is not None                 and str(p["product_group_id"]) == str(hm.supplies_group(grocy)):
-            return {"status": "need_min", **info, "unit": unit, "default": pkg or 1}  # asked once: next scan isn't new
+        supply = p.get("product_group_id") and str(p["product_group_id"]) == str(supplies_group(grocy))
+        if action == "add" and r.created and supply and not float(generic_of(p).get("min_stock_amount") or 0):
+            # a new supply: ask its keep-at-least once per generic, not per brand
+            return {"status": "need_min", **info, "unit": unit, "default": pkg or 1}
         if pkg is None:
             return {"status": "need_amount", **info, "unit": unit}
         if action == "add":
@@ -622,7 +624,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def recipe_plan(rid: int, day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"),
                     servings: str = Form("")):
         recipe_or_404(rid)
-        plan_meal(grocy, day, section, rid, _servings(servings), settings)
+        with plan_lock:
+            plan_meal(grocy, day, section, rid, _servings(servings), settings)
         return back("/plan")
 
     def table_for(rid: int) -> CfeTable:
@@ -862,6 +865,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         lists = {n: [view(r) for r in grocy.objects("shopping_list", shopping_list_id=i.list[n])]
                  for n in ("Meal plan", "Running low", "Extras")}
         todo: dict[int, float] = {}  # ticked = already got it, so it stays out of the Walmart hand-off
+        # a food product with both a minimum and a plan shortfall counts twice here and in Bought (only matters
+        # if food gets minimums)
         for r in lists["Meal plan"] + lists["Running low"]:
             if r["pid"] and not r["done"]:
                 todo[r["pid"]] = todo.get(r["pid"], 0.0) + r["amount"]

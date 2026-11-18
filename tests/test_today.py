@@ -141,10 +141,8 @@ def test_today_shows_tonight_dinner(tmp_path):
 def test_today_coming_up_food_and_supplies(tmp_path):
     g, house, ha, josh, cat = setup(tmp_path)
     spinach = g.create("products", {"name": "Spinach"})
-    bags = g.create("products", {"name": "Garbage bags", "min_stock_amount": 1})  # none in stock
+    g.create("products", {"name": "Garbage bags", "min_stock_amount": 1})  # none in stock: Grocy says missing
     g.volatile_result["due_products"] = [{"product_id": spinach, "best_before_date": "2026-11-20"}]
-    g.create("shopping_list", {"shopping_list_id": ids(g).list["Running low"], "product_id": bags, "amount": 1,
-                               "done": 0})
     task(g, house, due="2026-11-19", name="Recycling out", remind_at="19:00", audience=f"person:{josh.id}")
     v = today_view(g, house, josh, at(18, 9), ha=ha, warn_days=3)
     assert v["coming"] == [

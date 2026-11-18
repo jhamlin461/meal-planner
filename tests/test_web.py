@@ -766,6 +766,8 @@ def test_plan_add_and_remove_wait_for_the_plan_lock(tmp_path):
         assert started.wait(5)  # Bought holds the plan lock
         waiting = [threading.Thread(target=lambda: c.post("/plan", data={
                        "day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})),
+                   threading.Thread(target=lambda: c.post(f"/recipes/{rid}/plan", data={
+                       "day": _future_day(2).isoformat(), "section": "Dinner"})),
                    threading.Thread(target=lambda: c.post(f"/plan/{gone}/remove"))]
         for t in waiting:
             t.start()
@@ -775,7 +777,7 @@ def test_plan_add_and_remove_wait_for_the_plan_lock(tmp_path):
         for t in [bought, *waiting]:
             t.join(5)
     assert during == [gone]  # neither ran while Bought held the lock
-    assert len(g.objects("meal_plan", type="recipe")) == 1 and g.get_object("meal_plan", gone) is None
+    assert len(g.objects("meal_plan", type="recipe")) == 2 and g.get_object("meal_plan", gone) is None
 
 
 def test_saved_table_has_real_amount_for_packet_rows(env):
@@ -900,15 +902,25 @@ def test_who_and_people_live_in_me(hv):
 
 
 # ---- household supplies -----------------------------------------------------------------------------------------
-def supply(g, name="Trash bags", min_stock=2, stock=0, **uf):
+def supply(g, name="Trash bags", min_stock=2, stock=0, walmart_item_id=None, package_amount=None, **fields):
     group = next(x["id"] for x in g.objects("product_groups") if x["name"] == "Household supplies")
     pid = product(g, name, "piece", product_group_id=group, min_stock_amount=min_stock, default_best_before_days=-1,
-                  location_id=ids(g).location["Garage"])
+                  location_id=ids(g).location["Garage"], **fields)
     if stock:
         g.add_stock(pid, stock, None, ids(g).location["Garage"])
+    uf = {k: v for k, v in (("walmart_item_id", walmart_item_id), ("package_amount", package_amount)) if v}
     if uf:
         g.set_userfields("products", pid, uf)
     return pid
+
+
+def test_today_get_does_not_write_running_low(env):
+    g, _, _, c, _ = env
+    supply(g, stock=1)
+    c.cookies.set("who", "kitchen")
+    html = c.get("/").text
+    assert "Trash bags" in html and "Running low" in html
+    assert g.objects("shopping_list", shopping_list_id=ids(g).list["Running low"]) == []
 
 
 def test_new_supply_asks_keep_at_least(env):
@@ -924,11 +936,17 @@ def test_new_supply_asks_keep_at_least(env):
         assert c.post(f"/api/products/{pid}/min", json={"amount": bad}).status_code == 422
     assert c.post("/api/products/999/min", json={"amount": 2}).status_code == 404
     assert c.post(f"/api/products/{pid}/min", json={"amount": 2}).json() == {"status": "ok"}
-    assert g.get_object("products", pid)["min_stock_amount"] == 2
+    generic = g.get_object("products", g.get_object("products", pid)["parent_product_id"])
+    assert generic["min_stock_amount"] == 2 and generic["cumulate_min_stock_amount_of_sub_products"] == 1
+    assert "min_stock_amount" not in g.get_object("products", pid)  # kept on the generic, not the brand
     r = c.post("/api/scan", json={"code": "4242", "action": "add"}).json()  # the add continues
     assert r["status"] == "ok" and r["amount"] == 40 and g.stock_amounts()[pid] == 40
     assert g.stock[pid][0]["best_before_date"] is None  # never expires
     assert c.post("/api/scan", json={"code": "4242", "action": "add"}).json()["status"] == "ok"  # asked once only
+    ai.guess = ai.guess.model_copy(update={"is_new_generic": False})  # a second brand of the same generic
+    r = c.post("/api/scan/photo", data={"code": "4343", "action": "add"},
+               files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
+    assert r["status"] == "ok" and r["product_id"] != pid  # once per generic, not per brand
 
 
 def test_running_low_in_walmart_cart(env):
@@ -954,24 +972,29 @@ def test_running_low_in_walmart_cart(env):
 
 def test_supplies_view_used_one(env):
     g, _, _, c, _ = env
-    bags = supply(g, stock=41, package_amount=40)
+    bags = supply(g, min_stock=2, cumulate_min_stock_amount_of_sub_products=1)  # a generic with two brands
+    glad = supply(g, "Glad bags", min_stock=0, stock=3, parent_product_id=bags)
+    hefty = supply(g, "Hefty bags", min_stock=0, stock=2, parent_product_id=bags)
     sponge = supply(g, "Sponges", min_stock=0, stock=3)
-    child = supply(g, "Glad bags", stock=5)
-    g.update("products", child, {"parent_product_id": bags})  # bags is now a generic: its child row is shown
     html = c.get("/home/supplies").text
-    assert "Glad bags" in html and "Sponges" in html and f"/home/supplies/{bags}/" not in html
+    assert "Trash bags" in html and "Sponges" in html and "Glad bags" not in html and "Hefty bags" not in html
+    assert re.search(r"Trash bags</b>.*?5 piece", html, re.S)  # the total across brands
     assert f'action="/home/supplies/{sponge}/used"' in html and "Used one" in html and "Keep at least" in html
-    r = c.post(f"/home/supplies/{child}/used", follow_redirects=False)
+    assert f'/home/supplies/{glad}/' not in html
+    r = c.post(f"/home/supplies/{bags}/used", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].startswith("/home/supplies")
-    assert g.stock_amounts()[child] == 4  # no package size: one unit
-    g.set_userfields("products", child, {"package_amount": 10})
-    c.post(f"/home/supplies/{child}/used")
-    assert g.stock_amounts()[child] == 0  # a package, but never more than is in stock
-    assert c.post(f"/home/supplies/{child}/used").status_code == 200  # nothing left: no error
+    assert g.stock_amounts()[bags] == 4  # no package size: one unit, taken from a brand
+    g.set_userfields("products", bags, {"package_amount": 10})
+    c.post(f"/home/supplies/{bags}/used")
+    assert g.stock_amounts()[bags] == 0  # a package, but never more than is in stock
+    assert c.post(f"/home/supplies/{bags}/used").status_code == 200  # nothing left: no error
     low = ids(g).list["Running low"]
-    assert [(r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)] == [(child, 2)]
+    assert [(r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)] == [(bags, 2)]
+    assert hefty not in [r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)]
     c.post(f"/home/supplies/{sponge}/min", data={"amount": 4})
     assert g.get_object("products", sponge)["min_stock_amount"] == 4
-    assert sorted(r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)) == [sponge, child]
+    assert sorted(r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)) == [bags, sponge]
+    c.post(f"/home/supplies/{glad}/min", data={"amount": 3})  # a brand's id still sets its generic
+    assert g.get_object("products", bags)["min_stock_amount"] == 3 and g.get_object("products", glad)["min_stock_amount"] == 0
     assert c.post(f"/home/supplies/{sponge}/min", data={"amount": -1}).status_code == 422
     assert c.post("/home/supplies/999/used").status_code == 404

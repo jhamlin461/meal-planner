@@ -3,9 +3,9 @@ import re
 from datetime import date
 
 from app.house import LOCK, HouseStore, Person, Reminder
+from app.setup_grocy import supplies_group
 
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-SUPPLIES = "Household supplies"
 
 STARTER_CHORES = [
     {"name": "Scoop the litter boxes", "fields": {"period_type": "daily", "period_interval": 1},
@@ -140,10 +140,6 @@ def save(grocy, house: HouseStore, entity: str, kind: str, row: dict, rem: dict,
 
 def remove(grocy, house: HouseStore, entity: str, kind: str, id: int) -> None:
     grocy.delete(entity, id)  # the reminder loop clears every phone it reached, then drops the reminder
-
-
-def supplies_group(grocy) -> int | None:
-    return next((g["id"] for g in grocy.objects("product_groups") if g["name"] == SUPPLIES), None)
 
 
 def supplies(grocy) -> list[dict]:
