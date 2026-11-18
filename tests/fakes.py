@@ -105,3 +105,31 @@ def fake_grocy_with_week():
     g.create("shopping_list", {"shopping_list_id": i.list["Extras"], "product_id": 10, "amount": 1,
                                "done": 0, "note": "extra"})
     return g
+
+
+class FakeAI:
+    """Canned stand-in for app.ai.AI; set attributes per test, or set `error` to make every call raise."""
+
+    def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None):
+        self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
+        self.error = error
+
+    def _ret(self, value):
+        if self.error:
+            raise self.error
+        return value
+
+    def structure_recipe(self, text=None, pdf=None, image=None):
+        return self._ret(self.draft)
+
+    def guess_product(self, info, generics, locations, image=None):
+        return self._ret(self.guess)
+
+    def guess_conversion(self, product_name, from_unit, to_unit):
+        return self._ret(self.conversion)
+
+    def match_ingredients(self, names, products):
+        return self._ret(self.picks)
+
+    def suggest_week(self, context):
+        return self._ret(self.week)
