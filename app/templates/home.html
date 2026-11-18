@@ -17,7 +17,7 @@
 {% block content %}
 <h1>Chores</h1>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
-<h2>Chores</h2>
+<h2>Repeating</h2>
 {% for r in chores %}{{ item("chores", r, skip=True) }}{% else %}
 <p class="empty">No chores yet.</p>
 <form method="post" action="/home/starters" class="card"><div class="card-actions"><button class="btn btn-primary">Add starter chores</button></div></form>

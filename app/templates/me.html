@@ -1,17 +1,16 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Me{% endblock %}
 {% block content %}
 <h1>Me</h1>
-<div class="card">
-  <p>{% if who == 'kitchen' %}This device is the kitchen screen.{% elif who %}This device is {{ who.name }}'s.{% else %}This device isn't set to anyone.{% endif %} <a href="/who">Change</a></p>
-</div>
-<form class="card" method="post" action="/settings/theme">
-  <div class="row" role="radiogroup" aria-label="Theme">
-    <b class="grow">Theme</b>
-    <label class="choice"><input type="radio" name="theme" value="dark"{% if theme == 'dark' %} checked{% endif %}> Dark</label>
-    <label class="choice"><input type="radio" name="theme" value="light"{% if theme == 'light' %} checked{% endif %}> Light</label>
-  </div>
-  <div class="card-actions"><button class="btn btn-primary">Save theme</button></div>
-</form>
-<div class="card"><div class="card-actions"><a class="btn" href="/home/people">People</a></div></div>
+<ul class="rows">
+  <li class="row"><span class="grow"><b>This device</b><br><span class="muted">{% if who == 'kitchen' %}Kitchen screen{% elif who %}{{ who.name }}'s phone{% else %}Not set{% endif %}</span></span>
+    <a class="btn" href="/who">Change</a></li>
+  <li><form class="row" method="post" action="/settings/theme"><b class="grow">Theme</b>
+    <span class="segmented" role="group" aria-label="Theme">
+      <button class="btn" name="theme" value="dark" aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}">Dark</button>
+      <button class="btn" name="theme" value="light" aria-pressed="{{ 'true' if theme == 'light' else 'false' }}">Light</button>
+    </span></form></li>
+  <li class="row-link"><a href="/home/people"><b class="grow">People</b>{{ icon("chevron-right") }}</a></li>
+</ul>
 {% endblock %}

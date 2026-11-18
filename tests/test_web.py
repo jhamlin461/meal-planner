@@ -105,14 +105,20 @@ def test_me_page_theme_and_device(env):
     c.cookies.set("who", "kitchen")
     html = c.get("/me").text
     assert 'href="/me" aria-current="page"' in html and 'href="/who"' in html and 'href="/home/people"' in html
-    assert re.search(r'value="dark"\s+checked', html) and not re.search(r'value="light"\s+checked', html)
+    assert "kitchen screen" in html.lower() and 'class="rows"' in html and "Save theme" not in html
+    assert re.search(r'value="dark"[^>]*aria-pressed="true"', html) and re.search(r'value="light"[^>]*aria-pressed="false"', html)
     r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/me"},
                follow_redirects=False)
     assert r.headers["location"] == "/me"
     html = c.get("/me").text
-    assert 'data-theme="light"' in html and re.search(r'value="light"\s+checked', html)
+    assert 'data-theme="light"' in html and re.search(r'value="light"[^>]*aria-pressed="true"', html)
     assert 'href="/me" aria-current="page"' in c.get("/who").text
     assert 'href="/me" aria-current="page"' in c.get("/home/people").text
+
+
+def test_chores_page_sections(env):
+    html = env[3].get("/home").text
+    assert "<h1>Chores</h1>" in html and "<h2>Repeating</h2>" in html and "<h2>Chores</h2>" not in html
 
 
 def test_no_footer_theme_button(env):
