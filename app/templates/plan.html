@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Plan{% endblock %}
+{% macro slot(d, section, entries, can_add, recipes) %}
+<div class="slot"><strong>{{ section }}</strong>
+{% for e in entries %}
+<div class="row">
+  {% if e.recipe %}<span class="grow">{% if e.done %}<s>{{ e.text }}</s>{% else %}{{ e.text }}{% endif %} <span class="muted">· {{ e.servings }} servings</span></span>
+  {% if not e.done %}<form method="post" action="/plan/{{ e.id }}/cook"><button>Cooked it</button></form>{% endif %}
+  {% else %}<span class="grow muted">{{ e.text }}</span>{% endif %}
+  <form method="post" action="/plan/{{ e.id }}/remove"><button class="secondary" aria-label="Remove {{ e.text }}">Remove</button></form>
+</div>
+{% endfor %}
+{% if can_add %}
+<form class="inline" method="post" action="/plan">
+  <input type="hidden" name="day" value="{{ d.isoformat() }}"><input type="hidden" name="section" value="{{ section }}">
+  <select class="grow" name="recipe_id" aria-label="Recipe for {{ section }}" required><option value="">Add a recipe…</option>{% for id, name in recipes %}<option value="{{ id }}">{{ name }}</option>{% endfor %}</select>
+  <input type="number" name="servings" min="1" step="1" placeholder="servings" inputmode="numeric" aria-label="Servings (blank = usual)">
+  <button>Add</button>
+</form>
+{% endif %}
+</div>
+{% endmacro %}
+{% block content %}
+<h1>Week of {{ monday.strftime("%b %d") }}</h1>
+<div class="row"><a class="button secondary" href="/plan?week={{ prev.isoformat() }}">&larr; Prev</a>
+<a class="button secondary" href="/plan?week={{ next.isoformat() }}">Next &rarr;</a>
+<form method="post" action="/plan/suggest"><input type="hidden" name="week" value="{{ monday.isoformat() }}"><button>Suggest week</button></form></div>
+{% if short %}<p class="warn">You were short on: {{ short|join(", ") }}. <a href="/pantry">Correct the pantry</a></p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if picks is not none %}
+<div class="card"><h2>Suggestions</h2>
+{% for p in picks %}
+<form class="inline" method="post" action="/plan">
+  <input type="hidden" name="day" value="{{ p.day }}"><input type="hidden" name="section" value="{{ p.section }}"><input type="hidden" name="recipe_id" value="{{ p.recipe_id }}">
+  <span class="grow"><strong>{{ p.label }} {{ p.section }}:</strong> {{ p.name }}<br><span class="muted">{{ p.reason }}</span></span>
+  <button>Accept</button>
+</form>
+{% else %}<p class="muted">Nothing to suggest: no open slots, or no usable ideas.</p>
+{% endfor %}</div>
+{% endif %}
+{% for d in days %}
+<div class="card">
+<h2>{{ d.day.strftime("%A %b %d") }}</h2>
+{% if d.day.weekday() >= 5 or d.lunch %}{{ slot(d.day, "Lunch", d.lunch, d.day.weekday() >= 5, recipes) }}{% endif %}
+{{ slot(d.day, "Dinner", d.dinner, true, recipes) }}
+</div>
+{% endfor %}
+{% endblock %}

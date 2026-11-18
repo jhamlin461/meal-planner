@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Shopping{% endblock %}
+{% macro rows(items) %}
+<ul class="rows">
+{% for r in items %}<li><form class="inline" method="post" action="/shopping/{{ r.id }}/toggle">
+  <button class="{{ '' if r.done else 'secondary' }}" aria-pressed="{{ 'true' if r.done else 'false' }}" aria-label="Got {{ r.name }}">{{ "✓" if r.done else "◻" }}</button>
+  <span class="grow">{% if r.done %}<s>{{ r.name }}</s>{% else %}{{ r.name }}{% endif %}
+  {% if r.pid %}<span class="muted">· {{ r.amount|num }} {{ r.unit }}{% if r.packs %} · {{ r.packs }} × {{ r.pkg|num }} {{ r.unit }} pack{% endif %}</span>{% endif %}</span>
+</form></li>
+{% else %}<li class="muted">Nothing here.</li>
+{% endfor %}</ul>
+{% endmacro %}
+{% block content %}
+<h1>Shopping</h1>
+{% if bad %}<p class="error">That does not look like a Walmart item link or number.</p>{% endif %}
+<h2>Meal plan</h2>
+{{ rows(lists["Meal plan"]) }}
+<h2>Extras</h2>
+{{ rows(lists["Extras"]) }}
+<form class="inline" method="post" action="/shopping/extra">
+  <input class="grow" name="name" placeholder="Add an extra" aria-label="Extra item" required><button>Add</button>
+</form>
+<form method="post" action="/shopping/bought"><p><button>Bought (move ticked items to stock)</button></p></form>
+<h2>Walmart</h2>
+{% if cart_link %}<p><a class="button" href="{{ cart_link }}" rel="noreferrer">Open Walmart cart</a></p>{% endif %}
+{% if rest %}
+<h3>Still to add on Walmart</h3>
+<ul class="rows">
+{% for p in rest %}<li><a href="{{ p.url }}" rel="noreferrer">{{ p.name }}</a>
+  <form class="inline" method="post" action="/products/{{ p.id }}/walmart">
+    <input class="grow" name="link" placeholder="Paste Walmart link" aria-label="Walmart link for {{ p.name }}" required><button class="secondary">Save</button>
+  </form></li>
+{% endfor %}</ul>
+{% elif not cart_link %}<p class="muted">Nothing left to order.</p>{% endif %}
+{% endblock %}

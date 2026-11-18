@@ -4,13 +4,14 @@ import math
 import mimetypes
 import threading
 from datetime import date, timedelta
+from urllib.parse import urlencode
 from pathlib import Path
 from typing import Literal
 
 import anthropic
 import httpx
 import jinja2
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,9 +25,12 @@ from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
-from app.mealplan import plan_meal
+from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids
+from app.shopping import rebuild_meal_plan_list, walmart_items
+from app.suggest import suggest
+from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
 NEVER = "2999-12-31"  # Grocy's best-before for "never expires"
@@ -53,6 +57,20 @@ def _int(s) -> int | None:
 def _fmt(x) -> str:
     """Number for an input's value= (no trailing .0)."""
     return "" if x is None else f"{float(x):g}"
+
+
+def _servings(s: str) -> int | None:
+    """Blank -> None (use the household default); otherwise a positive whole number or a 400."""
+    if not s.strip():
+        return None
+    n = _int(s.strip())
+    if n is None or n < 1:
+        raise HTTPException(400, "Servings must be a whole number above 0")
+    return n
+
+
+def _monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
 
 
 def _factor(s: str) -> float:
@@ -260,7 +278,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def recipe_plan(rid: int, day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"),
                     servings: str = Form("")):
         recipe_or_404(rid)
-        plan_meal(grocy, day, section, rid, _int(servings), settings)
+        plan_meal(grocy, day, section, rid, _servings(servings), settings)
         return back("/plan")
 
     def table_for(rid: int) -> CfeTable:
@@ -394,6 +412,157 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def discard(pid: str):
         store.delete(pid)
         return back("/import")
+
+    # ---- week plan ----------------------------------------------------------------------------------------------
+    def plan_page(request: Request, monday: date, short: list[str] = (), picks: list[dict] | None = None,
+                  error: str | None = None):
+        recipes_all = grocy.objects("recipes")
+        rnames = {int(r["id"]): r["name"] for r in recipes_all}
+        choices = sorted(((r["id"], r["name"]) for r in recipes_all if (r.get("type") or "normal") == "normal"),
+                         key=lambda t: t[1].lower())
+
+        def entry(r: dict) -> dict:
+            is_recipe = r.get("type") == "recipe"
+            return {"id": int(r["id"]), "recipe": is_recipe, "done": bool(int(float(r.get("done") or 0))),
+                    "text": rnames.get(_int(r.get("recipe_id")), "(deleted recipe)") if is_recipe
+                    else r.get("note", ""),
+                    "servings": _fmt(r.get("recipe_servings"))}
+
+        days = [{"day": d.day, "lunch": [entry(r) for r in d.lunch], "dinner": [entry(r) for r in d.dinner]}
+                for d in week_view(grocy, monday)]
+        return page(request, "plan.html", days=days, monday=monday, prev=monday - timedelta(days=7),
+                    next=monday + timedelta(days=7), recipes=choices, short=list(short), picks=picks, error=error)
+
+    @app.get("/plan")
+    def plan_get(request: Request, week: date | None = None, short: list[str] = Query(default=[])):
+        return plan_page(request, _monday(week or date.today()), short)
+
+    @app.post("/plan")
+    def plan_post(day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"), recipe_id: int = Form(),
+                  servings: str = Form("")):
+        recipe_or_404(recipe_id)
+        plan_meal(grocy, day, section, recipe_id, _servings(servings), settings)
+        return back(f"/plan?week={_monday(day).isoformat()}")
+
+    def entry_week(entry_id: int) -> str:
+        e = grocy.get_object("meal_plan", entry_id)
+        if e is None:
+            raise HTTPException(404, "No such plan entry")
+        return _monday(date.fromisoformat(str(e["day"])[:10])).isoformat()
+
+    @app.post("/plan/{entry_id}/remove")
+    def plan_remove(entry_id: int):
+        week = entry_week(entry_id)
+        unplan_meal(grocy, entry_id, settings)
+        return back(f"/plan?week={week}")
+
+    @app.post("/plan/{entry_id}/cook")
+    def plan_cook(entry_id: int):
+        week = entry_week(entry_id)
+        short = cook(grocy, entry_id)
+        return back("/plan?" + urlencode([("week", week)] + [("short", n) for n in short]))
+
+    @app.post("/plan/suggest")
+    def plan_suggest(request: Request, week: date = Form()):  # plain def: Claude takes seconds, FastAPI threadpools it
+        monday = _monday(week)
+        try:
+            picks = suggest(grocy, ai, monday)
+        except AIError as e:
+            return plan_page(request, monday, error=str(e))
+        names = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}
+        return plan_page(request, monday, picks=[{"day": p.day.isoformat(), "label": p.day.strftime("%a %b %d"),
+                                                  "section": p.section, "recipe_id": p.recipe_id,
+                                                  "name": names.get(p.recipe_id, ""), "reason": p.reason}
+                                                 for p in picks])
+
+    # ---- shopping -----------------------------------------------------------------------------------------------
+    @app.get("/shopping")
+    def shopping(request: Request, bad: int = 0):
+        i = ids(grocy)
+        rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
+        products = {int(p["id"]): p for p in grocy.objects("products")}
+        units = unit_names()
+
+        def view(row: dict) -> dict:
+            pid = _int(row.get("product_id"))
+            p = products.get(pid)
+            amount = float(row.get("amount") or 0)
+            pkg = _num(grocy.userfields("products", pid).get("package_amount")) if p else None
+            return {"id": int(row["id"]), "pid": pid if p else None, "name": p["name"] if p else row.get("note") or "(item)",
+                    "amount": amount, "unit": units.get(_int(p.get("qu_id_stock")), "") if p else "",
+                    "done": bool(int(float(row.get("done") or 0))),
+                    "packs": packages_needed(amount, pkg) if pkg else None, "pkg": pkg}
+
+        lists = {n: [view(r) for r in grocy.objects("shopping_list", shopping_list_id=i.list[n])]
+                 for n in ("Meal plan", "Extras")}
+        todo: dict[int, float] = {}  # ticked = already got it, so it stays out of the Walmart hand-off
+        for r in lists["Meal plan"]:
+            if r["pid"] and not r["done"]:
+                todo[r["pid"]] = todo.get(r["pid"], 0.0) + r["amount"]
+        cart, rest = walmart_items(grocy, todo)
+        return page(request, "shopping.html", lists=lists, bad=bad,
+                    cart_link=cart_url(cart, settings.walmart_store_id) if cart else None,
+                    rest=[{"id": p["id"], "name": p["name"], "url": search_url(p["name"])} for p in rest])
+
+    @app.post("/shopping/{row_id}/toggle")
+    def shopping_toggle(row_id: int):
+        row = grocy.get_object("shopping_list", row_id)
+        if row is None:
+            raise HTTPException(404, "No such row")
+        grocy.update("shopping_list", row_id, {"done": 0 if int(float(row.get("done") or 0)) else 1})
+        return back("/shopping")
+
+    @app.post("/shopping/extra")
+    def shopping_extra(name: str = Form()):
+        if name.strip():
+            grocy.create("shopping_list", {"shopping_list_id": ids(grocy).list["Extras"], "note": name.strip(),
+                                           "amount": 1, "done": 0})
+        return back("/shopping")
+
+    @app.post("/shopping/bought")
+    def shopping_bought():
+        i = ids(grocy)
+        for name in ("Meal plan", "Extras"):
+            for row in grocy.objects("shopping_list", shopping_list_id=i.list[name]):
+                if not int(float(row.get("done") or 0)):
+                    continue
+                pid = _int(row.get("product_id"))
+                p = grocy.get_object("products", pid) if pid else None
+                if p:  # free-text extras (no product) are just crossed off
+                    pkg = _num(grocy.userfields("products", pid).get("package_amount"))
+                    amount = float(row.get("amount") or 0)
+                    if pkg:
+                        amount = packages_needed(amount, pkg) * pkg
+                    days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
+                    if amount > 0:
+                        grocy.add_stock(pid, amount, date.today() + timedelta(days=days) if days > 0 else None,
+                                        _int(p.get("location_id")))
+                grocy.delete("shopping_list", int(row["id"]))  # after add_stock: a failure never loses a purchase
+        rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
+        return back("/shopping")
+
+    @app.post("/products/{pid}/walmart")
+    def product_walmart(pid: int, link: str = Form()):
+        if grocy.get_object("products", pid) is None:
+            raise HTTPException(404, "No such product")
+        item = parse_item_id(link)
+        if item is None:
+            return back("/shopping?bad=1")
+        grocy.set_userfields("products", pid, {"walmart_item_id": item})
+        return back("/shopping")
+
+    @app.get("/api/expiring")
+    def api_expiring():
+        names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
+        vol = grocy.volatile(settings.expiry_warn_days)
+        parts = []
+        for r in (r for key in ("overdue_products", "due_products") for r in vol.get(key) or []):
+            try:
+                when = f" ({date.fromisoformat(str(r['best_before_date'])[:10]):%a})"
+            except (KeyError, ValueError):
+                when = ""
+            parts.append(names.get(int(r["product_id"]), f"product {r['product_id']}") + when)
+        return {"count": len(parts), "message": "Use soon: " + ", ".join(parts) if parts else ""}
 
     return app
 

@@ -357,3 +357,155 @@ def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
         second.join(5)
     assert codes == {"first": 303, "second": 303}
     assert len(g.objects("recipes")) == 1 and store.get(pid) is None
+
+
+# ---- plan and shopping ------------------------------------------------------------------------------------------
+def _monday(d):
+    return d - timedelta(days=d.weekday())
+
+
+def _future_day(weekday=None):
+    """A day within the shopping window (tomorrow or later); weekday 0-3 gives a 4-serving dinner."""
+    d = date.today() + timedelta(days=1)
+    while weekday is not None and d.weekday() != weekday:
+        d += timedelta(days=1)
+    return d
+
+
+def flour_recipe(g, per=150, stock=None):
+    i = ids(g)
+    pid = product(g, "Flour")
+    rid = g.create("recipes", {"name": "Bread", "base_servings": 2})
+    g.create("recipes_pos", {"recipe_id": rid, "product_id": pid, "amount": per, "qu_id": i.unit["g"]})
+    if stock:
+        g.add_stock(pid, stock, None, i.location["Pantry"])
+    return pid, rid
+
+
+def test_plan_post_adds_leftover_and_list_item(env):
+    g, _, _, c, _ = env
+    pid, rid = flour_recipe(g)
+    day = _future_day(1)  # Tuesday dinner: 4 servings + leftovers next day
+    r = c.post("/plan", data={"day": day.isoformat(), "section": "Dinner", "recipe_id": rid, "servings": ""},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/plan?week={_monday(day).isoformat()}"
+    assert [n["note"] for n in g.objects("meal_plan", type="note")] == ["Leftovers: Bread"]
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
+    assert row["product_id"] == pid and row["amount"] == 300
+    html = c.get(f"/plan?week={_monday(day).isoformat()}").text
+    assert "Leftovers: Bread" in html and "Cooked it" in html and "Suggest week" in html
+
+
+def test_plan_rejects_bad_servings(env):
+    g, _, _, c, _ = env
+    _, rid = flour_recipe(g)
+    for bad in ("0", "-2", "abc", "2.5", "inf", "nan"):
+        r = c.post("/plan", data={"day": "2026-11-20", "section": "Dinner", "recipe_id": rid, "servings": bad})
+        assert r.status_code == 400, bad
+    assert g.objects("meal_plan") == []
+
+
+def test_plan_remove_drops_entry_and_leftover(env):
+    g, _, _, c, _ = env
+    _, rid = flour_recipe(g)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    [e] = g.objects("meal_plan", type="recipe")
+    c.post(f"/plan/{e['id']}/remove")
+    assert g.objects("meal_plan") == []
+    assert c.post("/plan/999/remove").status_code == 404
+
+
+def test_cook_route_flashes_shortage(env):
+    g, _, _, c, _ = env
+    _, rid = flour_recipe(g, stock=100)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    [e] = g.objects("meal_plan", type="recipe")
+    r = c.post(f"/plan/{e['id']}/cook")  # follows the redirect back to /plan
+    assert "You were short on: Flour" in r.text and 'href="/pantry"' in r.text
+    assert g.objects("meal_plan", type="recipe")[0]["done"] == 1
+    pid2, rid2 = flour_recipe(g, stock=1000)
+    c.post("/plan", data={"day": _future_day(2).isoformat(), "section": "Dinner", "recipe_id": rid2})
+    e2 = [x for x in g.objects("meal_plan", type="recipe") if x["recipe_id"] == rid2][0]
+    assert "You were short on" not in c.post(f"/plan/{e2['id']}/cook").text
+
+
+def test_suggest_lists_picks_with_accept(env):
+    from app.ai import Suggestion, WeekSuggestions
+    g, ai, _, c, _ = env
+    _, rid = flour_recipe(g)
+    monday = _monday(date.today() + timedelta(days=7))
+    ai.week = WeekSuggestions(items=[Suggestion(day=monday.isoformat(), section="Dinner", recipe_id=rid,
+                                                reason="uses <b>flour</b>")])
+    r = c.post("/plan/suggest", data={"week": monday.isoformat()})
+    assert "Accept" in r.text and "uses &lt;b&gt;flour&lt;/b&gt;" in r.text and "<b>flour</b>" not in r.text
+    assert c.post("/plan/suggest", data={"week": (monday + timedelta(days=1)).isoformat()}).status_code == 200
+
+
+def test_shopping_shows_walmart_link_with_store(env, tmp_path):
+    g, ai, store, _, _ = env
+    pid, rid = flour_recipe(g)
+    g.set_userfields("products", pid, {"walmart_item_id": "10535106", "package_amount": 2268})
+    app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(no_network)),
+                     Settings("", "", "", "KEY", "5435", 6, tmp_path, 3), store)
+    c = TestClient(app)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid, "servings": "4"})
+    html = c.get("/shopping").text
+    assert "addToCart?items=10535106&amp;storeId=5435" in html
+    assert "Flour" in html and "1 × 2268 g pack" in html
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
+    c.post(f"/shopping/{row['id']}/toggle")  # ticked = already got it, so out of the hand-off
+    assert "addToCart" not in c.get("/shopping").text
+
+
+def test_shopping_lists_unmapped_products_with_search_link(env):
+    g, _, _, c, _ = env
+    _, rid = flour_recipe(g)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    html = c.get("/shopping").text
+    assert "Still to add on Walmart" in html and "walmart.com/search?q=Flour" in html
+    assert "Open Walmart cart" not in html
+
+
+def test_bought_moves_to_stock_and_rebuilds(env):
+    g, _, _, c, _ = env
+    pid, rid = flour_recipe(g)
+    g.set_userfields("products", pid, {"package_amount": 1000})
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})  # needs 300 g
+    extras = ids(g).list["Extras"]
+    c.post("/shopping/extra", data={"name": "birthday candles"})
+    c.post("/shopping/extra", data={"name": "  "})  # blank ignored
+    for lid in ids(g).list.values():  # each redirect rebuilds the Meal plan list, so ids are re-read per list
+        for r in g.objects("shopping_list", shopping_list_id=lid):
+            c.post(f"/shopping/{r['id']}/toggle")
+    untouched = g.create("shopping_list", {"shopping_list_id": extras, "note": "later", "amount": 1, "done": 0})
+    assert c.post("/shopping/bought", follow_redirects=False).status_code == 303
+    [entry] = g.stock[pid]
+    assert entry["amount"] == 1000 and entry["location_id"] == ids(g).location["Pantry"]
+    assert entry["best_before_date"] == (date.today() + timedelta(days=5)).isoformat()
+    assert [x["id"] for x in g.objects("shopping_list", shopping_list_id=extras)] == [untouched]
+    assert g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"]) == []  # 1000 g covers 300 g
+
+
+def test_walmart_paste_sets_userfield(env):
+    g, _, _, c, _ = env
+    pid = product(g, "Milk")
+    r = c.post(f"/products/{pid}/walmart", data={"link": "https://www.walmart.com/ip/Milk/10450114"})
+    assert r.status_code == 200 and g.userfields("products", pid)["walmart_item_id"] == "10450114"
+    r = c.post(f"/products/{pid}/walmart", data={"link": "https://evil.example/ip/1/2"})
+    assert "does not look like" in r.text and g.userfields("products", pid)["walmart_item_id"] == "10450114"
+    assert c.post("/products/999/walmart", data={"link": "123"}).status_code == 404
+
+
+def test_api_expiring_message(env):
+    g, _, _, c, _ = env
+    assert c.get("/api/expiring").json() == {"count": 0, "message": ""}
+    milk, spinach = product(g, "milk"), product(g, "spinach")
+    g.volatile_result["due_products"] = [{"product_id": milk, "best_before_date": "2026-11-20"},
+                                         {"product_id": spinach, "best_before_date": "2026-11-21 00:00:00"}]
+    assert c.get("/api/expiring").json() == {"count": 2, "message": "Use soon: milk (Fri), spinach (Sat)"}
+
+
+def test_plan_and_shopping_pages_render_empty(env):
+    c = env[3]
+    for url in ("/plan", "/shopping", "/plan?week=2026-11-18"):
+        assert c.get(url).status_code == 200, url
