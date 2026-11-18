@@ -413,6 +413,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             rows.append(row)
         errors: list[str] = []
         if action == "save":
+            units, ings = unit_names(), list(table.ingredients)
+            for i, (ing, row) in enumerate(zip(ings, rows)):  # store packets as the real amount the reviewer typed
+                if is_packaging(ing.unit) and row["product_id"] and row["amount"] is not None:
+                    prod = grocy.get_object("products", row["product_id"]) or {}
+                    ings[i] = ing.model_copy(update={"qty": row["amount"],
+                                                     "unit": units.get(_int(prod.get("qu_id_stock")), ing.unit)})
+            table = table.model_copy(update={"ingredients": ings})
             draft = p.draft.model_copy(update={"table": table})
             source_url = p.source if p.source.startswith(("http://", "https://")) else None
             with save_lock:  # a double-tapped Save must not create the recipe twice

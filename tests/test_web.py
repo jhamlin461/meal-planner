@@ -686,3 +686,20 @@ def test_plan_add_and_remove_wait_for_the_plan_lock(tmp_path):
             t.join(5)
     assert during == [gone]  # neither ran while Bought held the lock
     assert len(g.objects("meal_plan", type="recipe")) == 1 and g.get_object("meal_plan", gone) is None
+
+
+def test_saved_table_has_real_amount_for_packet_rows(env):
+    g, ai, store, c, _ = env
+    sour = product(g, "Sour cream")
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream", note="est.")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0"])])
+    ai.draft = RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t)
+    c.post("/import", data={"urls": "https://example.com/tacos"})
+    pid = store.all()[0].id
+    r = c.post(f"/import/{pid}", data=dict(product_0=sour, prev_0=sour, amount_0="57", new_name_0="sour cream",
+                                           op_id=["o1"], op_label=["mix"], op_inputs=["i0"], action="save"),
+               follow_redirects=False)
+    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients
+    assert (ing.qty, ing.unit, ing.name, ing.note) == (57, "g", "sour cream", "est.")
+    assert "1 packet" not in c.get(f"/recipes/{rid}").text
