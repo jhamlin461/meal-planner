@@ -56,8 +56,13 @@ def _int(s) -> int | None:
 
 
 def _fmt(x) -> str:
-    """Number for an input's value= (no trailing .0)."""
+    """Number for display or a value= the user edits (no trailing .0; 6 significant digits)."""
     return "" if x is None else f"{float(x):g}"
+
+
+def _exact(x) -> str:
+    """Number the app reads back (hidden inputs, max=): never rounded up past stock, which Grocy refuses."""
+    return "" if x is None else f"{float(x):.12g}"
 
 
 def _servings(s: str) -> int | None:
@@ -109,6 +114,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters["num"] = _fmt
+    env.filters["exact"] = _exact
     env.globals["next_op_id"] = _next_op_id
     templates = Jinja2Templates(env=env)
     plan_lock = threading.Lock()  # Bought / Cooked it / list rebuild: a double tap or second device must not repeat them

@@ -14,16 +14,16 @@
 {% for r in rows %}<li>
   <div class="row"><b class="grow">{{ r.name }}</b><span>{{ r.amount|num }} {{ r.unit }}</span>{% if r.bb != never %}<span class="muted">best before {{ r.bb }}</span>{% endif %}</div>
   <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">
-    <input type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|num }}" inputmode="decimal" required aria-label="Amount used"> {{ r.unit }}
+    <input type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|exact }}" inputmode="decimal" required aria-label="Amount used"> {{ r.unit }}
     <button>Use</button>
   </form>
   <details><summary>Edit amount · Move</summary>
     <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">
-      <label>Total <input type="number" name="amount" step="any" min="0" value="{{ totals[r.pid]|num }}" inputmode="decimal" required></label> {{ r.unit }}
+      <label>Total <input type="number" name="amount" step="any" min="0" value="{{ totals[r.pid]|exact }}" inputmode="decimal" required></label> {{ r.unit }}
       <button class="secondary">Set</button>
     </form>
     <form class="inline" method="post" action="/pantry/{{ r.pid }}/move">
-      <input type="hidden" name="from_location" value="{{ r.loc }}"><input type="hidden" name="amount" value="{{ r.amount|num }}">
+      <input type="hidden" name="from_location" value="{{ r.loc }}"><input type="hidden" name="amount" value="{{ r.amount|exact }}">
       <select name="to_location" aria-label="Move to">{% for name, id in locations.items() %}<option value="{{ id }}"{% if id == r.loc %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
       <button class="secondary">Move</button>
     </form>

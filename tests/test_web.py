@@ -642,3 +642,11 @@ def test_bought_without_package_size_adds_row_amount(env):
     c.post(f"/shopping/{row['id']}/toggle")
     c.post("/shopping/bought")
     assert g.stock_amounts()[pid] == 300
+
+
+def test_pantry_machine_read_amounts_are_not_rounded_up(env):
+    g, _, _, c, _ = env
+    pid = product(g, "Rice")
+    g.add_stock(pid, 2189.1366, None, ids(g).location["Pantry"])
+    html = c.get("/pantry").text
+    assert 'name="amount" value="2189.1366"' in html and 'max="2189.1366"' in html
