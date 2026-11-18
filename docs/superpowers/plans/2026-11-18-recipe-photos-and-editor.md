@@ -61,3 +61,24 @@ TDD; existing tests are the behavioural contract.
   recipe page order (table before "Per serving" and "Add to plan"); recipes list shows `<img` for a recipe with a
   picture and the placeholder for one without.
 - Commits: `feat: dish photos from imports, stored in Grocy`; `feat: recipe page leads with the table`.
+
+## Task E: Cooking aids on the recipe table (owner, 2026-11-18)
+
+Owner: "I love the option in recipetables.com to be able to click on a step to cross it out. That will help me know
+what else I have left to do. I am still just a home chef, so it would be nice if it told me WHERE to combine things:
+if it is in a separate bowl / pan."
+
+- **Where:** `cfe.Op` gains `where: str = ""` (short: "in a large pot", "in a small bowl", "in the skillet",
+  "on a sheet pan"). The AI table prompt asks for it on every step: the vessel the recipe names, else a sensible
+  home-kitchen choice, never blank for steps that combine things; a step that continues in the same vessel as its
+  input says so ("same pot"). Shown in the table's step cell as a second, quieter line under the label. The table
+  editor (Task A's step rows) gets a "Where" text field per step. Old tables without `where` render as before.
+- **Cross out as you cook:** tapping a step cell or an ingredient cell on the recipe page toggles it done
+  (strike-through + dimmed, `aria-pressed`), keyboard-operable (cells are buttons or have role/tabindex + Enter/
+  Space). State is kept per device in localStorage, keyed by recipe id (wrapped in try/catch; works without
+  storage), and a "Start over" button clears it. Crossing out a step does not cross out its ingredients
+  automatically (people tick ingredients as they prep). Respects reduced motion.
+- Tests: Op round-trips `where`; the prompt mentions where/vessel; the table renders the where line; the editor
+  saves a where value; the recipe page has the cross-out hooks (data attributes/roles) and a Start over control.
+- Commit: `feat: where each step happens, and cross steps off while cooking`.
+- Order: after Task A (editor rows) and together with Task B's recipe-page rework (same template).
