@@ -118,3 +118,11 @@ if (video) {
     run(`Looking up ${code}…`, async () => show(await post("/api/scan", {code, action: action()}), code));
   }).catch((e) => { status.textContent = `Camera unavailable: ${e.message}`; });
 }
+
+// Chore form: show only the fields for the chosen "Repeats" option (all stay visible without JS).
+const schedule = document.querySelector("select[name=schedule]");
+if (schedule) {
+  const sync = () => document.querySelectorAll("[data-for]").forEach((el) => { el.hidden = el.dataset.for !== schedule.value; });
+  schedule.addEventListener("change", sync);
+  sync();
+}

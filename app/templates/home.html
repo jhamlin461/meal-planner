@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Home{% endblock %}
-{% macro when(r) %}{% if r.date %}{% if r.overdue %}Overdue, since {% elif r.today %}Today{% else %}Due {% endif %}{% if not r.today %}{{ r.date.strftime('%a %b') }} {{ r.date.day }}{% endif %}{% else %}No date{% endif %}{% endmacro %}
+{% macro when(r) %}{% if not r.date %}No due date.{% elif r.overdue %}Overdue since {{ r.date.strftime('%b') }} {{ r.date.day }}.{% elif r.today %}Due today.{% else %}Due {{ r.date.strftime('%A, %b') }} {{ r.date.day }}.{% endif %}{% endmacro %}
 {% macro item(kind, r, skip=False) %}
 <div class="card">
-  <p class="row"><b class="grow breakable">{{ r.name }}</b><a href="/home/{{ kind }}/{{ r.id }}" aria-label="Edit {{ r.name }}">{{ icon("pencil-outline") }}</a></p>
-  <p class="{{ 'error' if r.overdue else 'muted' }}">{{ when(r) }}{% if r.who %} · {{ r.who }}{% endif %}</p>
+  <p class="row"><b class="grow breakable">{{ r.name }}</b><a class="icon-link" href="/home/{{ kind }}/{{ r.id }}" aria-label="Edit {{ r.name }}">{{ icon("pencil-outline") }}</a></p>
+  <p class="{{ 'error' if r.overdue else 'muted' }}">{{ when(r) }}{% if r.who %} {{ r.who ~ "'s turn." if kind == "chores" else "For " ~ r.who ~ "." }}{% elif r.turns %} Takes turns.{% endif %}</p>
   <div class="card-actions">
     <form method="post" action="/home/{{ kind }}/{{ r.id }}/done"><button class="btn btn-primary">Done</button></form>
     {% if skip %}<form method="post" action="/home/{{ kind }}/{{ r.id }}/skip"><button class="btn">Skip</button></form>{% endif %}

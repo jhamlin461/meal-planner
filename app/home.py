@@ -19,7 +19,7 @@ STARTER_CHORES = [
 
 def _pos(form, key: str, what: str) -> int:
     s = str(form.get(key) or "").strip()
-    if not s.isdigit() or int(s) < 1:
+    if not s.isdecimal() or int(s) < 1:
         raise ValueError(f"{what} must be a whole number above 0")
     return int(s)
 
@@ -47,17 +47,23 @@ def _person(people: list[Person], v) -> Person | None:
 
 
 def rotation(people: list[Person]) -> dict:
-    return {"assignment_type": "who-least-did-first", "assignment_config": ",".join(str(p.grocy_user_id) for p in people)}
+    ids = [str(p.grocy_user_id) for p in people if isinstance(p.grocy_user_id, int) and p.grocy_user_id > 0]
+    if not ids:
+        raise ValueError("Add people on the People page first, or pick one person.")
+    return {"assignment_type": "who-least-did-first", "assignment_config": ",".join(ids)}
 
 
 def chore_fields(form, people: list[Person]) -> tuple[dict, dict]:
     """Grocy chore row and Reminder fields from the chore form; ValueError (with a message to show) when it is bad."""
     row = {"name": _name(form, "name", "Name"), "track_date_only": 1}
     sched = form.get("schedule") or "daily"
+    # Grocy's update merges fields, so every period field is set: the ones that don't apply are blanked
+    row |= {"period_interval": 1, "period_days": None, "period_config": ""}
     if sched == "daily":
-        row |= {"period_type": "daily", "period_interval": 1}
-    elif sched == "every":
-        row |= {"period_type": "daily", "period_interval": _pos(form, "every", "Days between")}
+        row |= {"period_type": "daily"}
+    elif sched == "every":  # N days after it was last done
+        n = _pos(form, "every", "Days between")
+        row |= {"period_type": "dynamic-regular", "period_interval": n, "period_days": n}
     elif sched == "weekly":
         days = [d for d in DAYS if d in form.getlist("days")]
         if not days:
@@ -167,11 +173,13 @@ def _due(s: str | None, today: date) -> dict:
 
 
 def chore_rows(grocy, people: list[Person], today: date) -> list[dict]:
-    names = {c["id"]: c["name"] for c in grocy.objects("chores")}
+    c_by_id = {c["id"]: c for c in grocy.objects("chores")}
+    names = {i: c.get("name") for i, c in c_by_id.items()}
     out = []
     for r in grocy.chores_status():
         p = next((p for p in people if p.grocy_user_id == r.get("next_execution_assigned_to_user_id")), None)
-        out.append({"id": r["chore_id"], "name": names.get(r["chore_id"], r.get("chore_name")),
+        turns = c_by_id.get(r["chore_id"], {}).get("assignment_type") == "who-least-did-first"
+        out.append({"id": r["chore_id"], "turns": turns, "name": names.get(r["chore_id"]) or r.get("chore_name") or "",
                     "who": p.name if p else None, **_due(r.get("next_estimated_execution_time"), today)})
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
 
@@ -180,12 +188,12 @@ def task_rows(grocy, people: list[Person], today: date) -> list[dict]:
     out = []
     for t in grocy.open_tasks():
         p = next((p for p in people if p.grocy_user_id == t.get("assigned_to_user_id")), None)
-        out.append({"id": t["id"], "name": t["name"], "who": p.name if p else None, **_due(t.get("due_date"), today)})
+        out.append({"id": t["id"], "name": t.get("name") or "", "who": p.name if p else None, **_due(t.get("due_date"), today)})
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
 
 
 def upkeep_rows(grocy, today: date) -> list[dict]:
-    names = {b["id"]: b["name"] for b in grocy.objects("batteries")}
+    names = {b["id"]: b.get("name") or "" for b in grocy.objects("batteries")}
     out = [{"id": r["battery_id"], "name": names.get(r["battery_id"], ""), "who": None,
             **_due(r.get("next_estimated_charge_time"), today)} for r in grocy.batteries_status()]
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
@@ -201,8 +209,8 @@ def chore_values(c: dict, rem: Reminder, people: list[Person]) -> dict:
         v |= {"schedule": "weekly", "days": str(c.get("period_config") or "").split(",")}
     elif pt == "monthly":
         v |= {"schedule": "monthly", "monthly": c.get("period_days") or ""}
-    elif pt in ("daily", "dynamic-regular") and int(c.get("period_interval") or 1) > 1:
-        v |= {"schedule": "every", "every": c.get("period_interval")}
+    elif pt == "dynamic-regular" or (pt == "daily" and int(c.get("period_interval") or 1) > 1):
+        v |= {"schedule": "every", "every": c.get("period_days") or c.get("period_interval") or ""}
     if c.get("assignment_type") != "who-least-did-first":
         p = next((p for p in people if p.grocy_user_id == c.get("next_execution_assigned_to_user_id")), None)
         v["who"] = str(p.id) if p else "turns"

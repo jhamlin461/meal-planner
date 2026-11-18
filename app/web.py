@@ -249,6 +249,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     async def form_post(request: Request, kind: str, id: int | None):
         return await run_in_threadpool(save_form, request, kind, id, await request.form())
 
+    def form_values(form) -> dict:
+        return {k: form.get(k) for k in form} | {"days": form.getlist("days")}
+
     def save_form(request: Request, kind: str, id: int | None, form):
         entity, key, _, noun = kinds[kind]
         people = house.people()
@@ -264,9 +267,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             else:
                 row, rem = hm.upkeep_fields(form)
         except ValueError as e:
-            v = {k: form.get(k) for k in form} | {"days": form.getlist("days")}
-            return form_page(request, kind, v, id, 400, str(e))
-        hm.save(grocy, house, entity, key, row, rem, id)
+            return form_page(request, kind, form_values(form), id, 400, str(e))
+        try:
+            hm.save(grocy, house, entity, key, row, rem, id)
+        except GrocyError as e:
+            return form_page(request, kind, form_values(form), id, 400, f"Grocy refused it: {e}")
         return home_back(f"Saved {noun}.")
 
     def register(kind: str):
@@ -290,6 +295,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
         @app.post(f"/home/{kind}/{{id}}/delete", name=f"{kind}_delete")
         def delete_post(id: int):
+            existing(kind, id)
             hm.remove(grocy, house, entity, key, id)
             return home_back(f"Deleted {noun}.")
 

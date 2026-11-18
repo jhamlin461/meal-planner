@@ -1,6 +1,7 @@
 from datetime import date
 
 import httpx
+from starlette.datastructures import FormData as MultiDict
 import pytest
 from fastapi.testclient import TestClient
 
@@ -61,7 +62,8 @@ def test_one_person_chore_and_every_n_days(hv):
                                      "remind_at": "08:30", "repeat_min": "45"})
     (ch,) = g.objects("chores")
     assert (ch["period_type"], ch["period_interval"], ch["assignment_type"],
-            ch["next_execution_assigned_to_user_id"]) == ("daily", 3, "no-assignment", a)
+            ch["next_execution_assigned_to_user_id"]) == ("dynamic-regular", 3, "no-assignment", a)
+    assert ch["period_days"] == 3
     assert house.reminder(f"chore:{ch['id']}").repeat_min == 45
 
 
@@ -180,3 +182,60 @@ def test_forms_render_and_task_edit_round_trips(hv):
     (t,) = g.objects("tasks")
     assert f'value="{pa}" selected' in c.get(f"/home/tasks/{t['id']}").text
     assert c.get("/home/chores/999").status_code == 404
+
+
+def test_take_turns_without_people_is_refused(tmp_path):
+    from app import home
+    with pytest.raises(ValueError, match="Add people"):
+        home.chore_fields(MultiDict(name="x", schedule="daily", who="turns"), [])
+
+
+def test_take_turns_with_no_people_via_form(hv):
+    g, house, c, (pa, _), (pb, _) = hv
+    house.delete_person(pa)
+    house.delete_person(pb)
+    r = c.post("/home/chores/new", data={"name": "Dishes", "schedule": "daily", "who": "turns"})
+    assert r.status_code == 400 and "Add people on the People page first" in r.text and not g.objects("chores")
+
+
+def test_every_n_days_round_trip_and_stale_fields_cleared(hv):
+    g, house, c, *_ = hv
+    c.post("/home/chores/new", data={"name": "Litter", "schedule": "every", "every": "14", "who": "turns"})
+    (ch,) = g.objects("chores")
+    assert (ch["period_type"], ch["period_days"], ch["period_interval"]) == ("dynamic-regular", 14, 14)
+    html = c.get(f"/home/chores/{ch['id']}").text
+    assert 'value="14"' in html and 'value="every" selected' in html
+    c.post(f"/home/chores/{ch['id']}", data={"name": "Litter", "schedule": "weekly", "days": "friday", "who": "turns"})
+    c.post(f"/home/chores/{ch['id']}", data={"name": "Litter", "schedule": "daily", "who": "turns"})
+    (ch,) = g.objects("chores")
+    assert ch["period_type"] == "daily" and not ch["period_config"] and not ch["period_days"]
+
+
+def test_starter_litter_edit_keeps_14_days(hv):
+    g, house, c, *_ = hv
+    c.post("/home/starters")
+    litter = next(x for x in g.objects("chores") if x["name"] == "Change the litter")
+    assert 'value="14"' in c.get(f"/home/chores/{litter['id']}").text
+
+
+def test_grocy_error_on_save_rerenders_form(hv):
+    from app.grocy import GrocyError
+    g, house, c, *_ = hv
+    g.create = lambda *a, **k: (_ for _ in ()).throw(GrocyError("duplicate name"))
+    r = c.post("/home/chores/new", data={"name": "Dishes", "schedule": "daily", "who": "turns"})
+    assert r.status_code == 400 and 'role="alert"' in r.text and 'value="Dishes"' in r.text
+
+
+def test_delete_missing_is_404(hv):
+    g, house, c, *_ = hv
+    for k in ("chores", "tasks", "upkeep"):
+        assert c.post(f"/home/{k}/999/delete").status_code == 404
+
+
+def test_home_sentences_and_no_middle_dot(hv):
+    g, house, c, (pa, a), _ = hv
+    g.create("chores", {"name": "Mop", "period_type": "daily", "next_execution_assigned_to_user_id": a})
+    g.create("chores", {"name": "Dishes", "period_type": "daily", "assignment_type": "who-least-did-first",
+                        "assignment_config": ""})
+    html = c.get("/home").text
+    assert chr(183) not in html and "Due today. Josh&#39;s turn." in html and "Due today. Takes turns." in html
