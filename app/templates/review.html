@@ -12,7 +12,7 @@
 <form method="post">
 <button class="default" name="action" value="update" tabindex="-1" aria-hidden="true">Update</button>{# Enter key = Update, never Create #}
 <h2>Ingredients</h2>
-<p class="hint">Amounts are in the product's stock unit. Changed a product? Press Update to recalculate.</p>
+<p class="muted">Amounts are in the product's stock unit. Changed a product? Press Update to recalculate.</p>
 <ul class="rows review-rows">
 {% for row in rows %}{% set i = loop.index0 %}<li>
   <p class="review-text breakable"><b>i{{ i }}</b> {{ row.text }}</p>

@@ -125,7 +125,7 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 #toast button { min-height: 36px; margin-left: 4px; }
 @media (min-width: 900px) { #toast { left: calc(var(--rail-w) + 24px); bottom: 24px; } }
 
-video#scanner { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 14px; object-fit: cover; }
+video#scanner { width: 100%; aspect-ratio: 4 / 3; max-height: 50vh; background: #000; border-radius: 14px; object-fit: cover; }
 dialog { border: 0; border-radius: 14px; background: var(--surface); color: var(--text); width: min(92vw, 420px);
   padding: 16px 16px 14px; overflow: hidden; }
 dialog .field { margin: 0; }
@@ -280,6 +280,10 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .review-rows .inline-group input { width: 6em; }
 .editor { margin: 16px 0; padding: 12px 14px; min-width: 0; }
 .editor legend { padding: 0 6px; font-weight: 600; }
+.editor .hint { margin: 0 0 8px; }
+input[type=file] { width: 100%; padding: 6px; }
+input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; padding: 0 14px; border: 0; border-radius: 8px;
+  background: var(--rail); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
 .refs { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 0 0 12px; }
 .refs b, .op-head { color: var(--muted); }
 .op-head, .op { display: grid; grid-template-columns: 4em minmax(0, 2fr) minmax(0, 1fr); gap: 8px; }
