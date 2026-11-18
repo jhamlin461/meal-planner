@@ -29,34 +29,25 @@ tailscale serve --bg 8000
 
 ## 3. Start the stack
 
-The repo has no remote, so send it over Tailscale. On the PC with the repo:
+Inside the LXC (the repo is private: when git asks, the password is a GitHub fine-grained token with
+**Contents: Read-only** on this repo; `credential.helper store` remembers it for later pulls):
 
 ```
-git bundle create meal-planner.bundle main
-tailscale file cp meal-planner.bundle meal-planner:
+git config --global credential.helper store
+git clone https://github.com/jhamlin461/meal-planner.git /root/meal-planner
+bash /root/meal-planner/deploy/setup.sh
 ```
 
-Inside the LXC:
+`setup.sh` asks for your time zone, Anthropic key, USDA key, Walmart store id and shopping day, writes
+`deploy/.env`, builds and starts the stack, then walks you through Grocy's one-time API key (open
+`http://<lxc-ip>:9283`, log in `admin`/`admin`, change the password, user menu -> Manage API keys), checks the
+key against Grocy and finishes the Grocy setup. Re-run it any time to change a key; Enter keeps the current
+value.
+
+To update later:
 
 ```
-tailscale file get /root/
-git clone -b main /root/meal-planner.bundle /root/Recipes && cd /root/Recipes/deploy
-cp .env.example .env        # fill in below (set TZ to your own time zone)
-docker compose up -d
-```
-
-To update later: send a new bundle the same way, then in `/root/Recipes` run
-`git pull /root/meal-planner.bundle main` and `docker compose up -d --build` in `deploy/`.
-
-Find `<lxc-ip>` with `hostname -I` inside the LXC (use the LAN address).
-Open Grocy once at `http://<lxc-ip>:9283` (login `admin`/`admin`): change the password, then create an API key
-(user menu -> Manage API keys). This is the only time you use Grocy's own UI.
-
-Put `GROCY_API_KEY`, `ANTHROPIC_API_KEY` and the rest in `deploy/.env` (see `.env.example`), then:
-
-```
-docker compose up -d                                     # pick up .env
-docker compose run --rm mealplanner python -m app.setup_grocy
+cd /root/meal-planner && git pull && cd deploy && docker compose up -d --build
 ```
 
 ## Always use the HTTPS URL
