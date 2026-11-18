@@ -56,6 +56,7 @@ def test_take_turns_sets_who_least_did_first(hv):
     (ch,) = g.objects("chores")
     assert ch["assignment_type"] == "who-least-did-first"
     assert sorted(ch["assignment_config"].split(",")) == sorted([str(a), str(b)])
+    assert g.chores_status()[0]["next_execution_assigned_to_user_id"] in (a, b)  # recalculated after the save
 
 
 def test_one_person_chore_and_every_n_days(hv):
@@ -63,10 +64,15 @@ def test_one_person_chore_and_every_n_days(hv):
     c.post("/home/chores/new", data={"name": "Mop", "schedule": "every", "every": "3", "who": str(pa),
                                      "remind_at": "08:30", "repeat_min": "45"})
     (ch,) = g.objects("chores")
+    # one person = a rotation of one (Grocy recalculates the assignee on every Done; no-assignment would lose it)
     assert (ch["period_type"], ch["period_interval"], ch["assignment_type"],
-            ch["next_execution_assigned_to_user_id"]) == ("dynamic-regular", 3, "no-assignment", a)
+            ch["assignment_config"]) == ("dynamic-regular", 3, "who-least-did-first", str(a))
     assert ch["period_days"] == 3
     assert house.reminder(f"chore:{ch['id']}").repeat_min == 45
+    assert g.chores_status()[0]["next_execution_assigned_to_user_id"] == a  # assigned before its first Done
+    c.post(f"/home/chores/{ch['id']}/done", data={"due": "2026-11-18"}, cookies={"who": "kitchen"})
+    assert g.chores_status()[0]["next_execution_assigned_to_user_id"] == a  # and still after it
+    assert f'<option value="{pa}" selected>' in c.get(f"/home/chores/{ch['id']}").text  # reads back as one person
 
 
 def test_bad_chore_form_is_refused_with_message(hv):
@@ -122,10 +128,12 @@ def test_done_credits_device_person(hv):
 
 def test_kitchen_done_credits_assigned_person(hv):
     g, house, c, (pa, a), _ = hv
-    cid = g.create("chores", {"name": "Mop", "period_type": "daily", "next_execution_assigned_to_user_id": a})
+    cid = g.create("chores", {"name": "Mop", "period_type": "daily", "assignment_type": "who-least-did-first",
+                              "assignment_config": str(a)})
+    g.calculate_next_assignments()
     c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": "kitchen"})
     assert g.chore_log[-1]["done_by"] == a
-    c.post(f"/home/chores/{cid}/skip", cookies={"who": "kitchen"})  # Skip credits the same way
+    c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-19"}, cookies={"who": "kitchen"})  # credits the same way
     assert g.chore_log[-1]["done_by"] == a and g.chore_log[-1]["skipped"]
 
 

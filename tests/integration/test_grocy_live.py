@@ -164,3 +164,17 @@ def test_chore_execute_consumes_supply_and_moves_date(grocy, i, made):
     assert grocy.stock_amounts()[pid] == pytest.approx(3)
     row = next(r for r in grocy.chores_status() if int(r["chore_id"]) == cid)
     assert row["last_tracked_time"] and row["next_estimated_execution_time"] > row["last_tracked_time"]
+
+
+def test_rotation_of_one_keeps_its_person_after_execution(grocy, made):
+    """One person = who-least-did-first with that one id: Grocy recalculates the assignee on every execution."""
+    uid = int(grocy.users()[0]["id"])
+    cid = grocy.create("chores", {
+        "name": f"zz-test-chore-{uuid.uuid4().hex[:8]}", "period_type": "daily", "period_interval": 1,
+        "assignment_type": "who-least-did-first", "assignment_config": str(uid)})
+    made.append(("chores", cid))
+    grocy.calculate_next_assignments()  # a new chore has no assignee until this (or its first execution)
+    row = lambda: next(r for r in grocy.chores_status() if int(r["chore_id"]) == cid)  # noqa: E731
+    assert int(row()["next_execution_assigned_to_user_id"]) == uid
+    grocy.execute_chore(cid, None)
+    assert int(row()["next_execution_assigned_to_user_id"]) == uid

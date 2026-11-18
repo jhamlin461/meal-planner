@@ -114,6 +114,10 @@ class Grocy:
             body["done_by"] = done_by
         self._req("POST", f"/chores/{chore_id}/execute", json=body)
 
+    def calculate_next_assignments(self) -> None:
+        """Grocy sets a chore's next assignee only on execution; this sets it now (a new or edited chore)."""
+        self._req("POST", "/chores/executions/calculate-next-assignments", json={})
+
     def open_tasks(self) -> list[dict]:
         return self._req("GET", "/tasks")
 

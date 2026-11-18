@@ -160,21 +160,28 @@ class FakeGrocy:
             runs = [r for r in self.chore_log if r["chore_id"] == c["id"]]
             last = runs[-1]["date"] if runs else None
             due = self._next_due(c, last)
-            who = c.get("next_execution_assigned_to_user_id")
-            if c.get("assignment_type") == "who-least-did-first":
-                ids = [int(x) for x in str(c.get("assignment_config") or "").split(",") if x.strip()]
-                if ids:
-                    done = [r["done_by"] for r in runs]
-                    who = min(ids, key=lambda u: done.count(u))
             out.append({"chore_id": c["id"], "chore_name": c.get("name"),
                         "next_estimated_execution_time": f"{due.isoformat()} 00:00:00" if due else None,
-                        "next_execution_assigned_to_user_id": who,
+                        "next_execution_assigned_to_user_id": c.get("next_execution_assigned_to_user_id"),
                         "last_tracked_time": f"{last.isoformat()} 00:00:00" if last else None})
         return out
+
+    def _assign(self, c) -> int | None:
+        """Grocy's next assignee: who-least-did-first picks from assignment_config; no-assignment has none."""
+        if c.get("assignment_type") != "who-least-did-first":
+            return None
+        ids = [int(x) for x in str(c.get("assignment_config") or "").split(",") if x.strip()]
+        done = [r["done_by"] for r in self.chore_log if r["chore_id"] == c["id"]]
+        return min(ids, key=lambda u: done.count(u)) if ids else None
+
+    def calculate_next_assignments(self):
+        for c in self._table("chores").values():
+            c["next_execution_assigned_to_user_id"] = self._assign(c)
 
     def execute_chore(self, chore_id, done_by, skipped=False):
         c = self.get_object("chores", chore_id)
         self.chore_log.append({"chore_id": chore_id, "done_by": done_by, "skipped": skipped, "date": self.today})
+        self._table("chores")[chore_id]["next_execution_assigned_to_user_id"] = self._assign(c)  # Grocy recalculates
         if not skipped and int(c.get("consume_product_on_chore_execution") or 0) == 1:
             pid, amt = int(c["product_id"]), float(c.get("product_amount") or 1)
             if self.stock_amounts().get(pid, 0) >= amt:  # real Grocy rejects a short consume entirely

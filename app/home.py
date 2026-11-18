@@ -83,7 +83,8 @@ def chore_fields(form, people: list[Person]) -> tuple[dict, dict]:
         p = _person(people, who)
         if p is None:
             raise ValueError("Pick who does it")
-        row |= {"assignment_type": "no-assignment", "next_execution_assigned_to_user_id": p.grocy_user_id}
+        # a rotation of one: Grocy recalculates the assignee on every Done, and no-assignment would lose it
+        row |= {"assignment_type": "who-least-did-first", "assignment_config": str(p.grocy_user_id)}
     pid = str(form.get("product_id") or "").strip()
     if pid:
         amt = str(form.get("product_amount") or "").strip() or "1"
@@ -130,6 +131,8 @@ def save(grocy, house: HouseStore, entity: str, kind: str, row: dict, rem: dict,
         id = grocy.create(entity, row)
     else:
         grocy.update(entity, id, row)
+    if entity == "chores":
+        grocy.calculate_next_assignments()  # else a new chore has no assignee until its first Done
     with LOCK:
         r = house.reminder(f"{kind}:{id}")
         for k, v in rem.items():
@@ -211,7 +214,9 @@ def chore_values(c: dict, rem: Reminder, people: list[Person]) -> dict:
         v |= {"schedule": "monthly", "monthly": c.get("period_days") or ""}
     elif pt == "dynamic-regular" or (pt == "daily" and int(c.get("period_interval") or 1) > 1):
         v |= {"schedule": "every", "every": c.get("period_days") or c.get("period_interval") or ""}
-    if c.get("assignment_type") != "who-least-did-first":
-        p = next((p for p in people if p.grocy_user_id == c.get("next_execution_assigned_to_user_id")), None)
+    ids = [x.strip() for x in str(c.get("assignment_config") or "").split(",") if x.strip()]
+    if c.get("assignment_type") != "who-least-did-first" or len(ids) == 1:  # one person = a rotation of one
+        uid = ids[0] if c.get("assignment_type") == "who-least-did-first" else c.get("next_execution_assigned_to_user_id")
+        p = next((p for p in people if str(p.grocy_user_id) == str(uid)), None)
         v["who"] = str(p.id) if p else "turns"
     return v

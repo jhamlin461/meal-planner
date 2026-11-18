@@ -46,6 +46,8 @@ def test_fake_rotation_who_least_did_first():
     g = _g()
     c = g.create("chores", {"name": "Dishes", "period_type": "daily", "assignment_type": "who-least-did-first",
                             "assignment_config": "1,2"})
+    assert g.chores_status()[0]["next_execution_assigned_to_user_id"] is None  # none until Grocy recalculates
+    g.calculate_next_assignments()
     assert g.chores_status()[0]["next_execution_assigned_to_user_id"] == 1
     for u in (1, 2, 1):
         g.execute_chore(c, u)
@@ -65,3 +67,16 @@ def test_fake_weekly_monthly_tasks_batteries():
     b = g.create("batteries", {"name": "b", "charge_interval_days": 30})
     g.charge_battery(b)
     assert g.batteries_status()[0]["next_estimated_charge_time"].startswith("2026-12-18")
+
+
+def test_fake_no_assignment_loses_its_assignee_on_execute():
+    """Like Grocy: the next assignee is recalculated on every execution, and no-assignment has none."""
+    g = _g()
+    c = g.create("chores", {"name": "Mop", "period_type": "daily", "assignment_type": "no-assignment",
+                            "next_execution_assigned_to_user_id": 3})
+    g.execute_chore(c, 3)
+    assert g.chores_status()[0]["next_execution_assigned_to_user_id"] is None
+    one = g.create("chores", {"name": "Vacuum", "period_type": "daily", "assignment_type": "who-least-did-first",
+                              "assignment_config": "3"})
+    g.execute_chore(one, 4)
+    assert next(r for r in g.chores_status() if r["chore_id"] == one)["next_execution_assigned_to_user_id"] == 3
