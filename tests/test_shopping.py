@@ -73,3 +73,26 @@ def test_walmart_items_splits_cart_and_remaining(fake_grocy_with_week):
     g.set_userfields("products", 10, {"walmart_item_id": "555", "package_amount": "500"})
     other = g.create("products", {"name": "Salt"})
     assert walmart_items(g, {10: 600, other: 5}) == ([("555", 2)], [{"id": other, "name": "Salt"}])
+
+
+def test_staple_in_stock_stays_off_list_end_to_end(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.set_userfields("products", 10, {"staple": "1"})  # stock is 100 g, need 300 g
+    assert rebuild_meal_plan_list(g, TODAY, 6) == {}
+    assert _list(g, "Meal plan") == []
+
+
+def test_float_noise_does_not_create_phantom_item():
+    assert shortfall({1: 0.1 * 3}, {1: 0.3}, set()) == {}
+
+
+def test_rebuild_survives_free_text_row_and_bad_base_servings(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.create("shopping_list", {"shopping_list_id": ids(g).list["Meal plan"], "product_id": None,
+                               "amount": 1, "done": 1, "note": "free text"})
+    g.update("recipes", 1, {"base_servings": ""})
+    assert rebuild_meal_plan_list(g, TODAY, 6) == {10: 500}  # 150*4/1 - 100
+
+
+def test_walmart_items_skips_missing_product(fake_grocy_with_week):
+    assert walmart_items(fake_grocy_with_week, {999: 5}) == ([], [])

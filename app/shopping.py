@@ -35,7 +35,7 @@ def shortfall(needs: dict[int, float], stock: dict[int, float], staples: set[int
         have = stock.get(pid, 0)
         if pid in staples and have > 0:
             continue
-        if need > have:
+        if need - have > 1e-6:  # tolerate float noise (0.1*3 vs 0.3)
             out[pid] = need - have
     return out
 
@@ -44,18 +44,18 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
     start, end = shopping_window(today, shopping_weekday)
     entries = [e for e in grocy.objects("meal_plan")
                if e.get("day") and start <= date.fromisoformat(str(e["day"])[:10]) <= end]
-    base = {int(r["id"]): float(r["base_servings"]) for r in grocy.objects("recipes")}
+    base = {int(r["id"]): (float(r.get("base_servings") or 0) or 1.0) for r in grocy.objects("recipes")}
     positions: dict[int, list[dict]] = {}
     for p in grocy.objects("recipes_pos"):
         positions.setdefault(int(p["recipe_id"]), []).append(p)
-    staples = {int(p["id"]) for p in grocy.objects("products")
-               if str(grocy.userfields("products", int(p["id"])).get("staple")) == "1"}
+    needs = week_needs(entries, positions, base)
+    staples = {pid for pid in needs if str(grocy.userfields("products", pid).get("staple")) == "1"}
     # compute everything before touching the list, so a failure can't leave it emptied
-    short = shortfall(week_needs(entries, positions, base), grocy.stock_amounts(), staples)
+    short = shortfall(needs, grocy.stock_amounts(), staples)
 
     list_id = ids(grocy).list["Meal plan"]
     old = grocy.objects("shopping_list", shopping_list_id=list_id)
-    was_done = {int(r["product_id"]) for r in old if _done(r)}
+    was_done = {int(r["product_id"]) for r in old if r.get("product_id") and _done(r)}
     for r in old:
         grocy.delete("shopping_list", int(r["id"]))
     for pid, amount in short.items():
@@ -67,10 +67,13 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
 def walmart_items(grocy, shortfall: dict[int, float]) -> tuple[list[tuple[str, int]], list[dict]]:
     cart, rest = [], []
     for pid, amount in shortfall.items():
+        product = grocy.get_object("products", pid)
+        if product is None:
+            continue  # product deleted since the list was built
         uf = grocy.userfields("products", pid)
         if uf.get("walmart_item_id"):
             pkg = float(uf["package_amount"]) if uf.get("package_amount") else None
             cart.append((str(uf["walmart_item_id"]), packages_needed(amount, pkg)))
         else:
-            rest.append(grocy.get_object("products", pid))
+            rest.append(product)
     return cart, rest
