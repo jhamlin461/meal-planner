@@ -8,7 +8,7 @@ _ALIASES = {
     "cups": "cup", "grams": "g", "gram": "g",
     "ounce": "oz", "ounces": "oz", "pound": "lb", "pounds": "lb", "lbs": "lb",
     "milliliter": "ml", "milliliters": "ml",
-    **dict.fromkeys(["", "each", "large", "medium", "small", "clove", "cloves", "whole"], "piece"),
+    **dict.fromkeys(["", "each", "large", "medium", "small", "whole"], "piece"),  # not cloves: garlic is stocked in bulbs
 }
 
 

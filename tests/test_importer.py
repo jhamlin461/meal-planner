@@ -142,7 +142,7 @@ def test_propose_matches_exact_then_ai():
     picks = Picks(items=[IngredientPick(index=0, product_id=garlic), IngredientPick(index=1, product_id=9999)])
     ai = RecordingAI(picks=picks)
     m = propose_matches(g, ai, d)
-    assert m == [IngredientMatch(0, flour, 125), IngredientMatch(1, garlic, 2), IngredientMatch(2, None, None)]
+    assert m == [IngredientMatch(0, flour, 125), IngredientMatch(1, garlic, None), IngredientMatch(2, None, None)]
     names, products = ai.asked
     assert names == ["garlic, minced", "unicorn dust"]
     assert {p["id"] for p in products} == {flour, garlic}

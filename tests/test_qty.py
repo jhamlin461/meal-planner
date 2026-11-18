@@ -37,3 +37,10 @@ def test_alias_targets_are_canonical_units():
 def test_is_packaging():
     assert all(is_packaging(u) for u in ("packet", "Packets", "pouch", "boxes", "Pouches", "sachets"))
     assert not any(is_packaging(u) for u in ("can", "g", "tbsp"))
+
+
+def test_cloves_are_not_pieces():
+    # "4 cloves garlic" with garlic stocked in bulbs must ask for a conversion, never become 4 bulbs
+    assert normalize_unit("cloves") == "cloves" and normalize_unit("clove") == "clove"
+    assert to_stock_amount(4, normalize_unit("cloves"), "piece", []) is None
+    assert normalize_unit("each") == "piece" and normalize_unit("whole") == "piece"
