@@ -1,36 +1,51 @@
 {% extends "base.html" %}
 {% block title %}Pantry{% endblock %}
+{% macro unit(u) %}{{ "pieces" if u == "piece" else u }}{% endmacro %}
 {% block heading %}<h1>Pantry</h1>{% endblock %}
 {% block content %}
 {% if soon %}
-<h2>Use soon</h2>
+<section class="card soon" aria-labelledby="soon">
+<h2 id="soon">Use soon</h2>
 <ul class="rows">
-{% for s in soon %}<li class="row"><span class="grow">{{ s.name }}</span><span class="{{ 'warn' if s.kind == 'use soon' else 'error' }}">{{ s.kind }} {{ (s.date or '')[:10] }}</span></li>
+{% for s in soon %}<li class="row"><span class="grow breakable">{{ s.name }}</span><span class="{{ 'error' if s.past else 'warn' }}">{{ s.when }}</span></li>
 {% endfor %}</ul>
+</section>
 {% endif %}
 {% for loc, rows in groups.items() %}
 <h2>{{ loc }}</h2>
-<ul class="rows">
+<ul class="rows stock">
 {% for r in rows %}<li>
-  <div class="row"><b class="grow">{{ r.name }}</b><span>{{ r.amount|num }} {{ r.unit }}</span>{% if r.bb != never %}<span class="muted">best before {{ r.bb }}</span>{% endif %}</div>
+  <p class="row stock-head"><b class="grow breakable">{{ r.name }}</b><span class="qty">{{ r.amount|num }}{% if r.unit and r.unit != "piece" %} {{ r.unit }}{% endif %} left</span></p>
+  {% if r.when %}<p class="stock-when {{ 'error' if r.past else 'muted' }}">{{ r.when }}</p>{% endif %}
   <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">
-    <input type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|exact }}" inputmode="decimal" required aria-label="Amount used"> {{ r.unit }}
-    <button>Use</button>
+    <label for="use-{{ r.pid }}-{{ r.loc }}">Used</label>
+    <span class="inline-group">
+      <input id="use-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|exact }}" inputmode="decimal" required>
+      {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+      <button class="btn">Use</button>
+    </span>
   </form>
-  <details><summary>Edit amount · Move</summary>
+  <details class="stock-more"><summary>Change amount or move</summary>
     <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">
-      <label>Total <input type="number" name="amount" step="any" min="0" value="{{ totals[r.pid]|exact }}" inputmode="decimal" required></label> {{ r.unit }}
-      <button class="secondary">Set</button>
+      <label for="total-{{ r.pid }}-{{ r.loc }}">Total</label>
+      <span class="inline-group">
+        <input id="total-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" value="{{ totals[r.pid]|exact }}" step="any" min="0" inputmode="decimal" required>
+        {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+        <button class="btn">Set total</button>
+      </span>
     </form>
     <form class="inline" method="post" action="/pantry/{{ r.pid }}/move">
       <input type="hidden" name="from_location" value="{{ r.loc }}"><input type="hidden" name="amount" value="{{ r.amount|exact }}">
-      <select name="to_location" aria-label="Move to">{% for name, id in locations.items() %}<option value="{{ id }}"{% if id == r.loc %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
-      <button class="secondary">Move</button>
+      <label for="move-{{ r.pid }}-{{ r.loc }}">Move to</label>
+      <span class="inline-group">
+        <select id="move-{{ r.pid }}-{{ r.loc }}" name="to_location">{% for name, id in locations.items() %}<option value="{{ id }}"{% if id == r.loc %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+        <button class="btn">Move</button>
+      </span>
     </form>
   </details>
 </li>
 {% endfor %}</ul>
 {% else %}
-<p class="muted">Nothing in stock yet. <a href="/scan">Scan something</a>.</p>
+<p class="empty">Nothing in stock yet. <a href="/scan">Scan something</a> to add it.</p>
 {% endfor %}
 {% endblock %}

@@ -9,14 +9,8 @@ if (document.querySelector("[data-wakelock]")) {
 
 const toastEl = document.getElementById("toast");
 let toastTimer;
-function toast(text, onFix) {
+function toast(text) {
   toastEl.replaceChildren(text);
-  if (onFix) {
-    const b = document.createElement("button");
-    b.textContent = "Fix";
-    b.onclick = () => { toastEl.hidden = true; onFix(); };
-    toastEl.append(" · ", b);
-  }
   toastEl.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { toastEl.hidden = true; }, 8000);
@@ -49,33 +43,66 @@ if (video) {
   const unknown = document.getElementById("unknown");
   const photo = document.getElementById("photo");
   const dlg = document.getElementById("fix");
+  const sheet = document.getElementById("ask");
+  const result = document.getElementById("scan-result");
   const idle = "Point the camera at a barcode.";
   const action = () => document.querySelector("[name=scan-action]:checked").value;
-  let busy = false, last = "", lastAt = 0, unknownCode = "";
+  let busy = false, last = "", lastAt = 0, unknownCode = "", shown = null;
 
-  function fix(d) {
+  // A number from the in-page sheet, or null when skipped.
+  function ask(text, value, [no, yes]) {
+    document.getElementById("ask-text").textContent = text;
+    const input = document.getElementById("ask-amount");
+    input.value = value ?? "";
+    const [noBtn, yesBtn] = sheet.querySelectorAll("button");
+    noBtn.textContent = no;
+    yesBtn.textContent = yes;
+    sheet.returnValue = "";  // Esc keeps the last value
+    sheet.showModal();
+    input.focus();
+    return new Promise((done) => {
+      sheet.onclose = () => {
+        const n = Number(input.value);
+        done(sheet.returnValue === "ok" && n > 0 && Number.isFinite(n) ? n : null);
+      };
+    });
+  }
+
+  function report(title, note) {
+    document.getElementById("result-title").textContent = title;
+    document.getElementById("result-note").textContent = note;
+    result.hidden = false;
+  }
+
+  document.getElementById("result-fix").addEventListener("click", () => {
+    const d = shown;
     document.getElementById("fix-name").textContent = d.product;
     const input = dlg.querySelector("[name=generic]");
     input.value = d.generic;
     dlg.onclose = async () => {
       if (dlg.returnValue !== "ok") return;
+      const name = input.value.trim();
       try {
-        const r = await post("/api/relink", {product_id: d.product_id, generic_name: input.value.trim()});
-        toast(r.status === "ok" ? `${d.product} → ${input.value.trim()}` : r.message);
+        const r = await post("/api/relink", {product_id: d.product_id, generic_name: name});
+        if (r.status !== "ok") return toast(r.message);
+        d.generic = name;
+        document.getElementById("result-note").textContent = `Counts as ${name}.`;
       } catch (e) { toast(e.message); }
     };
+    dlg.returnValue = "";
     dlg.showModal();
-  }
+  });
 
   async function show(d, code) {
     if (d.status === "need_min") {  // a new supply: how many to keep before it goes on Running low, then the add
-      const n = Number(prompt(`Keep at least how many? (${d.product}, ${d.unit})`, d.default));
-      if (n > 0 && Number.isFinite(n)) await post(`/api/products/${d.product_id}/min`, {amount: n});
+      const n = await ask(`Keep at least how many? (${d.product}, ${d.unit})`, d.default, ["Skip", "Save"]);
+      if (n) await post(`/api/products/${d.product_id}/min`, {amount: n});
       return show(await post("/api/scan", {code, action: d.action}), code);
     }
     if (d.status === "need_amount") {  // package size unknown: ask, then send the same scan with the amount
-      const n = Number(prompt(`How much is in one package of ${d.product}? (${d.unit}) — we'll remember it.`));
-      if (n > 0 && Number.isFinite(n)) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
+      const n = await ask(`How much is in one package of ${d.product}? (${d.unit}) — we'll remember it.`, null,
+        ["Cancel", d.action === "add" ? "Add" : "Use"]);
+      if (n) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
       toast(`Nothing changed for ${d.product}.`);
     } else if (d.status === "unknown") {
       unknownCode = code;
@@ -84,8 +111,9 @@ if (video) {
     } else if (d.status !== "ok") {
       toast(d.message || "Something went wrong.");
     } else {
-      const verb = d.action === "add" ? "Added" : d.amount > 0 ? "Used" : "None in stock:";
-      toast(`${verb} ${d.product} → ${d.generic}`, () => fix(d));
+      shown = d;
+      const title = d.action === "add" ? `Added ${d.product}` : d.amount > 0 ? `Used ${d.product}` : `No ${d.product} in stock`;
+      report(title, `Counts as ${d.generic}.`);
     }
   }
 
@@ -120,6 +148,7 @@ if (video) {
     last = code;
     lastAt = now;
     unknown.hidden = true;
+    result.hidden = true;
     run(`Looking up ${code}…`, async () => show(await post("/api/scan", {code, action: action()}), code));
   }).catch((e) => { status.textContent = `Camera unavailable: ${e.message}`; });
 }

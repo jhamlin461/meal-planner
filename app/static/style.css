@@ -126,7 +126,9 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 @media (min-width: 900px) { #toast { left: calc(var(--rail-w) + 24px); bottom: 24px; } }
 
 video#scanner { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 14px; object-fit: cover; }
-dialog { border: 0; border-radius: 14px; background: var(--surface); color: var(--text); width: min(92vw, 420px); }
+dialog { border: 0; border-radius: 14px; background: var(--surface); color: var(--text); width: min(92vw, 420px);
+  padding: 16px 16px 14px; overflow: hidden; }
+dialog .field { margin: 0; }
 dialog::backdrop { background: rgba(0,0,0,.5); }
 main.wide { max-width: 1100px; }
 
@@ -248,3 +250,44 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 @media (max-width: 420px) { .macros { grid-template-columns: 1fr 1fr; } }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 0 12px; }
 .fields .field { margin-bottom: 4px; }
+
+/* Pantry: the use-soon list is the one block on a surface; stock is plain rows, actions tucked under each. */
+.card > h2:first-child { margin-top: 0; }
+.soon .rows > li:last-child { border-bottom: 0; }
+.stock .stock-head { margin: 0; }
+.qty { white-space: nowrap; font-weight: 600; }
+.stock-when { margin: 0; font-size: .875rem; }
+.stock form.inline { margin: 6px 0 0; }
+.stock-more summary { min-height: 44px; width: fit-content; font-size: .9375rem; }
+.stock-more form.inline:first-of-type { margin-top: 0; }
+
+/* Scan: mode switch, then the camera full width, then what happened as a card. */
+.scan-mode { margin: 0 0 12px; max-width: 22em; }
+.scan-mode label { position: relative; cursor: pointer; }
+.scan-mode input { position: absolute; opacity: 0; pointer-events: none; }
+.scan-mode label:has(input:checked) { background: var(--action); color: #fff; font-weight: 600; }
+.scan-mode label:has(input:focus-visible) { outline: 3px solid var(--text); outline-offset: -3px; }
+#scan-status { margin: 10px 2px; }
+.result-title { margin: 0; color: var(--text); font-size: 1.2rem; font-weight: 650; font-stretch: 90%; }
+#scan-result p, #unknown p { margin: 4px 0 0; }
+.scan-elsewhere { margin: 16px 0; }
+
+/* Review and table editor: two equal buttons to finish; steps as id / label / combines. */
+.form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0; }
+.form-actions .btn { white-space: normal; }
+.review-text { margin: 0 0 6px; }
+.review-rows .row select { flex: 1 1 12em; min-width: 0; }
+.review-rows .inline-group input { width: 6em; }
+.editor { margin: 16px 0; padding: 12px 14px; min-width: 0; }
+.editor legend { padding: 0 6px; font-weight: 600; }
+.refs { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 0; margin: 0 0 12px; }
+.refs b, .op-head { color: var(--muted); }
+.op-head, .op { display: grid; grid-template-columns: 4em minmax(0, 2fr) minmax(0, 1fr); gap: 8px; }
+.op-head { font-size: .875rem; padding: 0 2px 4px; }
+.op { margin: 0 0 8px; }
+.op input { width: 100%; min-width: 0; }
+@media (max-width: 479px) {
+  .op-head { display: none; }
+  .op { grid-template-columns: 4em minmax(0, 1fr); }
+  .op input[name=op_inputs] { grid-column: 2; }
+}

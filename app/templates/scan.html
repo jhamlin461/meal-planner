@@ -1,24 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Scan{% endblock %}
+{% block heading %}<h1>Scan</h1>{% endblock %}
 {% block content %}
-<h1>Scan</h1>
-<div class="row" role="radiogroup" aria-label="What to do">
-  <label class="choice"><input type="radio" name="scan-action" value="add" checked> Add</label>
-  <label class="choice"><input type="radio" name="scan-action" value="use"> Use</label>
+<div class="segmented scan-mode" role="radiogroup" aria-label="What to do">
+  <label><input type="radio" name="scan-action" value="add" checked>Add to stock</label>
+  <label><input type="radio" name="scan-action" value="use">Use up</label>
 </div>
 <video id="scanner" playsinline muted></video>
-<p><a class="button secondary" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
-<p id="scan-status" class="muted">Point the camera at a barcode.</p>
+<p id="scan-status" class="muted" role="status">Point the camera at a barcode.</p>
+<div id="scan-result" class="card" hidden>
+  <h2 class="result-title breakable" id="result-title"></h2>
+  <p class="muted breakable" id="result-note"></p>
+  <div class="card-actions"><button class="btn" id="result-fix" type="button">Change what it counts as</button></div>
+</div>
 <div id="unknown" class="card" hidden>
   <p>I don't know barcode <b id="unknown-code"></b>. Take a photo of the package and I'll work it out.</p>
-  <label class="button">Take photo<input id="photo" type="file" accept="image/*" capture="environment" hidden></label>
+  <div class="card-actions"><label class="button btn-primary">Take photo<input id="photo" type="file" accept="image/*" capture="environment" hidden></label></div>
 </div>
-<dialog id="fix">
+<p class="scan-elsewhere"><a class="btn" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
+<dialog id="ask" aria-labelledby="ask-text">
   <form method="dialog">
-    <p>What is <b id="fix-name"></b>?</p>
-    <input name="generic" list="generics" required autocomplete="off" aria-label="Generic product">
+    <label class="field"><span id="ask-text"></span><input id="ask-amount" name="amount" type="number" step="any" min="0" inputmode="decimal" required></label>
+    <div class="card-actions"><button class="btn" value="cancel" formnovalidate>Skip</button><button class="btn btn-primary" value="ok">Save</button></div>
+  </form>
+</dialog>
+<dialog id="fix" aria-labelledby="fix-text">
+  <form method="dialog">
+    <label class="field"><span id="fix-text">What is <b id="fix-name"></b>?</span>
+      <input name="generic" list="generics" required autocomplete="off"></label>
     <datalist id="generics">{% for g in generics %}<option value="{{ g }}">{% endfor %}</datalist>
-    <p class="row"><button value="ok">Save</button><button class="secondary" value="cancel" formnovalidate>Cancel</button></p>
+    <div class="card-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn btn-primary" value="ok">Save</button></div>
   </form>
 </dialog>
 {% endblock %}

@@ -38,7 +38,7 @@ from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
-from app.today import today_view
+from app.today import _day, today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
@@ -494,14 +494,30 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         i = ids(grocy)
         units, locs = unit_names(), {v: k for k, v in i.location.items()}
         name = lambda pid: products.get(int(pid), {}).get("name", f"product {pid}")  # noqa: E731
+        group, today = supplies_group(grocy), date.today()
+        # brands copy their generic's group, so a product's own group is enough
+        food = lambda pid: str(products.get(int(pid), {}).get("product_group_id")) != str(group)  # noqa: E731
+
+        def when(bb, verb: str) -> tuple[str, bool]:
+            """("Use by Friday" / "Best before Friday", past?) in Today's words."""
+            try:
+                d = date.fromisoformat(str(bb)[:10])
+            except ValueError:
+                return "", False
+            if d < today:
+                return "Past its date", True
+            return f"{verb} {'by ' if verb == 'Use' and d > today else ''}{_day(d, today)}", False
+
         vol = grocy.volatile(settings.expiry_warn_days)
-        soon = [{"name": name(r["product_id"]), "date": r.get("best_before_date"), "kind": kind}
-                for key, kind in (("expired_products", "expired"), ("overdue_products", "overdue"),
-                                  ("due_products", "use soon")) for r in vol.get(key) or []]
+        soon = [{"name": name(r["product_id"]), "when": w, "past": past}
+                for key in ("expired_products", "overdue_products", "due_products") for r in vol.get(key) or []
+                if food(r["product_id"]) for w, past in [when(r.get("best_before_date"), "Use")]]
         rows: dict[tuple[int, int], dict] = {}
         totals: dict[int, float] = {}
         for e in grocy.stock_entries():
             pid, loc = int(e["product_id"]), _int(e.get("location_id")) or 0
+            if not food(pid):
+                continue  # household supplies live under Chores, Supplies
             row = rows.setdefault((pid, loc), {"pid": pid, "loc": loc, "name": name(pid), "amount": 0.0, "bb": NEVER,
                                                "unit": units.get(_int(products.get(pid, {}).get("qu_id_stock")), "")})
             row["amount"] += float(e["amount"])
@@ -510,11 +526,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         groups: dict[str, list[dict]] = {}
         for row in sorted(rows.values(), key=lambda r: (r["bb"], r["name"].lower())):
             if row["amount"] > 0:
+                row["when"], row["past"] = when(row["bb"], "Best before") if row["bb"] != NEVER else ("", False)
                 groups.setdefault(locs.get(row["loc"], "Other"), []).append(row)
         order = {n: k for k, n in enumerate(LOCATIONS)}
         groups = dict(sorted(groups.items(), key=lambda kv: order.get(kv[0], len(order))))
-        return page(request, "pantry.html", soon=soon, groups=groups, totals=totals, locations=i.location,
-                    never=NEVER)
+        return page(request, "pantry.html", soon=soon, groups=groups, totals=totals, locations=i.location)
 
     @app.post("/pantry/{pid}/consume")
     def pantry_consume(pid: int, amount: float = Form(gt=0)):

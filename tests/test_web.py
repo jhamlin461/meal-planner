@@ -1144,3 +1144,48 @@ def test_shopping_has_three_sections(env):
     html = env[3].get("/shopping").text
     heads = [h for h in re.findall(r"<h2[^>]*>(.*?)</h2>", html)]
     assert [h for h in heads if h in ("Meal plan", "Running low", "Extras")] == ["Meal plan", "Running low", "Extras"]
+
+
+def test_remaining_pages_use_shell(env, tmp_path):
+    g, ai, store, c, _ = env
+    rid = brownie_recipe(g)
+    ai.draft = soup_draft()
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    pid = store.all()[0].id
+    g.add_stock(product(g, "Yogurt"), 500, date.today() + timedelta(days=2), ids(g).location["Fridge"])
+    settings = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
+    down = TestClient(create_app(DownGrocy(httpx.ConnectError("refused")), FakeAI(),
+                                 httpx.Client(transport=httpx.MockTransport(no_network)), settings,
+                                 PendingStore(tmp_path / "down"))).get("/recipes")
+    pages = {url: c.get(url).text for url in ("/pantry", "/scan", "/import", f"/import/{pid}", f"/recipes/{rid}/table")}
+    pages["down"] = down.text
+    for url, html in pages.items():
+        assert 'data-section="kitchen"' in html and "style=" not in html, url
+        assert "·" not in html and "→" not in html, url  # no middle dots or arrows in copy
+
+
+def test_scan_prompts_are_in_page(env):
+    html = env[3].get("/scan").text
+    sheet = html[html.index('<dialog id="ask"'):]
+    sheet = sheet[:sheet.index("</dialog>")]
+    assert 'type="number"' in sheet and 'class="card-actions"' in sheet and sheet.count("<button") == 2
+    assert 'id="scan-result"' in html and html.index('id="scanner"') < html.index('id="scan-result"')
+    js = env[3].get("/static/app.js").text
+    assert "prompt(" not in js and "we'll remember it." in js and "Keep at least how many?" in js
+
+
+def test_pantry_keeps_supplies_out_and_reads_like_supplies(env):
+    g, _, _, c, _ = env
+    i = ids(g)
+    eggs = product(g, "Eggs", "piece")
+    g.add_stock(eggs, 12, date.today() + timedelta(days=2), i.location["Fridge"])
+    rice = product(g, "Rice")
+    g.add_stock(rice, 500, None, i.location["Pantry"])
+    supply(g, "Toilet paper", stock=6)
+    g.volatile_result["due_products"] = [{"product_id": eggs, "amount": 12,
+                                          "best_before_date": (date.today() + timedelta(days=2)).isoformat()}]
+    html = c.get("/pantry").text
+    assert "Toilet paper" not in html and "<h2>Garage</h2>" not in html
+    assert "12 left" in html and "500 g left" in html and "12 piece" not in html
+    day = f"{date.today() + timedelta(days=2):%A}"
+    assert f"Use by {day}" in html and f"Best before {day}" in html
