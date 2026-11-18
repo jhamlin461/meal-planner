@@ -12,5 +12,5 @@
   <label class="field"><span>Remind at</span><input name="remind_at" type="time" value="{{ v.get('remind_at') or '09:00' }}"></label>
   <div class="card-actions"><button class="btn btn-primary">Save task</button></div>
 </form>
-{% if id %}<form method="post" action="/home/tasks/{{ id }}/delete" class="card"><div class="card-actions"><button class="btn">Delete task</button></div></form>{% endif %}
+{% if id %}<form method="post" action="/home/tasks/{{ id }}/delete" class="card" onsubmit="return confirm('Delete this task?')"><div class="card-actions"><button class="btn">Delete task</button></div></form>{% endif %}
 {% endblock %}

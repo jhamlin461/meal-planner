@@ -1,5 +1,7 @@
 import httpx
 
+SEND_TIMEOUT = 5  # notify / clear run under the reminder LOCK, so a hung HA can't hold it for long
+
 
 class HAError(Exception):
     def __init__(self, message: str, status: int | None = None):
@@ -50,7 +52,8 @@ class HA:
             "title": title, "message": message,
             "data": {"tag": tag, "actions": [{"action": a, "title": t} for a, t in actions],
                      "channel": "House reminders", "ttl": 0, "priority": "high"},
-        })
+        }, timeout=SEND_TIMEOUT)
 
     def clear(self, service: str, tag: str) -> None:
-        self._req("POST", f"/api/services/notify/{service}", json={"message": "clear_notification", "data": {"tag": tag}})
+        self._req("POST", f"/api/services/notify/{service}", json={"message": "clear_notification", "data": {"tag": tag}},
+                  timeout=SEND_TIMEOUT)

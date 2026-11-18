@@ -312,3 +312,14 @@ def test_grocy_ids_as_strings(hv):
     assert "Mop</b>" in html and "Josh&#39;s turn." in html and "For Josh." in html and "Smoke alarm</b>" in html
     c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": "kitchen"})
     assert g.chore_log[-1]["done_by"] == a
+
+
+def test_deletes_ask_first(hv):
+    g, house, c, (pa, a), _ = hv
+    cid = g.create("chores", {"name": "Mop", "period_type": "daily"})
+    tid = g.create("tasks", {"name": "Call vet", "done": 0})
+    bid = g.create("batteries", {"name": "Smoke alarm", "charge_interval_days": 90})
+    for url, noun in ((f"/home/chores/{cid}", "chore"), (f"/home/tasks/{tid}", "task"),
+                      (f"/home/upkeep/{bid}", "upkeep item")):
+        assert f"""onsubmit="return confirm('Delete this {noun}?')\"""" in c.get(url).text, url
+    assert f"""action="/home/people/{pa}/delete" onsubmit="return confirm('Remove this person?')\"""" in c.get("/home/people").text

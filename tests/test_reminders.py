@@ -363,3 +363,23 @@ def test_laundry_reminder_targets_people_home_every_15_min(tmp_path):
     assert len(sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 22)))) == 1
     ha.states["person.cat"] = "home"
     assert [m["service"] for m in sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 23)))] == [CAT_PHONE]
+
+
+def test_stale_done_leaves_the_current_occurrence_alone(tmp_path):
+    """A Done from an old page (yesterday's occurrence, already done) runs nothing and doesn't clear today's
+    notifications or snooze; the tick clears what is really finished."""
+    from app.reminders import complete, snooze
+    g, house, ha, s, josh, cat = world(tmp_path)
+    cid = chore(g, house, audience="home")
+    assert complete(g, house, ha, f"chore:{cid}", None, "2026-11-18")
+    g.today = date(2026, 11, 19)
+    tick(g, house, ha, s, at(19, 18))
+    before = house.reminder(f"chore:{cid}")
+    assert before.sent_to and before.sent_for == "2026-11-19T00:00:00"
+    assert not complete(g, house, ha, f"chore:{cid}", None, "2026-11-18")  # the stale page
+    assert ha.cleared == [] and house.reminder(f"chore:{cid}") == before
+    snooze(house, ha, f"chore:{cid}", at(19, 18, 5))
+    before = house.reminder(f"chore:{cid}")
+    assert not complete(g, house, ha, f"chore:{cid}", None, "2026-11-18")
+    assert house.reminder(f"chore:{cid}") == before and before.snooze_until == at(19, 18, 20)
+    assert len(g.chore_log) == 1

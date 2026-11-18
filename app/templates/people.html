@@ -5,7 +5,7 @@
 <p class="muted">{% if who == 'kitchen' %}This device is the kitchen screen.{% elif who %}This device is {{ who.name }}.{% else %}This device isn't set to anyone. {% endif %}<a href="/who">Change</a></p>
 {% if people %}<ul class="rows">
 {% for p in people %}<li class="row"><b class="grow">{{ p.name }}</b><span class="muted breakable">{{ p.notify_service or 'no phone' }}</span>
-  <form method="post" action="/home/people/{{ p.id }}/delete"><button class="btn">Remove</button></form></li>
+  <form method="post" action="/home/people/{{ p.id }}/delete" onsubmit="return confirm('Remove this person?')"><button class="btn">Remove</button></form></li>
 {% endfor %}</ul>{% else %}<p class="empty">No one yet.</p>{% endif %}
 <h2>Add a person</h2>
 {% if not ha_ok %}<p class="muted">Home Assistant isn't set up (or can't be reached), so there is nothing to choose from. You can still add a name.</p>{% endif %}

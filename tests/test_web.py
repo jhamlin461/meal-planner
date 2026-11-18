@@ -983,6 +983,13 @@ def test_duplicate_name_refused(hv):
     assert r.status_code == 400 and "josh is already on the list." in r.text and len(house.people()) == 1
 
 
+def test_bad_notify_service_refused(hv):
+    _, house, _, c = hv
+    for bad in ("persistent_notification", "mobile_app_../../x", "mobile_app_"):
+        r = c.post("/home/people", data={"name": "Josh", "notify_service": bad})
+        assert r.status_code == 400 and "Pick a phone from the list." in r.text and not house.people()
+
+
 def test_people_row_wraps_long_phone(hv):
     _, house, _, c = hv
     house.save_person("Cat", 1, "", "mobile_app_cat_s_pixel_10")
@@ -1220,3 +1227,10 @@ def test_typed_pack_size_reaches_running_low_bought(env):
     c.post(f"/shopping/{row['id']}/toggle")
     c.post("/shopping/bought")
     assert g.stock_amounts()[bags] == 33  # one package of 32, not the shortfall of 1
+
+
+def test_tap_targets_are_at_least_48px():
+    css = (Path(__file__).parent.parent / "app/static/style.css").read_text()
+    for sel in (".segmented > *", ".rail-sub a", ".stock-more summary"):
+        rule = css[css.index(sel + " {"):]
+        assert "min-height: 48px" in rule[:rule.index("}")], sel

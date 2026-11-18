@@ -3,6 +3,7 @@ import hmac
 import logging
 import math
 import mimetypes
+import re
 import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
@@ -403,6 +404,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             raise HTTPException(400, "Type a name")
         if any(p.name.lower() == name.lower() for p in house.people()):
             return people_page(request, 400, name, f"{name} is already on the list.")
+        if notify_service not in ("", "none") and not re.fullmatch(r"mobile_app_[a-z0-9_]+", notify_service):
+            return people_page(request, 400, name, "Pick a phone from the list.")  # it ends up in an HA service URL
         c = ha_choices()
         ha_person = ha_person or match_person(name, c["ha_persons"])
         # blank = use the person's own phone; "none" = deliberately no phone

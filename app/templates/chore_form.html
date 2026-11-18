@@ -21,5 +21,5 @@
   <label class="field"><span>Amount used each time</span><input name="product_amount" type="number" min="0" step="any" value="{{ v.get('product_amount', 1) }}"></label>
   <div class="card-actions"><button class="btn btn-primary">Save chore</button></div>
 </form>
-{% if id %}<form method="post" action="/home/chores/{{ id }}/delete" class="card"><div class="card-actions"><button class="btn">Delete chore</button></div></form>{% endif %}
+{% if id %}<form method="post" action="/home/chores/{{ id }}/delete" class="card" onsubmit="return confirm('Delete this chore?')"><div class="card-actions"><button class="btn">Delete chore</button></div></form>{% endif %}
 {% endblock %}

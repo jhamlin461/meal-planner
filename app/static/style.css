@@ -73,7 +73,7 @@ summary { min-height: 48px; display: flex; align-items: center; cursor: pointer;
    Meals/Chores page switcher (links, aria-current) share it. */
 .segmented { display: flex; padding: 3px; border-radius: 13px; background: var(--rail); flex: 0 1 14em;
   min-width: 0; }
-.segmented > * { flex: 1 1 auto; min-height: 44px; padding: 0 12px; border-radius: 10px; background: transparent;
+.segmented > * { flex: 1 1 auto; min-height: 48px; padding: 0 12px; border-radius: 10px; background: transparent;
   box-shadow: none; color: var(--muted); font-weight: 500; white-space: nowrap; text-decoration: none; display: flex;
   align-items: center; justify-content: center; }
 .segmented > :is([aria-pressed=true], [aria-current]) { background: var(--action); color: #fff; font-weight: 600; }
@@ -113,7 +113,7 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
     border-radius: 10px; font-size: 1rem; color: var(--text); }
   .rail > ul > li > a[aria-current] { background: var(--surface); }
   .rail .rail-sub { display: block; padding: 4px 0 8px 50px; }
-  .rail-sub a { min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--muted);
+  .rail-sub a { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: var(--muted);
     text-decoration: none; }
   .rail-sub a[aria-current] { color: var(--text); box-shadow: inset 3px 0 0 var(--action); border-radius: 0 8px 8px 0; }
   .rail-sub .icon { width: 20px; height: 20px; }
@@ -260,7 +260,7 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .qty { white-space: nowrap; font-weight: 600; }
 .stock-when { margin: 0; font-size: .875rem; }
 .stock form.inline { margin: 6px 0 0; }
-.stock-more summary { min-height: 44px; width: fit-content; font-size: .9375rem; }
+.stock-more summary { min-height: 48px; width: fit-content; font-size: .9375rem; }
 .stock-more form.inline:first-of-type { margin-top: 0; }
 
 /* Scan: mode switch, then the camera full width, then what happened as a card. */

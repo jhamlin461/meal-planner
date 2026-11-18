@@ -225,7 +225,8 @@ def complete(grocy, house: HouseStore, ha, key: str, person: Person | None, due:
              open_: dict | None = None, skipped: bool = False) -> bool:
     """Done for the occurrence due on `due`: run the chore (credited to `person`) / complete the task / charge the
     upkeep item, and clear it on every phone. When that occurrence is already done (the other phone, the app, Grocy)
-    nothing runs; the phones are still cleared. A recurring item keeps its settings; a done task's reminder is dropped.
+    nothing runs and nothing is cleared (the tick clears phones told about a finished occurrence), unless the item
+    is gone. A recurring item keeps its settings; a done task's reminder is dropped.
     `open_` is open_items(grocy) read under the caller's LOCK; `skipped` skips a chore instead. True when it ran."""
     kind, num = key.split(":")
     with LOCK:
@@ -238,7 +239,8 @@ def complete(grocy, house: HouseStore, ha, key: str, person: Person | None, due:
                 grocy.complete_task(int(num))
             else:
                 grocy.charge_battery(int(num))
-        _report(house, _clear(house, ha, house.reminder(key), drop=key not in open_ or (run and kind == "task")))
+        if run or key not in open_:  # a stale Done leaves the open occurrence's phones and snooze to the tick
+            _report(house, _clear(house, ha, house.reminder(key), drop=key not in open_ or (run and kind == "task")))
         return run
 
 

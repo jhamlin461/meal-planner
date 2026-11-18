@@ -261,3 +261,17 @@ def test_supply_scan_sets_group_and_never_expires():
         assert p["product_group_id"] == group and p["default_best_before_days"] == -1 and p["location_id"] == garage
     food = resolve(g, FakeAI(guess=guess()), http(off=OFF), "777")
     assert "product_group_id" not in g.get_object("products", food.product_id)
+
+
+def test_brand_follows_its_generics_group():
+    """A brand filed under an existing generic takes its group, so it never vanishes from both Pantry and Supplies."""
+    g = grocy()
+    group = next(x["id"] for x in g.objects("product_groups") if x["name"] == "Household supplies")
+    flour = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)  # a food generic
+    resolve(g, FakeAI(guess=guess(generic_name="Trash bags", category="supply")), http(off=OFF), "1")
+    odd = resolve(g, FakeAI(guess=guess(category="supply")), http(off=OFF), "2")  # supply guess, food generic
+    assert g.get_object("products", odd.product_id).get("product_group_id") is None
+    food = resolve(g, FakeAI(guess=guess(generic_name="Trash bags")), http(off=OFF), "3")  # food guess, supply generic
+    assert g.get_object("products", food.product_id)["product_group_id"] == group
+    relink(g, flour.product_id, "Trash bags")  # same unit: relinked under a supply generic
+    assert g.get_object("products", flour.product_id)["product_group_id"] == group

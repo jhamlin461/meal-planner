@@ -91,3 +91,18 @@ def test_person_trackers():
     ]
     ha = make(lambda r: httpx.Response(200, json=states))
     assert ha.person_trackers() == {"person.jhamlin": ["device_tracker.pixel_10_pro"], "person.guest": []}
+
+
+def test_notify_and_clear_wait_at_most_5_seconds():
+    """A hung HA can't hold the reminder lock for long."""
+    asked = []
+
+    def handler(req):
+        asked.append(req.extensions["timeout"]["read"])
+        return httpx.Response(200, json=[])
+
+    ha = HA("http://ha", "t", transport=httpx.MockTransport(handler))
+    ha.notify("mobile_app_x", "T", "M", "chore:1", [])
+    ha.clear("mobile_app_x", "chore:1")
+    ha.home_states()
+    assert asked == [5, 5, 15]

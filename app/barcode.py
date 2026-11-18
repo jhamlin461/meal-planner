@@ -62,11 +62,13 @@ def _generic_named(grocy, name: str) -> dict | None:
 
 
 def _align_to_parent(grocy, parent: dict, fields: dict, uf: dict) -> dict:
-    """Give a child its generic's units (Grocy sums child stock into the parent unconverted). Updates `fields`;
+    """Give a child its generic's units (Grocy sums child stock into the parent unconverted) and product group.
+    Updates `fields`;
     returns the child's userfields, minus package_amount/g_per_unit when those were in another unit."""
     unit = int(parent.get("qu_id_stock") or 0)
     same = int(fields.get("qu_id_stock") or 0) == unit
     fields.update(dict.fromkeys(UNIT_FIELDS, unit))
+    fields["product_group_id"] = parent.get("product_group_id")  # Pantry or Supplies: wherever its generic is
     if same:
         return uf
     puf = grocy.userfields("products", int(parent["id"]))
@@ -158,6 +160,8 @@ def relink(grocy, product_id: int, generic_name: str) -> None:
         new_uf = _align_to_parent(grocy, parent, fields, uf)
         upd = {k: fields[k] for k in UNIT_FIELDS}
         grocy.set_userfields("products", product_id, {"package_amount": "", "g_per_unit": "", **new_uf})
+    if parent:
+        upd["product_group_id"] = parent.get("product_group_id")  # follows its generic between Pantry and Supplies
     parent_id = _find_or_create_generic(
         grocy, generic_name, {k: child[k] for k in keep if k in child},
         {k: uf[k] for k in ("package_amount", "g_per_unit") if k in uf}, {})

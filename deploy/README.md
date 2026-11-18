@@ -85,6 +85,7 @@ up files separately, include both directories.
 1. Copy `ha/house.yaml` to HA's `config/packages/house.yaml` (turn packages on as its header says), add
    `house_secret` to `secrets.yaml` (the same value as `HOOK_SECRET` in `deploy/.env`), replace `<lxc-ip>`, match the person names in the sensors to those saved under Me -> People, set
    the washer entities if yours differ, and restart HA. Its REST sensors read `/api/summary` (no secret).
+   A name with a space needs the path quoted: `json_attributes_path: "$.people['Josh H']"`.
 2. In the app, open Me -> People and add each person (their Grocy user, HA person and phone).
 3. Both phones: install the HA Companion app, allow notifications, stay on Tailscale, and set the app's
    External URL to `https://homeassistant.<tailnet>.ts.net` (HA is also on http, port 80). Pushes arrive
@@ -101,6 +102,12 @@ up files separately, include both directories.
 - [ ] Open the Walmart cart link.
 - [ ] Add the iPad web clip.
 - [ ] Confirm the HA notification fires (Developer Tools -> Actions: run the automation).
+- [ ] The container (not just the LXC) reaches Home Assistant; this prints `200`:
+  `docker compose exec mealplanner python -c "import os, httpx; print(httpx.get(os.environ['HA_URL'] + '/api/', headers={'Authorization': 'Bearer ' + os.environ['HA_TOKEN']}).status_code)"`
+- [ ] Reminder round trip: add a task for whoever is home due today with Remind at a minute or two from now, wait
+  for it on both phones, tap Done on one, and check it clears on the other within a minute.
+- [ ] On each device, open the House sidebar in the HA app, pick who you are (Me -> This device), close and reopen
+  the HA app, and check the sidebar still knows who you are (the `who` cookie survives in the HA webview).
 
 ## Live Grocy integration test
 
