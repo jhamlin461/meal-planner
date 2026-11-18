@@ -29,6 +29,7 @@
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 {% if picks is not none %}
 <div class="card"><h2>Suggestions</h2>
+<form method="post" action="/plan/suggest/clear"><input type="hidden" name="week" value="{{ monday.isoformat() }}"><button class="secondary">Dismiss suggestions</button></form>
 {% for p in picks %}
 <form class="inline" method="post" action="/plan">
   <input type="hidden" name="day" value="{{ p.day }}"><input type="hidden" name="section" value="{{ p.section }}"><input type="hidden" name="recipe_id" value="{{ p.recipe_id }}">

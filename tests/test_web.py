@@ -523,3 +523,50 @@ def test_toggle_from_stale_page_still_works(env):
     c.get("/shopping")  # another page load rebuilds the list
     assert c.post(f"/shopping/{row['id']}/toggle").status_code == 200
     assert g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])[0]["done"] == 1
+
+
+def test_double_tapped_bought_stocks_once(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowGrocy(FakeGrocy):
+        def add_stock(self, *a):
+            started.set()
+            release.wait(5)
+            super().add_stock(*a)
+
+    g = SlowGrocy()
+    bootstrap(g)
+    pid = product(g, "Flour")
+    g.create("shopping_list", {"shopping_list_id": ids(g).list["Extras"], "product_id": pid, "amount": 5, "done": 1})
+    app = create_app(g, FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)),
+                     Settings("", "", "", "KEY", None, 6, tmp_path, 3), PendingStore(tmp_path / "pending"))
+    with TestClient(app) as c:
+        def tap():
+            c.post("/shopping/bought", follow_redirects=False)
+
+        first = threading.Thread(target=tap)
+        first.start()
+        assert started.wait(5)
+        second = threading.Thread(target=tap)
+        second.start()
+        time.sleep(0.3)
+        release.set()
+        first.join(5)
+        second.join(5)
+    assert sum(e["amount"] for e in g.stock[pid]) == 5
+
+
+def test_remaining_suggestions_survive_accepting_one(env):
+    from app.ai import Suggestion, WeekSuggestions
+    g, ai, _, c, _ = env
+    _, rid = flour_recipe(g)
+    monday = _monday(date.today() + timedelta(days=7))
+    d1, d2 = monday, monday + timedelta(days=1)
+    ai.week = WeekSuggestions(items=[Suggestion(day=d.isoformat(), section="Dinner", recipe_id=rid, reason=f"why {i}")
+                                     for i, d in enumerate((d1, d2))])
+    c.post("/plan/suggest", data={"week": monday.isoformat()})
+    html = c.post("/plan", data={"day": d1.isoformat(), "section": "Dinner", "recipe_id": rid}).text  # accept first
+    assert "why 1" in html and "why 0" not in html
+    assert "why 1" in c.get(f"/plan?week={monday.isoformat()}").text  # still there on a later visit
+    c.post("/plan/suggest/clear", data={"week": monday.isoformat()})
+    assert "why 1" not in c.get(f"/plan?week={monday.isoformat()}").text

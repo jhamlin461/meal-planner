@@ -110,6 +110,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env.filters["num"] = _fmt
     env.globals["next_op_id"] = _next_op_id
     templates = Jinja2Templates(env=env)
+    plan_lock = threading.Lock()  # Bought / Cooked it / list rebuild: a double tap or second device must not repeat them
+    last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
     save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
 
     def page(request: Request, name: str, status_code: int = 200, **ctx):
@@ -435,7 +437,17 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/plan")
     def plan_get(request: Request, week: date | None = None, short: list[str] = Query(default=[])):
-        return plan_page(request, _monday(week or date.today()), short)
+        monday = _monday(week or date.today())
+        taken = {(str(r["day"])[:10], int(r["section_id"])) for r in grocy.objects("meal_plan")
+                 if r.get("type") == "recipe"}
+        sec = ids(grocy).section
+        left = [p for p in last_picks.get(monday, []) if (p["day"], sec[p["section"]]) not in taken]
+        return plan_page(request, monday, short, picks=left or None)
+
+    @app.post("/plan/suggest/clear")
+    def plan_suggest_clear(week: date = Form()):
+        last_picks.pop(_monday(week), None)
+        return back(f"/plan?week={_monday(week).isoformat()}")
 
     @app.post("/plan")
     def plan_post(day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"), recipe_id: int = Form(),
@@ -459,7 +471,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/plan/{entry_id}/cook")
     def plan_cook(entry_id: int):
         week = entry_week(entry_id)
-        short = cook(grocy, entry_id)
+        with plan_lock:
+            short = cook(grocy, entry_id)
         return back("/plan?" + urlencode([("week", week)] + [("short", n) for n in short]))
 
     @app.post("/plan/suggest")
@@ -470,16 +483,17 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         except AIError as e:
             return plan_page(request, monday, error=str(e))
         names = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}
-        return plan_page(request, monday, picks=[{"day": p.day.isoformat(), "label": p.day.strftime("%a %b %d"),
-                                                  "section": p.section, "recipe_id": p.recipe_id,
-                                                  "name": names.get(p.recipe_id, ""), "reason": p.reason}
-                                                 for p in picks])
+        shown = [{"day": p.day.isoformat(), "label": p.day.strftime("%a %b %d"), "section": p.section,
+                  "recipe_id": p.recipe_id, "name": names.get(p.recipe_id, ""), "reason": p.reason} for p in picks]
+        last_picks[monday] = shown
+        return plan_page(request, monday, picks=shown)
 
     # ---- shopping -----------------------------------------------------------------------------------------------
     @app.get("/shopping")
     def shopping(request: Request, bad: int = 0):
         i = ids(grocy)
-        rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
+        with plan_lock:
+            rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
         products = {int(p["id"]): p for p in grocy.objects("products")}
         units = unit_names()
 
@@ -521,25 +535,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/shopping/bought")
     def shopping_bought():
-        i = ids(grocy)
-        for name in ("Meal plan", "Extras"):
-            for row in grocy.objects("shopping_list", shopping_list_id=i.list[name]):
-                if not int(float(row.get("done") or 0)):
-                    continue
-                pid = _int(row.get("product_id"))
-                p = grocy.get_object("products", pid) if pid else None
-                if p:  # free-text extras (no product) are just crossed off
-                    pkg = _num(grocy.userfields("products", pid).get("package_amount"))
-                    amount = float(row.get("amount") or 0)
-                    if pkg:
-                        amount = packages_needed(amount, pkg) * pkg
-                    days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
-                    if amount > 0:
-                        grocy.add_stock(pid, amount, date.today() + timedelta(days=days) if days > 0 else None,
-                                        _int(p.get("location_id")))
-                grocy.delete("shopping_list", int(row["id"]))  # after add_stock: a failure never loses a purchase
-        rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
-        return back("/shopping")
+        with plan_lock:  # rows are read inside the lock, so a second POST finds them already gone
+            i = ids(grocy)
+            for name in ("Meal plan", "Extras"):
+                for row in grocy.objects("shopping_list", shopping_list_id=i.list[name]):
+                    if not int(float(row.get("done") or 0)):
+                        continue
+                    pid = _int(row.get("product_id"))
+                    p = grocy.get_object("products", pid) if pid else None
+                    if p:  # free-text extras (no product) are just crossed off
+                        pkg = _num(grocy.userfields("products", pid).get("package_amount"))
+                        amount = float(row.get("amount") or 0)
+                        if pkg:
+                            amount = packages_needed(amount, pkg) * pkg
+                        days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
+                        if amount > 0:
+                            grocy.add_stock(pid, amount, date.today() + timedelta(days=days) if days > 0 else None,
+                                            _int(p.get("location_id")))
+                    grocy.delete("shopping_list", int(row["id"]))  # after add_stock: a failure never loses a purchase
+            rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
+            return back("/shopping")
 
     @app.post("/products/{pid}/walmart")
     def product_walmart(pid: int, link: str = Form()):

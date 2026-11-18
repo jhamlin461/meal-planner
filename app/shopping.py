@@ -60,8 +60,12 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
         pid = int(r["product_id"]) if r.get("product_id") else None
         if pid in short and pid not in kept:
             kept.add(pid)
-            if abs(float(r.get("amount") or 0) - short[pid]) > 1e-9:
-                grocy.update("shopping_list", int(r["id"]), {"amount": short[pid]})
+            old_amt = float(r.get("amount") or 0)
+            if abs(old_amt - short[pid]) > 1e-9:
+                upd = {"amount": short[pid]}
+                if short[pid] > old_amt:  # the tick covered the old amount only
+                    upd["done"] = 0
+                grocy.update("shopping_list", int(r["id"]), upd)
         else:  # no longer needed, free-text, or a duplicate row
             grocy.delete("shopping_list", int(r["id"]))
     for pid, amount in short.items():

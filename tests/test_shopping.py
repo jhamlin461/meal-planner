@@ -109,3 +109,18 @@ def test_rebuild_keeps_row_ids_and_dedupes(fake_grocy_with_week):
     [again] = _list(g, "Meal plan")
     assert again["id"] == row["id"] and again["done"] == 1 and again["id"] != dup
     assert again["amount"] == 200  # 4 servings at 150 g per 2 = 300 g, minus 100 g in stock
+
+
+def test_rebuild_unticks_row_when_amount_grows_but_not_when_it_shrinks(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    rebuild_meal_plan_list(g, TODAY, 6)
+    [row] = _list(g, "Meal plan")  # 200 g short
+    g.update("shopping_list", row["id"], {"done": 1})
+    g.add_stock(10, 50, None, None)  # shortfall shrinks to 150
+    rebuild_meal_plan_list(g, TODAY, 6)
+    assert _list(g, "Meal plan")[0]["done"] == 1 and _list(g, "Meal plan")[0]["amount"] == 150
+    g.stock[10].pop()
+    g.stock[10][0]["amount"] = 0  # shortfall grows to 300
+    rebuild_meal_plan_list(g, TODAY, 6)
+    [after] = _list(g, "Meal plan")
+    assert after["id"] == row["id"] and after["amount"] == 300 and after["done"] == 0
