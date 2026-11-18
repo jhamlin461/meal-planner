@@ -24,6 +24,7 @@ from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, va
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
+from app import home as hm
 from app.house import HouseStore, Person
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
@@ -171,9 +172,129 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def today(request: Request):
         return page(request, "today.html")
 
+    # ---- chores, tasks and upkeep (logic in app/home.py) ---------------------------------------------------------
+    def home_back(msg: str) -> RedirectResponse:
+        return back("/home?" + urlencode({"msg": msg}))
+
     @app.get("/home")
-    def home(request: Request):
-        return page(request, "home.html")
+    def home(request: Request, msg: str = ""):
+        people, today = house.people(), date.today()
+        return page(request, "home.html", msg=msg, chores=hm.chore_rows(grocy, people, today),
+                    tasks=hm.task_rows(grocy, people, today), upkeep=hm.upkeep_rows(grocy, today))
+
+    @app.post("/home/starters")
+    def starters():
+        n = hm.add_starters(grocy, house, house.people())
+        return home_back(f"Added {n} starter chore{'' if n == 1 else 's'}." if n else "The starter chores are already there.")
+
+    def done_by(request: Request, assigned) -> int | None:
+        """Whoever's device this is gets the credit; the kitchen screen credits the person it was assigned to."""
+        who = current_who(request)
+        return who.grocy_user_id if isinstance(who, Person) else assigned if who == "kitchen" else None
+
+    def chore_done(request: Request, cid: int, skipped: bool):
+        row = next((r for r in grocy.chores_status() if r["chore_id"] == cid), None)
+        if row is None:
+            raise HTTPException(404, "No such chore")
+        grocy.execute_chore(cid, done_by(request, row.get("next_execution_assigned_to_user_id")), skipped)
+        return home_back("Skipped." if skipped else "Done.")
+
+    @app.post("/home/chores/{cid}/done")
+    def chore_done_post(request: Request, cid: int):
+        return chore_done(request, cid, False)
+
+    @app.post("/home/chores/{cid}/skip")
+    def chore_skip_post(request: Request, cid: int):
+        return chore_done(request, cid, True)
+
+    @app.post("/home/tasks/{tid}/done")
+    def task_done_post(tid: int):
+        grocy.complete_task(tid)
+        return home_back("Done.")
+
+    @app.post("/home/upkeep/{bid}/done")
+    def upkeep_done_post(bid: int):
+        grocy.charge_battery(bid)
+        return home_back("Done.")
+
+    kinds = {  # kind -> (grocy entity, form template, what to call it)
+        "chores": ("chores", "chore", "chore_form.html", "chore"),
+        "tasks": ("tasks", "task", "task_form.html", "task"),
+        "upkeep": ("batteries", "battery", "upkeep_form.html", "upkeep item"),
+    }
+
+    def form_page(request: Request, kind: str, v: dict, id: int | None, status_code: int = 200, error: str | None = None):
+        return page(request, kinds[kind][2], status_code, v=v, id=id, error=error, people=house.people(),
+                    supplies=hm.supplies(grocy) if kind == "chores" else [], days=hm.DAYS)
+
+    def existing(kind: str, id: int) -> dict:
+        row = grocy.get_object(kinds[kind][0], id)
+        if row is None:
+            raise HTTPException(404, f"No such {kinds[kind][3]}")
+        return row
+
+    def values_of(kind: str, id: int) -> dict:
+        row, rem = existing(kind, id), house.reminder(f"{kinds[kind][1]}:{id}")
+        common = {"remind_at": rem.remind_at}
+        if kind == "chores":
+            return hm.chore_values(row, rem, house.people())
+        if kind == "tasks":
+            return {"title": row["name"], "note": row.get("description") or "", "due": row.get("due_date") or "",
+                    "who": rem.audience.removeprefix("person:") if rem.audience else "home", **common}
+        return {"name": row["name"], "every": row.get("charge_interval_days") or "", **common}
+
+    def form_get(request: Request, kind: str, id: int | None):
+        return form_page(request, kind, values_of(kind, id) if id else {}, id)
+
+    async def form_post(request: Request, kind: str, id: int | None):
+        return await run_in_threadpool(save_form, request, kind, id, await request.form())
+
+    def save_form(request: Request, kind: str, id: int | None, form):
+        entity, key, _, noun = kinds[kind]
+        people = house.people()
+        try:
+            if id is not None:
+                existing(kind, id)
+            if kind == "chores":
+                row, rem = hm.chore_fields(form, people)
+            elif kind == "tasks":
+                row, rem = hm.task_fields(form, people)
+                cat = next((c["id"] for c in grocy.objects("task_categories") if c["name"] == "Household"), None)
+                row["category_id"] = cat
+            else:
+                row, rem = hm.upkeep_fields(form)
+        except ValueError as e:
+            v = {k: form.get(k) for k in form} | {"days": form.getlist("days")}
+            return form_page(request, kind, v, id, 400, str(e))
+        hm.save(grocy, house, entity, key, row, rem, id)
+        return home_back(f"Saved {noun}.")
+
+    def register(kind: str):
+        entity, key, _, noun = kinds[kind]
+
+        @app.get(f"/home/{kind}/new", name=f"{kind}_new")
+        def new_get(request: Request):
+            return form_get(request, kind, None)
+
+        @app.post(f"/home/{kind}/new", name=f"{kind}_create")
+        async def new_post(request: Request):
+            return await form_post(request, kind, None)
+
+        @app.get(f"/home/{kind}/{{id}}", name=f"{kind}_edit")
+        def edit_get(request: Request, id: int):
+            return form_get(request, kind, id)
+
+        @app.post(f"/home/{kind}/{{id}}", name=f"{kind}_save")
+        async def edit_post(request: Request, id: int):
+            return await form_post(request, kind, id)
+
+        @app.post(f"/home/{kind}/{{id}}/delete", name=f"{kind}_delete")
+        def delete_post(id: int):
+            hm.remove(grocy, house, entity, key, id)
+            return home_back(f"Deleted {noun}.")
+
+    for k in kinds:
+        register(k)
 
     # ---- people and device identity -----------------------------------------------------------------------------
     def current_who(request: Request) -> Person | str | None:

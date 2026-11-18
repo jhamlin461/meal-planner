@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit task' if id else 'Add task' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Edit task' if id else 'Add task' }}</h1>
+<form method="post" action="/home/tasks/{{ id or 'new' }}" class="card">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label class="field"><span>Title</span><input name="title" value="{{ v.get('title', '') }}" required></label>
+  <label class="field"><span>Note</span><textarea name="note" rows="3">{{ v.get('note', '') }}</textarea></label>
+  <label class="field"><span>Due date</span><input name="due" type="date" value="{{ v.get('due', '') }}"></label>
+  <label class="field"><span>Who</span><select name="who"><option value="home"{% if v.get('who', 'home') == 'home' %} selected{% endif %}>Whoever is home</option>
+    {% for p in people %}<option value="{{ p.id }}"{% if v.get('who') == p.id|string %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Remind at</span><input name="remind_at" type="time" value="{{ v.get('remind_at') or '09:00' }}"></label>
+  <div class="card-actions"><button class="btn btn-primary">Save task</button></div>
+</form>
+{% if id %}<form method="post" action="/home/tasks/{{ id }}/delete" class="card"><div class="card-actions"><button class="btn">Delete task</button></div></form>{% endif %}
+{% endblock %}

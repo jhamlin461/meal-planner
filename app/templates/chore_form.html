@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit chore' if id else 'Add chore' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Edit chore' if id else 'Add chore' }}</h1>
+<form method="post" action="/home/chores/{{ id or 'new' }}" class="card">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label class="field"><span>Name</span><input name="name" value="{{ v.get('name', '') }}" required></label>
+  <label class="field"><span>Repeats</span><select name="schedule">
+    {% for k, t in [('daily', 'Every day'), ('every', 'Every N days'), ('weekly', 'Weekly on days'), ('monthly', 'Monthly on a day')] %}<option value="{{ k }}"{% if v.get('schedule', 'daily') == k %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Days between (for every N days)</span><input name="every" type="number" min="1" value="{{ v.get('every', '') }}"></label>
+  <fieldset class="field"><legend>Days of the week (for weekly)</legend>
+    {% for d in days %}<label class="row"><input type="checkbox" name="days" value="{{ d }}"{% if d in v.get('days', []) %} checked{% endif %}><span>{{ d|capitalize }}</span></label>{% endfor %}</fieldset>
+  <label class="field"><span>Day of the month (for monthly)</span><input name="monthly" type="number" min="1" max="31" value="{{ v.get('monthly', '') }}"></label>
+  <label class="field"><span>Who</span><select name="who"><option value="turns"{% if v.get('who', 'turns') == 'turns' %} selected{% endif %}>Take turns</option>
+    {% for p in people %}<option value="{{ p.id }}"{% if v.get('who') == p.id|string %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Remind at</span><input name="remind_at" type="time" value="{{ v.get('remind_at') or '09:00' }}"></label>
+  <label class="field"><span>Repeat every (minutes, blank for the usual)</span><input name="repeat_min" type="number" min="1" value="{{ v.get('repeat_min', '') }}"></label>
+  <label class="field"><span>Uses supply</span><select name="product_id"><option value="">None</option>
+    {% for p in supplies %}<option value="{{ p.id }}"{% if v.get('product_id') == p.id|string %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+  <label class="field"><span>Amount used each time</span><input name="product_amount" type="number" min="0" step="any" value="{{ v.get('product_amount', 1) }}"></label>
+  <div class="card-actions"><button class="btn btn-primary">Save chore</button></div>
+</form>
+{% if id %}<form method="post" action="/home/chores/{{ id }}/delete" class="card"><div class="card-actions"><button class="btn">Delete chore</button></div></form>{% endif %}
+{% endblock %}

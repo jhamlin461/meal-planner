@@ -8,7 +8,7 @@ GLOBAL_CONVERSIONS = {("kg", "g"): 1000, ("l", "ml"): 1000, ("cup", "ml"): 236.6
                       ("tsp", "ml"): 4.93, ("fl oz", "ml"): 29.57, ("oz", "g"): 28.35, ("lb", "g"): 453.6}
 LOCATIONS = ["Fridge", "Freezer", "Pantry", "Spice rack", "Counter"]
 SECTIONS = ["Lunch", "Dinner"]
-LISTS = ["Meal plan", "Extras"]
+LISTS = ["Meal plan", "Extras", "Running low"]
 TEXT, MULTI, NUM, CHECK = "text-single-line", "text-multi-line", "number-decimal", "checkbox"
 USERFIELDS = (
     [("recipes", "cfe_table", MULTI), ("recipes", "source_url", TEXT), ("recipes", "source_pdf", TEXT),
@@ -46,6 +46,8 @@ def bootstrap(grocy) -> None:
     _ensure_named(grocy, "locations", LOCATIONS)
     _ensure_named(grocy, "meal_plan_sections", SECTIONS, lambda i, n: {"sort_number": i + 1})
     _ensure_named(grocy, "shopping_lists", LISTS)
+    _ensure_named(grocy, "task_categories", ["Household"])
+    _ensure_named(grocy, "product_groups", ["Household supplies"])
     unit = _by_name(grocy, "quantity_units")
     # filter in Python: Grocy's query[] can't express "product_id is null"
     have = {(int(c["from_qu_id"]), int(c["to_qu_id"])) for c in grocy.objects("quantity_unit_conversions")

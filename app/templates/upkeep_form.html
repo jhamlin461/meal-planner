@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit upkeep item' if id else 'Add upkeep item' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Edit upkeep item' if id else 'Add upkeep item' }}</h1>
+<form method="post" action="/home/upkeep/{{ id or 'new' }}" class="card">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label class="field"><span>Name</span><input name="name" value="{{ v.get('name', '') }}" required></label>
+  <label class="field"><span>Every how many days</span><input name="every" type="number" min="1" value="{{ v.get('every', '') }}" required></label>
+  <label class="field"><span>Remind at</span><input name="remind_at" type="time" value="{{ v.get('remind_at') or '09:00' }}"></label>
+  <div class="card-actions"><button class="btn btn-primary">Save upkeep item</button></div>
+</form>
+{% if id %}<form method="post" action="/home/upkeep/{{ id }}/delete" class="card"><div class="card-actions"><button class="btn">Delete upkeep item</button></div></form>{% endif %}
+{% endblock %}

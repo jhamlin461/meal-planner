@@ -1,6 +1,31 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Home{% endblock %}
+{% macro when(r) %}{% if r.date %}{% if r.overdue %}Overdue, since {% elif r.today %}Today{% else %}Due {% endif %}{% if not r.today %}{{ r.date.strftime('%a %b') }} {{ r.date.day }}{% endif %}{% else %}No date{% endif %}{% endmacro %}
+{% macro item(kind, r, skip=False) %}
+<div class="card">
+  <p class="row"><b class="grow breakable">{{ r.name }}</b><a href="/home/{{ kind }}/{{ r.id }}" aria-label="Edit {{ r.name }}">{{ icon("pencil-outline") }}</a></p>
+  <p class="{{ 'error' if r.overdue else 'muted' }}">{{ when(r) }}{% if r.who %} · {{ r.who }}{% endif %}</p>
+  <div class="card-actions">
+    <form method="post" action="/home/{{ kind }}/{{ r.id }}/done"><button class="btn btn-primary">Done</button></form>
+    {% if skip %}<form method="post" action="/home/{{ kind }}/{{ r.id }}/skip"><button class="btn">Skip</button></form>{% endif %}
+  </div>
+</div>
+{% endmacro %}
 {% block content %}
 <h1>Home</h1>
-<p class="empty">Chores, household supplies and batteries will be kept here.</p>
+{% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+<h2>Chores</h2>
+{% for r in chores %}{{ item("chores", r, skip=True) }}{% else %}
+<p class="empty">No chores yet.</p>
+<form method="post" action="/home/starters" class="card"><div class="card-actions"><button class="btn btn-primary">Add starter chores</button></div></form>
+{% endfor %}
+<p><a class="btn" href="/home/chores/new">Add chore</a></p>
+<h2>Tasks</h2>
+{% for r in tasks %}{{ item("tasks", r) }}{% else %}<p class="empty">No open tasks.</p>{% endfor %}
+<p><a class="btn" href="/home/tasks/new">Add task</a></p>
+<h2>Upkeep</h2>
+{% for r in upkeep %}{{ item("upkeep", r) }}{% else %}<p class="empty">Nothing to keep up.</p>{% endfor %}
+<p><a class="btn" href="/home/upkeep/new">Add upkeep item</a></p>
+<p class="muted"><a href="/home/people">People</a></p>
 {% endblock %}
