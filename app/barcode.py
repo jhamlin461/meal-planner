@@ -65,7 +65,8 @@ def _find_or_create_generic(grocy, name: str, fields: dict, uf: dict, nutrition:
     return pid
 
 
-def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
+def _product_fields(grocy, g) -> tuple[dict, dict]:
+    """(product columns, userfields) for a product described by a ProductGuess."""
     i = ids(grocy)
     unit = i.unit[g.stock_unit]
     loc = i.location[g.location if g.location in LOCATIONS else "Pantry"]
@@ -73,6 +74,11 @@ def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
               "qu_id_price": unit, "default_best_before_days": g.best_before_days}
     gpu = g.g_per_unit if g.g_per_unit is not None else (None if g.stock_unit == "piece" else 1)
     uf = {"package_amount": g.package_amount or 1, **({"g_per_unit": gpu} if gpu is not None else {})}
+    return fields, uf
+
+
+def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
+    fields, uf = _product_fields(grocy, g)
     parent_id = _find_or_create_generic(grocy, g.generic_name, fields, uf, nutrition)
     if any(p["name"].lower() == name.lower() for p in grocy.objects("products")):
         name = f"{name} ({code})"
