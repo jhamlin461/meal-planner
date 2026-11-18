@@ -6,10 +6,12 @@
 <div class="card">
   <p class="row"><b class="grow breakable">{{ r.name }}</b><a class="icon-link" href="/home/{{ kind }}/{{ r.id }}" aria-label="Edit {{ r.name }}">{{ icon("pencil-outline") }}</a></p>
   <p class="{{ 'error' if r.overdue else 'muted' }}">{{ when(r) }}{% if r.who %} {{ r.who ~ "'s turn." if kind == "chores" else "For " ~ r.who ~ "." }}{% elif r.turns %} Takes turns.{% endif %}</p>
+  {% if r.date or kind == "tasks" %}{# no date: nothing tells one Done from the next, except a task's single occurrence #}
   <div class="card-actions">
     <form method="post" action="/home/{{ kind }}/{{ r.id }}/done"><input type="hidden" name="due" value="{{ r.date.isoformat() if r.date else '' }}"><button class="btn btn-primary">Done</button></form>
     {% if skip %}<form method="post" action="/home/{{ kind }}/{{ r.id }}/skip"><button class="btn">Skip</button></form>{% endif %}
   </div>
+  {% else %}<p class="muted">Mark this one in Grocy.</p>{% endif %}
 </div>
 {% endmacro %}
 {% block content %}

@@ -249,3 +249,15 @@ def test_home_sentences_and_no_middle_dot(hv):
                         "assignment_config": ""})
     html = c.get("/home").text
     assert chr(183) not in html and "Due today. Josh&#39;s turn." in html and "Due today. Takes turns." in html
+
+
+def test_no_done_button_without_due_date(hv):
+    """A manually scheduled chore or an upkeep item with no cycle has no due date to tell one Done from the next."""
+    g, house, c, *_ = hv
+    cid = g.create("chores", {"name": "Descale the kettle", "period_type": "manually"})
+    bid = g.create("batteries", {"name": "Spare remote"})
+    tid = g.create("tasks", {"name": "Someday task", "done": 0})
+    html = c.get("/home").text
+    assert f"/home/chores/{cid}/done" not in html and f"/home/chores/{cid}/skip" not in html
+    assert f"/home/upkeep/{bid}/done" not in html and html.count("Mark this one in Grocy.") == 2
+    assert f"/home/tasks/{tid}/done" in html  # a task with no date still has its one occurrence

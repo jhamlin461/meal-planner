@@ -57,7 +57,7 @@ def soup_draft():
 
 
 def test_root_renders_today_in_shell(env):
-    r = env[3].get("/", follow_redirects=False)
+    r = env[3].get("/", cookies={"who": "kitchen"}, follow_redirects=False)
     assert r.status_code == 200 and "<h1" in r.text and 'class="rail"' in r.text
     assert 'href="/" aria-current="page"' in r.text
 

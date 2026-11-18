@@ -1,6 +1,38 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Today{% endblock %}
 {% block content %}
-<h1 class="headline">Today</h1>
-<p class="empty">Chores, reminders and tonight's dinner will show up here.</p>
+{% set n = now_items|length %}
+<p class="today-date">{{ date }}</p>
+<h1 class="headline">{% if n == 0 %}Nothing needs you{% elif n == 1 %}1 thing needs you{% else %}{{ n }} things need you{% endif %}<small>{{ note }}</small></h1>
+{% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+{% if ha_error %}
+<div class="card ha-warning" role="alert">{{ icon("alert-circle-outline") }}<p><b>{{ ha_error }}</b><br>Check that Home Assistant is running and each phone has the Home Assistant app.</p></div>
+{% endif %}
+{% for it in now_items %}{% set kind, id = it.key.split(":") %}
+<article class="card now">
+  <h2 class="now-title">{{ icon(it.icon) }}<span class="breakable">{{ it.title }}</span></h2>
+  <p class="now-context">{{ it.context }}</p>
+  <div class="card-actions">
+    <form method="post" action="/today/{{ kind }}/{{ id }}/snooze"><button class="btn">Snooze 15 min</button></form>
+    <form method="post" action="/today/{{ kind }}/{{ id }}/done"><input type="hidden" name="due" value="{{ it.due.date().isoformat() }}"><button class="btn btn-primary">{{ it.verb }}</button></form>
+  </div>
+</article>
+{% endfor %}
+<h2>Tonight</h2>
+{% if tonight %}
+<div class="card tonight">
+  <h3 class="tonight-title">{{ icon("silverware-fork-knife") }}<span class="breakable">{{ tonight.name }}{% if tonight.servings %} for {{ tonight.servings }}{% endif %}</span></h3>
+  {% if tonight.leftovers %}<p class="muted">{{ tonight.leftovers }}</p>{% endif %}
+</div>
+{% else %}
+<p class="empty">No dinner planned yet. <a href="/plan">Plan dinner</a></p>
+{% endif %}
+{% if coming %}
+<h2>Coming up</h2>
+<ul class="rows coming">
+{% for c in coming %}<li class="row"><span class="tick" aria-hidden="true"></span><div class="grow breakable"><div>{{ c.title }}</div><div class="when {{ 'warn' if c.soon else 'muted' }}">{{ c.when }}</div></div></li>
+{% endfor %}
+</ul>
+{% endif %}
 {% endblock %}

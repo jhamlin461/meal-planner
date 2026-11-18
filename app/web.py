@@ -37,6 +37,7 @@ from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids
 from app.shopping import rebuild_meal_plan_list, walmart_items
 from app.suggest import suggest, user_recipes
+from app.today import today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
@@ -174,8 +175,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 for p in positions]
 
     @app.get("/")
-    def today(request: Request):
-        return page(request, "today.html")
+    def today(request: Request, msg: str = ""):
+        who = current_who(request)
+        if who is None:
+            return back("/who")
+        now = datetime.now()
+        return page(request, "today.html", msg=msg, date=f"{now:%A, %B} {now.day}",
+                    **today_view(grocy, house, who, now, ha=ha, warn_days=settings.expiry_warn_days))
 
     # ---- chores, tasks and upkeep (logic in app/home.py) ---------------------------------------------------------
     def home_back(msg: str) -> RedirectResponse:

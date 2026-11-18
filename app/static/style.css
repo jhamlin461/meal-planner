@@ -136,3 +136,19 @@ td.cfe-pre { font-style: italic; }
 .day input:focus-visible + span { outline: 3px solid var(--action); outline-offset: 2px; }
 .hint { margin: -8px 0 12px; color: var(--muted); font-size: .9rem; }
 .icon-link { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 48px; }
+
+/* Today: the headline does the shouting; only "needs you now" cards get colour (a red left edge). */
+.today-date { margin: 0; color: var(--muted); font-size: .875rem; }
+.card.now { padding-left: 18px; box-shadow: inset 4px 0 0 var(--now); }
+.card.now .card-actions { margin-left: -18px; }
+.now-title, .tonight-title { display: flex; align-items: flex-start; gap: 10px; margin: 0; color: var(--text);
+  font-size: 1.2rem; font-weight: 650; font-stretch: 90%; line-height: 1.25; }
+.now-title .icon, .tonight-title .icon { color: var(--muted); }
+.now-context { margin: 3px 0 0 34px; color: var(--muted); font-size: .875rem; }
+.tonight p { margin: 2px 0 0 34px; font-size: .875rem; }
+.ha-warning { display: flex; gap: 10px; align-items: flex-start; }
+.ha-warning .icon { color: var(--soon); }
+.ha-warning p { margin: 0; }
+.coming > li.row { flex-wrap: nowrap; gap: 12px; padding: 8px 2px; }
+.coming .when { font-size: .875rem; }
+.tick { width: 26px; height: 26px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--muted); }
