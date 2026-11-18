@@ -6,7 +6,8 @@ from app.grocy import Grocy
 UNITS = ["g", "kg", "ml", "l", "piece", "cup", "tbsp", "tsp", "oz", "lb", "fl oz", "can", "pinch"]
 GLOBAL_CONVERSIONS = {("kg", "g"): 1000, ("l", "ml"): 1000, ("cup", "ml"): 236.6, ("tbsp", "ml"): 14.79,
                       ("tsp", "ml"): 4.93, ("fl oz", "ml"): 29.57, ("oz", "g"): 28.35, ("lb", "g"): 453.6}
-LOCATIONS = ["Fridge", "Freezer", "Pantry", "Spice rack", "Counter"]
+LOCATIONS = ["Fridge", "Freezer", "Pantry", "Spice rack", "Counter", "Bathroom", "Laundry", "Under sink", "Garage",
+             "Closet"]
 SECTIONS = ["Lunch", "Dinner"]
 LISTS = ["Meal plan", "Extras", "Running low"]
 TEXT, MULTI, NUM, CHECK = "text-single-line", "text-multi-line", "number-decimal", "checkbox"

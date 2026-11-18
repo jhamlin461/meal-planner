@@ -142,8 +142,12 @@ def remove(grocy, house: HouseStore, entity: str, kind: str, id: int) -> None:
     grocy.delete(entity, id)  # the reminder loop clears every phone it reached, then drops the reminder
 
 
+def supplies_group(grocy) -> int | None:
+    return next((g["id"] for g in grocy.objects("product_groups") if g["name"] == SUPPLIES), None)
+
+
 def supplies(grocy) -> list[dict]:
-    group = next((g["id"] for g in grocy.objects("product_groups") if g["name"] == SUPPLIES), None)
+    group = supplies_group(grocy)
     return [p for p in grocy.objects("products") if group is not None and str(p.get("product_group_id")) == str(group)]
 
 

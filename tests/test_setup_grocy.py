@@ -12,7 +12,7 @@ def test_bootstrap_creates_everything():
     assert len(g.objects("quantity_units")) == 13
     convs = g.objects("quantity_unit_conversions")
     assert len(convs) == 8 and all(c["product_id"] is None for c in convs)
-    assert len(g.objects("locations")) == 5
+    assert len(g.objects("locations")) == 10
     assert len(g.objects("meal_plan_sections")) == 2
     assert len(g.objects("shopping_lists")) == 3
     assert len(g.objects("userfields")) == 11

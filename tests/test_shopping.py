@@ -1,7 +1,7 @@
 from datetime import date
 
 from app.setup_grocy import ids
-from app.shopping import (rebuild_meal_plan_list, shopping_window, shortfall, walmart_items,
+from app.shopping import (rebuild_meal_plan_list, rebuild_running_low, shopping_window, shortfall, walmart_items,
                           week_needs)
 
 TODAY = date(2026, 11, 18)
@@ -124,3 +124,50 @@ def test_rebuild_unticks_row_when_amount_grows_but_not_when_it_shrinks(fake_groc
     rebuild_meal_plan_list(g, TODAY, 6)
     [after] = _list(g, "Meal plan")
     assert after["id"] == row["id"] and after["amount"] == 300 and after["done"] == 0
+
+
+def _supply(g, name="Trash bags", min_stock=2, stock=0):
+    pid = g.create("products", {"name": name, "min_stock_amount": min_stock})
+    if stock:
+        g.add_stock(pid, stock, None, None)
+    return pid
+
+
+def test_running_low_list_rebuilt_in_place(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    extras = _list(g, "Extras")
+    bags = _supply(g, stock=1)
+    assert rebuild_running_low(g) == {bags: 1}
+    [row] = _list(g, "Running low")
+    assert (row["product_id"], row["amount"], row["done"]) == (bags, 1, 0)
+    g.update("shopping_list", row["id"], {"done": 1})
+    g.consume(bags, 1)  # now 2 short: the tick covered 1 only
+    rebuild_running_low(g)
+    [again] = _list(g, "Running low")
+    assert (again["id"], again["amount"], again["done"]) == (row["id"], 2, 0)
+    g.add_stock(bags, 3, None, None)
+    assert rebuild_running_low(g) == {}
+    assert _list(g, "Running low") == [] and _list(g, "Extras") == extras
+    assert rebuild_meal_plan_list(g, TODAY, 6) == {10: 200} and _list(g, "Running low") == []
+
+
+def test_trash_chore_drives_running_low(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    bags = _supply(g, stock=3)
+    chore = g.create("chores", {"name": "Take out the trash", "period_type": "weekly", "period_config": "sunday",
+                                "consume_product_on_chore_execution": 1, "product_id": bags, "product_amount": 1})
+    g.execute_chore(chore, None)  # 2 left: not below keep-at-least
+    assert rebuild_running_low(g) == {} and _list(g, "Running low") == []
+    g.execute_chore(chore, None)  # 1 left
+    rebuild_running_low(g)
+    assert [(r["product_id"], r["amount"]) for r in _list(g, "Running low")] == [(bags, 1)]
+
+
+def test_fake_volatile_keeps_fixed_result_without_min_stock(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.volatile_result["due_products"] = [{"product_id": 10}]
+    assert g.volatile(3)["due_products"] == [{"product_id": 10}] and g.volatile(3)["missing_products"] == []
+    bags = _supply(g)
+    v = g.volatile(3)
+    assert v["due_products"] == [{"product_id": 10}]
+    assert v["missing_products"] == [{"id": bags, "name": "Trash bags", "amount_missing": 2, "is_partly_in_stock": 0}]

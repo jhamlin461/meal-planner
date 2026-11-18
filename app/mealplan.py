@@ -6,7 +6,7 @@ import httpx
 
 from app.grocy import GrocyError
 from app.setup_grocy import ids
-from app.shopping import rebuild_meal_plan_list
+from app.shopping import rebuild_meal_plan_list, rebuild_running_low
 
 LEFTOVER_PREFIX = "Leftovers: "
 log = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ def plan_meal(grocy, day: date, section: str, recipe_id: int, servings: int | No
             "day": (day + timedelta(days=1)).isoformat(), "type": "note",
             "section_id": sec["Lunch"], "note": LEFTOVER_PREFIX + name, "done": 0})
     rebuild_meal_plan_list(grocy, today or date.today(), settings.shopping_weekday)
+    rebuild_running_low(grocy)
     return entry_id
 
 
@@ -60,6 +61,7 @@ def unplan_meal(grocy, entry_id: int, settings, today: date | None = None) -> No
                 grocy.delete("meal_plan", int(r["id"]))
                 break  # only one leftover note per dinner
     rebuild_meal_plan_list(grocy, today or date.today(), settings.shopping_weekday)
+    rebuild_running_low(grocy)
 
 
 def cook(grocy, entry_id: int) -> list[str]:

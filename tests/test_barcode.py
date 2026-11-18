@@ -78,7 +78,7 @@ def test_resolve_off_without_quantity():
 
 def test_bad_location_falls_back_to_pantry():
     g = grocy()
-    r = resolve(g, FakeAI(guess=guess(location="Garage")), http(off=OFF), CODE)
+    r = resolve(g, FakeAI(guess=guess(location="Attic")), http(off=OFF), CODE)
     pantry = next(x["id"] for x in g.objects("locations") if x["name"] == "Pantry")
     assert g.get_object("products", r.product_id)["location_id"] == pantry
 
@@ -246,3 +246,18 @@ def test_relink_with_stock_in_another_unit_is_refused():
     with pytest.raises(ValueError, match="in stock"):
         relink(g, r.product_id, "Tortillas")
     assert g.get_object("products", r.product_id)["parent_product_id"] == old_parent
+
+
+def test_supply_scan_sets_group_and_never_expires():
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess(generic_name="Trash bags", category="supply", stock_unit="piece",
+                                      package_amount=40, location="Garage", best_before_days=30)),
+                http(upc={"items": [{"title": "Glad 13 gal", "brand": "Glad"}]}), CODE)
+    group = next(x["id"] for x in g.objects("product_groups") if x["name"] == "Household supplies")
+    garage = next(x["id"] for x in g.objects("locations") if x["name"] == "Garage")
+    child = g.get_object("products", r.product_id)
+    parent = g.get_object("products", child["parent_product_id"])
+    for p in (child, parent):
+        assert p["product_group_id"] == group and p["default_best_before_days"] == -1 and p["location_id"] == garage
+    food = resolve(g, FakeAI(guess=guess()), http(off=OFF), "777")
+    assert "product_group_id" not in g.get_object("products", food.product_id)

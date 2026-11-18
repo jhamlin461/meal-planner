@@ -68,6 +68,11 @@ if (video) {
   }
 
   async function show(d, code) {
+    if (d.status === "need_min") {  // a new supply: how many to keep before it goes on Running low, then the add
+      const n = Number(prompt(`Keep at least how many? (${d.product}, ${d.unit})`, d.default));
+      if (n > 0 && Number.isFinite(n)) await post(`/api/products/${d.product_id}/min`, {amount: n});
+      return show(await post("/api/scan", {code, action: d.action}), code);
+    }
     if (d.status === "need_amount") {  // package size unknown: ask, then send the same scan with the amount
       const n = Number(prompt(`How much ${d.product} (${d.unit})?`));
       if (n > 0 && Number.isFinite(n)) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);

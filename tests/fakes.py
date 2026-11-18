@@ -107,7 +107,15 @@ class FakeGrocy:
                                   if new_amount > 0 else [])
 
     def volatile(self, days):
-        return self.volatile_result
+        """The fixed result tests set; once any product has a min stock amount, missing_products is computed."""
+        mins = [p for p in self.objects("products") if float(p.get("min_stock_amount") or 0) > 0]
+        if not mins:
+            return self.volatile_result
+        stock = self.stock_amounts()
+        missing = [{"id": p["id"], "name": p["name"], "amount_missing": float(p["min_stock_amount"]) - stock.get(p["id"], 0),
+                    "is_partly_in_stock": int(stock.get(p["id"], 0) > 0)}
+                   for p in mins if stock.get(p["id"], 0) < float(p["min_stock_amount"])]
+        return {**self.volatile_result, "missing_products": missing}
 
     _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 

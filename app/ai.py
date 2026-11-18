@@ -31,6 +31,7 @@ class ProductGuess(BaseModel):
     location: str
     best_before_days: int
     g_per_unit: float
+    category: Literal["food", "supply"] = "food"
 
 
 class ConversionGuess(BaseModel):
@@ -81,7 +82,10 @@ Use the given product info (barcode database data or a package photo). Prefer an
 name (is_new_generic=true). location must be one of the given locations. stock_unit is g, ml or piece; when you
 pick an existing generic, stock_unit must be that generic's stock_unit. package_amount is the package size in
 stock_unit (e.g. count the tortillas when the generic is in piece), or null if unknown or not expressible in it. best_before_days is a typical shelf life once bought. g_per_unit is grams per
-stock unit (1 for g, about 1 for ml of water-like liquids, grams per piece for piece)."""
+stock unit (1 for g, about 1 for ml of water-like liquids, grams per piece for piece).
+category is supply for non-food household consumables (trash bags, toilet paper, detergent, cat litter,
+cleaning products), else food. Supplies never expire (best_before_days -1) and go where they are kept at home
+(Bathroom, Laundry, Under sink, Garage, Closet)."""
 
 CONVERSION_PROMPT = """Give the multiplier that converts an amount of the named cooking ingredient from
 from_unit to to_unit (to = from * factor), with a one-sentence explanation."""

@@ -897,3 +897,81 @@ def test_who_and_people_live_in_me(hv):
     assert 'href="/me" aria-current="page"' in c.get("/who").text
     people = c.get("/home/people").text
     assert 'href="/me" aria-current="page"' in people and 'href="/home" aria-current' not in people
+
+
+# ---- household supplies -----------------------------------------------------------------------------------------
+def supply(g, name="Trash bags", min_stock=2, stock=0, **uf):
+    group = next(x["id"] for x in g.objects("product_groups") if x["name"] == "Household supplies")
+    pid = product(g, name, "piece", product_group_id=group, min_stock_amount=min_stock, default_best_before_days=-1,
+                  location_id=ids(g).location["Garage"])
+    if stock:
+        g.add_stock(pid, stock, None, ids(g).location["Garage"])
+    if uf:
+        g.set_userfields("products", pid, uf)
+    return pid
+
+
+def test_new_supply_asks_keep_at_least(env):
+    g, ai, _, c, _ = env
+    ai.guess = ProductGuess(generic_name="Trash bags", is_new_generic=True, stock_unit="piece", package_amount=40,
+                            location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
+    r = c.post("/api/scan/photo", data={"code": "4242", "action": "add"},
+               files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
+    assert r["status"] == "need_min" and r["unit"] == "piece" and r["default"] == 40 and r["action"] == "add"
+    pid = r["product_id"]
+    assert pid not in g.stock
+    for bad in (0, -1, "inf"):
+        assert c.post(f"/api/products/{pid}/min", json={"amount": bad}).status_code == 422
+    assert c.post("/api/products/999/min", json={"amount": 2}).status_code == 404
+    assert c.post(f"/api/products/{pid}/min", json={"amount": 2}).json() == {"status": "ok"}
+    assert g.get_object("products", pid)["min_stock_amount"] == 2
+    r = c.post("/api/scan", json={"code": "4242", "action": "add"}).json()  # the add continues
+    assert r["status"] == "ok" and r["amount"] == 40 and g.stock_amounts()[pid] == 40
+    assert g.stock[pid][0]["best_before_date"] is None  # never expires
+    assert c.post("/api/scan", json={"code": "4242", "action": "add"}).json()["status"] == "ok"  # asked once only
+
+
+def test_running_low_in_walmart_cart(env):
+    g, _, _, c, _ = env
+    bags = supply(g, stock=1, walmart_item_id="777", package_amount=40)
+    soap = supply(g, "Dish soap", min_stock=1)
+    extras = ids(g).list["Extras"]
+    c.post("/shopping/extra", data={"name": "candles"})
+    html = c.get("/shopping").text
+    assert html.index("<h2>Meal plan</h2>") < html.index("<h2>Running low</h2>") < html.index("<h2>Extras</h2>")
+    assert "addToCart?items=777" in html and "walmart.com/search?q=Dish+soap" in html
+    low = ids(g).list["Running low"]
+    assert sorted((r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)) == \
+        [(bags, 1), (soap, 1)]
+    row = next(r for r in g.objects("shopping_list", shopping_list_id=low) if r["product_id"] == bags)
+    c.post(f"/shopping/{row['id']}/toggle")
+    assert "addToCart" not in c.get("/shopping").text  # ticked = already got it
+    c.post("/shopping/bought")
+    assert g.stock_amounts()[bags] == 41 and g.stock[bags][-1]["best_before_date"] is None
+    assert [r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)] == [soap]
+    assert [r["note"] for r in g.objects("shopping_list", shopping_list_id=extras)] == ["candles"]
+
+
+def test_supplies_view_used_one(env):
+    g, _, _, c, _ = env
+    bags = supply(g, stock=41, package_amount=40)
+    sponge = supply(g, "Sponges", min_stock=0, stock=3)
+    child = supply(g, "Glad bags", stock=5)
+    g.update("products", child, {"parent_product_id": bags})  # bags is now a generic: its child row is shown
+    html = c.get("/home/supplies").text
+    assert "Glad bags" in html and "Sponges" in html and f"/home/supplies/{bags}/" not in html
+    assert f'action="/home/supplies/{sponge}/used"' in html and "Used one" in html and "Keep at least" in html
+    r = c.post(f"/home/supplies/{child}/used", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/home/supplies")
+    assert g.stock_amounts()[child] == 4  # no package size: one unit
+    g.set_userfields("products", child, {"package_amount": 10})
+    c.post(f"/home/supplies/{child}/used")
+    assert g.stock_amounts()[child] == 0  # a package, but never more than is in stock
+    assert c.post(f"/home/supplies/{child}/used").status_code == 200  # nothing left: no error
+    low = ids(g).list["Running low"]
+    assert [(r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)] == [(child, 2)]
+    c.post(f"/home/supplies/{sponge}/min", data={"amount": 4})
+    assert g.get_object("products", sponge)["min_stock_amount"] == 4
+    assert sorted(r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)) == [sponge, child]
+    assert c.post(f"/home/supplies/{sponge}/min", data={"amount": -1}).status_code == 422
+    assert c.post("/home/supplies/999/used").status_code == 404

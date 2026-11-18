@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.home import supplies_group
 from app.setup_grocy import LOCATIONS, ids
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{}.json"
@@ -97,6 +98,8 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
     loc = i.location[g.location if g.location in LOCATIONS else "Pantry"]
     fields = {"location_id": loc, "qu_id_stock": unit, "qu_id_purchase": unit, "qu_id_consume": unit,
               "qu_id_price": unit, "default_best_before_days": g.best_before_days}
+    if g.category == "supply":  # household supplies never expire
+        fields |= {"product_group_id": supplies_group(grocy), "default_best_before_days": -1}
     gpu = g.g_per_unit if g.g_per_unit is not None else (None if g.stock_unit == "piece" else 1)
     uf = {**({"package_amount": g.package_amount} if g.package_amount and g.package_amount > 0 else {}),
           **({"g_per_unit": gpu} if gpu is not None else {})}  # unknown size: the scan screen asks for the amount
@@ -144,7 +147,7 @@ def relink(grocy, product_id: int, generic_name: str) -> None:
     if clash and clash.get("parent_product_id"):
         raise ValueError(f"'{generic_name}' is already a child product, not a generic; pick a generic name")
     keep = ("location_id", "qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price",
-            "default_best_before_days")
+            "default_best_before_days", "product_group_id")
     uf = grocy.userfields("products", product_id)
     parent = _generic_named(grocy, generic_name)
     upd: dict = {}

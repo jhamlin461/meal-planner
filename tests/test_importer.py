@@ -251,7 +251,7 @@ def test_create_generic_creates_and_reuses():
     fdc = {"foods": [{"foodNutrients": [{"nutrientId": 1008, "unitName": "KCAL", "value": 20}]}]}
     http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=fdc)))
     guess = ProductGuess(generic_name="Canned tomatoes", is_new_generic=True, stock_unit="g", package_amount=None,
-                         location="Garage", best_before_days=700, g_per_unit=1)
+                         location="Attic", best_before_days=700, g_per_unit=1)
     pid = create_generic(g, FakeAI(guess=guess), http, settings, "Crushed tomatoes")
     p = g.get_object("products", pid)
     assert p["name"] == "Crushed tomatoes" and not p.get("parent_product_id")

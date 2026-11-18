@@ -50,29 +50,39 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
         positions.setdefault(int(p["recipe_id"]), []).append(p)
     needs = week_needs(entries, positions, base)
     staples = {pid for pid in needs if str(grocy.userfields("products", pid).get("staple")) == "1"}
-    # compute everything before touching the list, so a failure can't leave it emptied
     short = shortfall(needs, grocy.stock_amounts(), staples)
+    _sync_list(grocy, "Meal plan", short)
+    return short
 
-    list_id = ids(grocy).list["Meal plan"]
-    old = grocy.objects("shopping_list", shopping_list_id=list_id)
+
+def rebuild_running_low(grocy) -> dict[int, float]:
+    """Products below their keep-at-least (Grocy min stock), by how much, into the Running low list."""
+    low = {int(r["id"]): float(r["amount_missing"]) for r in grocy.volatile(1).get("missing_products") or []}
+    _sync_list(grocy, "Running low", low)
+    return low
+
+
+def _sync_list(grocy, name: str, wanted: dict[int, float]) -> None:
+    """Make list `name` one row per product in `wanted`, in place so row ids (and done flags) stay stable for pages
+    already open. Callers compute `wanted` before this, so a failure can't leave the list emptied."""
+    list_id = ids(grocy).list[name]
     kept: set[int] = set()
-    for r in old:  # update in place so row ids (and done flags) stay stable for pages already open
+    for r in grocy.objects("shopping_list", shopping_list_id=list_id):
         pid = int(r["product_id"]) if r.get("product_id") else None
-        if pid in short and pid not in kept:
+        if pid in wanted and pid not in kept:
             kept.add(pid)
             old_amt = float(r.get("amount") or 0)
-            if abs(old_amt - short[pid]) > 1e-9:
-                upd = {"amount": short[pid]}
-                if short[pid] > old_amt:  # the tick covered the old amount only
+            if abs(old_amt - wanted[pid]) > 1e-9:
+                upd = {"amount": wanted[pid]}
+                if wanted[pid] > old_amt:  # the tick covered the old amount only
                     upd["done"] = 0
                 grocy.update("shopping_list", int(r["id"]), upd)
         else:  # no longer needed, free-text, or a duplicate row
             grocy.delete("shopping_list", int(r["id"]))
-    for pid, amount in short.items():
+    for pid, amount in wanted.items():
         if pid not in kept:
             grocy.create("shopping_list", {"shopping_list_id": list_id, "product_id": pid, "amount": amount,
                                            "done": 0})
-    return short
 
 
 def walmart_items(grocy, shortfall: dict[int, float]) -> tuple[list[tuple[str, int]], list[dict]]:

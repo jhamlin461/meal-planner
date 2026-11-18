@@ -2,5 +2,20 @@
 {% block title %}Supplies{% endblock %}
 {% block content %}
 <h1>Supplies</h1>
-<p class="empty">Supplies you keep at home will show here.</p>
+{% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+{% for s in supplies %}
+<div class="card">
+  <p class="row"><b class="grow breakable">{{ s.name }}</b><span class="{{ 'warn' if s.amount < s.min else 'muted' }}">{{ s.amount|num }} {{ s.unit }}{% if s.amount < s.min %} · running low{% endif %}</span></p>
+  <form class="inline" method="post" action="/home/supplies/{{ s.id }}/min">
+    <label for="min-{{ s.id }}">Keep at least</label>
+    <input id="min-{{ s.id }}" type="number" name="amount" step="any" min="0" value="{{ s.min|exact }}" inputmode="decimal" required> {{ s.unit }}
+    <button class="btn">Save</button>
+  </form>
+  <div class="card-actions">
+    <form method="post" action="/home/supplies/{{ s.id }}/used"><button class="btn btn-primary"{% if s.amount <= 0 %} disabled{% endif %}>Used one</button></form>
+  </div>
+</div>
+{% else %}
+<p class="empty">Supplies you keep at home will show here. <a href="/scan?from=chores">Scan a pack</a> to add one.</p>
+{% endfor %}
 {% endblock %}
