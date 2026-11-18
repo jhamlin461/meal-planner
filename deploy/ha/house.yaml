@@ -4,13 +4,13 @@
 # Add to secrets.yaml (the same value as the app's HOOK_SECRET):
 #   house_secret: <long random string>
 # Replace <lxc-ip> with the LXC's LAN address.
-# Names below are the people as saved in the app (Me -> People); change "Josh" and "Catherine" to match.
+# Names below are the people as saved in the app (Me -> People); change "Joshua" and "Catherine" to match.
 rest:
   - resource: http://<lxc-ip>:8000/api/summary
     scan_interval: 60
     sensor:
       - name: "House: Joshua needs you now"
-        value_template: "{{ (value_json.people.get('Josh') or {}).get('now', 0) }}"
+        value_template: "{{ (value_json.people.get('Joshua') or {}).get('now', 0) }}"
         json_attributes_path: "$.people.Joshua"
         json_attributes:
           - titles
@@ -97,7 +97,7 @@ automation:
 # title: House
 # entities:
 #   - entity: sensor.house_josh_needs_you_now
-#     name: Josh needs you now
+#     name: Joshua needs you now
 #   - entity: sensor.house_catherine_needs_you_now
 #     name: Catherine needs you now
 #   - entity: sensor.house_use_soon
