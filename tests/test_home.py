@@ -292,3 +292,23 @@ def test_skip_after_notification_done_is_a_no_op(hv):
     r = c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
     assert "Already done." in unquote_plus(r.headers["location"])
     assert [x["skipped"] for x in g.chore_log] == [False]
+
+
+def test_grocy_ids_as_strings(hv):
+    """Real Grocy may send ids as strings; they still match people, names and rows."""
+    g, house, c, (pa, a), _ = hv
+    cid = g.create("chores", {"name": "Mop", "period_type": "daily", "assignment_type": "who-least-did-first",
+                              "assignment_config": str(a)})
+    g.calculate_next_assignments()
+    g.create("tasks", {"name": "Call vet", "due_date": "2026-11-20", "done": 0, "assigned_to_user_id": a})
+    g.create("batteries", {"name": "Smoke alarm", "charge_interval_days": 90})
+
+    def strs(f):
+        return lambda *x, **k: [{n: str(v) if v is not None and (n == "id" or n.endswith("_id")) else v
+                                 for n, v in r.items()} for r in f(*x, **k)]
+    g.chores_status, g.open_tasks, g.batteries_status = (strs(g.chores_status), strs(g.open_tasks),
+                                                          strs(g.batteries_status))
+    html = c.get("/home").text
+    assert "Mop</b>" in html and "Josh&#39;s turn." in html and "For Josh." in html and "Smoke alarm</b>" in html
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": "kitchen"})
+    assert g.chore_log[-1]["done_by"] == a

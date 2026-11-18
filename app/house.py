@@ -18,6 +18,19 @@ class Person:
     notify_service: str
 
 
+def gid(v) -> int | None:
+    """A Grocy id as an int (Grocy may send "3"); None when blank or not a number."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def by_grocy_user(people: list[Person], uid) -> Person | None:
+    """The person with Grocy user id `uid` (an int or Grocy's string), or None."""
+    return next((p for p in people if uid is not None and p.grocy_user_id == gid(uid)), None)
+
+
 @dataclass
 class Reminder:
     key: str

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from app.ha import HAError
-from app.house import LOCK, HouseStore, Person, Reminder
+from app.house import LOCK, HouseStore, Person, Reminder, by_grocy_user, gid
 
 log = logging.getLogger(__name__)
 ICONS = {"chore": "broom", "task": "calendar-check", "battery": "battery-sync-outline"}
@@ -38,8 +38,8 @@ def open_items(grocy) -> dict[str, tuple[str, datetime | None, object]]:
                                       c.get("next_execution_assigned_to_user_id")) for c in grocy.chores_status()}
     out |= {f"task:{t['id']}": (t.get("name") or "", _due(t.get("due_date")), t.get("assigned_to_user_id"))
             for t in grocy.open_tasks() if not int(t.get("done") or 0)}
-    names = {b["id"]: b.get("name") or "" for b in grocy.objects("batteries")}
-    out |= {f"battery:{b['battery_id']}": (names.get(b["battery_id"], ""), _due(b.get("next_estimated_charge_time")), None)
+    names = {gid(b["id"]): b.get("name") or "" for b in grocy.objects("batteries")}
+    out |= {f"battery:{b['battery_id']}": (names.get(gid(b["battery_id"]), ""), _due(b.get("next_estimated_charge_time")), None)
             for b in grocy.batteries_status()}
     return out
 
@@ -63,7 +63,7 @@ def _items(open_: dict, house: HouseStore, now: datetime) -> list[Item]:
             continue
         r = house.reminder(key)
         fire = due if due.date() < now.date() else datetime.combine(due.date(), time.fromisoformat(r.remind_at))
-        p = next((p for p in people if uid is not None and str(p.grocy_user_id) == str(uid)), None)
+        p = by_grocy_user(people, uid)
         out.append(Item(key, title, _when(due.date(), now.date()), due, fire, r.audience or (f"person:{p.id}" if p else "home"),
                         r.verb or "Done", r.repeat_min or 120, _icon(key.split(":")[0], title)))
     return out

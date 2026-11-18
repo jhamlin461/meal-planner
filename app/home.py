@@ -2,7 +2,7 @@
 import re
 from datetime import date
 
-from app.house import LOCK, HouseStore, Person, Reminder
+from app.house import LOCK, HouseStore, Person, Reminder, by_grocy_user, gid
 from app.setup_grocy import supplies_group
 
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -176,13 +176,13 @@ def _due(s: str | None, today: date) -> dict:
 
 
 def chore_rows(grocy, people: list[Person], today: date) -> list[dict]:
-    c_by_id = {c["id"]: c for c in grocy.objects("chores")}
+    c_by_id = {gid(c["id"]): c for c in grocy.objects("chores")}
     names = {i: c.get("name") for i, c in c_by_id.items()}
     out = []
     for r in grocy.chores_status():
-        p = next((p for p in people if p.grocy_user_id == r.get("next_execution_assigned_to_user_id")), None)
-        turns = c_by_id.get(r["chore_id"], {}).get("assignment_type") == "who-least-did-first"
-        out.append({"id": r["chore_id"], "turns": turns, "name": names.get(r["chore_id"]) or r.get("chore_name") or "",
+        p, cid = by_grocy_user(people, r.get("next_execution_assigned_to_user_id")), gid(r["chore_id"])
+        turns = c_by_id.get(cid, {}).get("assignment_type") == "who-least-did-first"
+        out.append({"id": cid, "turns": turns, "name": names.get(cid) or r.get("chore_name") or "",
                     "who": p.name if p else None, **_due(r.get("next_estimated_execution_time"), today)})
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
 
@@ -190,14 +190,14 @@ def chore_rows(grocy, people: list[Person], today: date) -> list[dict]:
 def task_rows(grocy, people: list[Person], today: date) -> list[dict]:
     out = []
     for t in grocy.open_tasks():
-        p = next((p for p in people if p.grocy_user_id == t.get("assigned_to_user_id")), None)
-        out.append({"id": t["id"], "name": t.get("name") or "", "who": p.name if p else None, **_due(t.get("due_date"), today)})
+        p = by_grocy_user(people, t.get("assigned_to_user_id"))
+        out.append({"id": gid(t["id"]), "name": t.get("name") or "", "who": p.name if p else None, **_due(t.get("due_date"), today)})
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
 
 
 def upkeep_rows(grocy, today: date) -> list[dict]:
-    names = {b["id"]: b.get("name") or "" for b in grocy.objects("batteries")}
-    out = [{"id": r["battery_id"], "name": names.get(r["battery_id"], ""), "who": None,
+    names = {gid(b["id"]): b.get("name") or "" for b in grocy.objects("batteries")}
+    out = [{"id": gid(r["battery_id"]), "name": names.get(gid(r["battery_id"]), ""), "who": None,
             **_due(r.get("next_estimated_charge_time"), today)} for r in grocy.batteries_status()]
     return sorted(out, key=lambda x: (x["date"] is None, x["date"] or today, x["name"]))
 
@@ -217,6 +217,6 @@ def chore_values(c: dict, rem: Reminder, people: list[Person]) -> dict:
     ids = [x.strip() for x in str(c.get("assignment_config") or "").split(",") if x.strip()]
     if c.get("assignment_type") != "who-least-did-first" or len(ids) == 1:  # one person = a rotation of one
         uid = ids[0] if c.get("assignment_type") == "who-least-did-first" else c.get("next_execution_assigned_to_user_id")
-        p = next((p for p in people if str(p.grocy_user_id) == str(uid)), None)
+        p = by_grocy_user(people, uid)
         v["who"] = str(p.id) if p else "turns"
     return v

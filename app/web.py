@@ -27,7 +27,7 @@ from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
 from app import home as hm
-from app.house import LOCK, HouseStore, Person
+from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
@@ -203,7 +203,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         """Whoever's device this is gets the credit; the kitchen screen credits the person it was assigned to."""
         who = current_who(request)
         if who == "kitchen":
-            return next((p for p in house.people() if str(p.grocy_user_id) == str(assigned)), None)
+            return by_grocy_user(house.people(), assigned)
         return who if isinstance(who, Person) else None
 
     def done(request: Request, kind: str, id: int, due: str | None, skipped: bool = False) -> bool:
