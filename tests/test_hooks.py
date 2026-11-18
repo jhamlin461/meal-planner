@@ -32,7 +32,22 @@ def test_hook_requires_secret(tmp_path):
     # no HOOK_SECRET set: hooks are off, even an empty header is refused
     off = client(tmp_path, g, house, ha, secret="")
     assert off.post("/api/events/washer-finished", headers={"X-House-Secret": ""}).status_code == 403
-    assert c.post("/api/hook/action", json={"action": "rm -rf"}, headers=SECRET).status_code == 400
+    # a wrong secret is refused before the body is looked at
+    assert c.post("/api/hook/action", json={"bad": 1}, headers={"X-House-Secret": "nope"}).status_code == 403
+
+
+def test_hook_rejects_bad_action_ids(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    c = client(tmp_path, g, house, ha)
+    tid = task(g, house, audience="home", remind_at="10:00")
+    tick(g, house, ha, s, at(18, 10))
+    post = lambda a: c.post("/api/hook/action", json={"action": a}, headers=SECRET)  # noqa: E731
+    r = post(f"HM:done:task:{tid}:999")
+    assert r.status_code == 404 and r.json() == {"status": "error", "message": "unknown person"}
+    for bad in ("rm -rf", f"HM:done:task:x:{josh}", f"HM:done:robot:{tid}:{josh}", f"HM:done:task:١:{josh}",
+                f"HM:done:task:{tid}:١", f"HM:done:task:{'9' * 5000}:{josh}", f"HM:nap:task:{tid}:{josh}"):
+        assert post(bad).status_code == 400, bad
+    assert g.open_tasks() and house.reminder(f"task:{tid}").sent_for  # nothing was done
 
 
 def test_action_done_completes_and_clears(tmp_path):
@@ -79,7 +94,7 @@ def test_double_done_executes_once(tmp_path):
     assert len(g.chore_log) == 1 and g.stock_amounts()[pid] == 4
     # done in the app first, then a stale notification is tapped: no second run
     tick(g, house, ha, s, at(19, 19))
-    assert c.post(f"/home/chores/{cid}/done", cookies={"who": str(cat)}).status_code == 303
+    assert c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-19"}, cookies={"who": str(cat)}).status_code == 303
     assert c.post("/api/hook/action", json=act, headers=SECRET).json() == {"status": "already-done"}
     assert len(g.chore_log) == 2 and g.stock_amounts()[pid] == 3
 
@@ -140,7 +155,7 @@ def test_today_buttons(tmp_path):
     tick(g, house, ha, s, at(18, 10))
     assert c.post(f"/today/task/{tid}/snooze").status_code == 303
     assert house.reminder(f"task:{tid}").snooze_until and len(ha.cleared) == 2
-    assert c.post(f"/today/task/{tid}/done", cookies={"who": str(josh)}).status_code == 303
+    assert c.post(f"/today/task/{tid}/done", data={"due": "2026-11-18"}, cookies={"who": str(josh)}).status_code == 303
     assert g.open_tasks() == [] and f"task:{tid}" not in house.keys()
     assert c.post("/today/nope/1/done").status_code == 422
 
@@ -156,7 +171,6 @@ def test_ha_package_has_secret_and_automations():
 def test_done_while_ha_down_runs_once_and_clears_later(tmp_path):
     g, house, ha, s, josh, cat = world(tmp_path)
     c = client(tmp_path, g, house, ha)
-    assert c.post("/api/hook/action", json={"bad": 1}, headers={"X-House-Secret": "nope"}).status_code == 403
     cid, pid = trash(g, house)
     tick(g, house, ha, s, at(18, 19))
     ha.down = True
@@ -169,3 +183,30 @@ def test_done_while_ha_down_runs_once_and_clears_later(tmp_path):
     tick(g, house, ha, s, at(18, 19, 1))
     assert sorted(ha.cleared) == [(CAT_PHONE, f"chore:{cid}"), (JOSH_PHONE, f"chore:{cid}")]
     assert house.reminder(f"chore:{cid}") == Reminder(f"chore:{cid}", "home", "19:00") and house.flag("ha_error") is None
+
+
+def test_app_done_for_an_old_occurrence_is_a_no_op(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    c = client(tmp_path, g, house, ha)
+    cid, pid = trash(g, house)
+    assert 'name="due" value="2026-11-18"' in c.get("/home").text  # the button carries the occurrence it shows
+    tick(g, house, ha, s, at(18, 19))
+    c.post("/api/hook/action", json={"action": f"HM:done:chore:{cid}:{josh}"}, headers=SECRET)
+    # the Home page was loaded before the phone tap: its Done is for the 18th, which is already done
+    r = c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(cat)})
+    assert r.status_code == 303 and "Already+done" in r.headers["location"]
+    r = c.post(f"/home/chores/{cid}/done", cookies={"who": str(cat)})  # an old cached page with no due field
+    assert "Already+done" in r.headers["location"]
+    assert len(g.chore_log) == 1 and g.stock_amounts()[pid] == 4
+    # the button for the current occurrence still works
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-19"}, cookies={"who": str(cat)})
+    assert len(g.chore_log) == 2 and g.stock_amounts()[pid] == 3
+
+
+def test_done_on_an_unreminded_item_leaves_no_reminder_row(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    c = client(tmp_path, g, house, ha)
+    cid = g.create("chores", {"name": "Dust", "period_type": "daily", "period_interval": 1})
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(josh)})
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(josh)})  # stale
+    assert len(g.chore_log) == 1 and house.keys() == []

@@ -26,7 +26,7 @@ from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
 from app import home as hm
-from app.house import HouseStore, Person
+from app.house import LOCK, HouseStore, Person
 from app import reminders as rm
 from app.reminders import start_loop
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
@@ -192,49 +192,48 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         n = hm.add_starters(grocy, house, house.people())
         return home_back(f"Added {n} starter chore{'' if n == 1 else 's'}." if n else "The starter chores are already there.")
 
-    def done_by(request: Request, assigned) -> int | None:
+    def credit(request: Request, assigned) -> Person | None:
         """Whoever's device this is gets the credit; the kitchen screen credits the person it was assigned to."""
         who = current_who(request)
-        return who.grocy_user_id if isinstance(who, Person) else assigned if who == "kitchen" else None
+        if who == "kitchen":
+            return next((p for p in house.people() if str(p.grocy_user_id) == str(assigned)), None)
+        return who if isinstance(who, Person) else None
 
-    def done(request: Request, kind: str, id: int) -> bool:
-        """In-app Done: always runs (the person is looking at it) and clears every phone it was sent to."""
-        who = current_who(request)
-        if who == "kitchen" and kind == "chore":
-            uid = next((r.get("next_execution_assigned_to_user_id") for r in grocy.chores_status() if r["chore_id"] == id), None)
-            who = next((p for p in house.people() if p.grocy_user_id == uid), None)
-        return rm.complete(grocy, house, ha, f"{kind}:{id}", who if isinstance(who, Person) else None)
+    def done(request: Request, kind: str, id: int, due: str | None) -> bool:
+        """In-app Done for the occurrence the page showed (`due`); a page older than the item's last Done is a no-op."""
+        key = f"{kind}:{id}"
+        with LOCK:  # one read of Grocy, and two taps can't both pass the due check
+            open_ = rm.open_items(grocy)
+            who = credit(request, open_.get(key, (None, None, None))[2])
+            return rm.complete(grocy, house, ha, key, who, due, open_)
 
-    def chore_done(request: Request, cid: int, skipped: bool):
-        row = next((r for r in grocy.chores_status() if r["chore_id"] == cid), None)
-        if row is None:
-            raise HTTPException(404, "No such chore")
-        if not skipped:
-            done(request, "chore", cid)
-            return home_back("Done.")
-        grocy.execute_chore(cid, done_by(request, row.get("next_execution_assigned_to_user_id")), skipped)
-        return home_back("Skipped.")
+    def done_msg(ran: bool) -> str:
+        return "Done." if ran else "Already done."
 
     @app.post("/home/chores/{cid}/done")
-    def chore_done_post(request: Request, cid: int):
-        return chore_done(request, cid, False)
+    def chore_done_post(request: Request, cid: int, due: str | None = Form(None)):
+        return home_back(done_msg(done(request, "chore", cid, due)))
 
     @app.post("/home/chores/{cid}/skip")
     def chore_skip_post(request: Request, cid: int):
-        return chore_done(request, cid, True)
+        row = next((r for r in grocy.chores_status() if r["chore_id"] == cid), None)
+        if row is None:
+            raise HTTPException(404, "No such chore")
+        p = credit(request, row.get("next_execution_assigned_to_user_id"))
+        grocy.execute_chore(cid, p.grocy_user_id if p else None, True)
+        return home_back("Skipped.")
 
     @app.post("/home/tasks/{tid}/done")
-    def task_done_post(request: Request, tid: int):
-        return home_back("Done." if done(request, "task", tid) else "That was already done.")
+    def task_done_post(request: Request, tid: int, due: str | None = Form(None)):
+        return home_back(done_msg(done(request, "task", tid, due)))
 
     @app.post("/home/upkeep/{bid}/done")
-    def upkeep_done_post(request: Request, bid: int):
-        return home_back("Done." if done(request, "battery", bid) else "That was already done.")
+    def upkeep_done_post(request: Request, bid: int, due: str | None = Form(None)):
+        return home_back(done_msg(done(request, "battery", bid, due)))
 
     @app.post("/today/{kind}/{id}/done")
-    def today_done(request: Request, kind: Literal["chore", "task", "battery"], id: int):
-        done(request, kind, id)
-        return back("/")
+    def today_done(request: Request, kind: Literal["chore", "task", "battery"], id: int, due: str | None = Form(None)):
+        return back("/?" + urlencode({"msg": done_msg(done(request, kind, id, due))}))
 
     @app.post("/today/{kind}/{id}/snooze")
     def today_snooze(kind: Literal["chore", "task", "battery"], id: int):
@@ -253,7 +252,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def hook_action(body: ActionIn):
         status = rm.action(grocy, house, ha, body.action, datetime.now())
         if status is None:
-            raise HTTPException(400, "Not a house action")
+            return JSONResponse({"status": "error", "message": "not a house action"}, status_code=400)
+        if status == "unknown-person":
+            return JSONResponse({"status": "error", "message": "unknown person"}, status_code=404)
         return {"status": status}
 
     @app.post("/api/events/washer-finished", dependencies=[Depends(hook_secret)])

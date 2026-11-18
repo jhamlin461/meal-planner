@@ -97,7 +97,7 @@ def test_task_whoever_home_stored_as_audience_home(hv):
     c.post("/home/tasks/new", data={"title": "Call vet", "who": str(pa), "remind_at": "09:00"})
     t2 = next(t for t in g.objects("tasks") if t["name"] == "Call vet")
     assert house.reminder(f"task:{t2['id']}").audience == f"person:{pa}" and t2["assigned_to_user_id"] == a
-    c.post(f"/home/tasks/{t2['id']}/done")
+    c.post(f"/home/tasks/{t2['id']}/done", data={"due": ""})  # no due date: always its one occurrence
     assert [t["name"] for t in g.open_tasks()] == ["Fix the gate"]
 
 
@@ -107,7 +107,7 @@ def test_upkeep_charge(hv):
     (b,) = g.objects("batteries")
     assert b["charge_interval_days"] == 90 and house.reminder(f"battery:{b['id']}").remind_at == "10:00"
     assert "Smoke alarm" in c.get("/home").text
-    c.post(f"/home/upkeep/{b['id']}/done")
+    c.post(f"/home/upkeep/{b['id']}/done", data={"due": "2027-02-16"})
     assert len(g.battery_log) == 1
     c.post(f"/home/upkeep/{b['id']}/delete")
     assert not g.objects("batteries") and gone_after_tick(g, house)
@@ -116,15 +116,17 @@ def test_upkeep_charge(hv):
 def test_done_credits_device_person(hv):
     g, house, c, _, (pb, b) = hv
     cid = g.create("chores", {"name": "Dishes", "period_type": "daily", "period_interval": 1})
-    c.post(f"/home/chores/{cid}/done", cookies={"who": str(pb)})
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": str(pb)})
     assert g.chore_log[-1]["done_by"] == b and not g.chore_log[-1]["skipped"]
 
 
 def test_kitchen_done_credits_assigned_person(hv):
     g, house, c, (pa, a), _ = hv
     cid = g.create("chores", {"name": "Mop", "period_type": "daily", "next_execution_assigned_to_user_id": a})
-    c.post(f"/home/chores/{cid}/done", cookies={"who": "kitchen"})
+    c.post(f"/home/chores/{cid}/done", data={"due": "2026-11-18"}, cookies={"who": "kitchen"})
     assert g.chore_log[-1]["done_by"] == a
+    c.post(f"/home/chores/{cid}/skip", cookies={"who": "kitchen"})  # Skip credits the same way
+    assert g.chore_log[-1]["done_by"] == a and g.chore_log[-1]["skipped"]
 
 
 def test_skip_moves_date_without_consuming(hv):
