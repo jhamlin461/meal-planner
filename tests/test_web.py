@@ -286,7 +286,8 @@ class DownGrocy(FakeGrocy):
         raise self.exc
 
 
-@pytest.mark.parametrize("exc", [GrocyError("GET /objects/recipes -> 502"), httpx.ConnectError("refused")])
+@pytest.mark.parametrize("exc", [GrocyError("GET /objects/recipes -> 502"), httpx.ConnectError("refused"),
+                                 httpx.ReadTimeout("slow"), httpx.RemoteProtocolError("dropped")])
 def test_grocy_down_shows_503(tmp_path, exc):
     settings = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
     app = create_app(DownGrocy(exc), FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)), settings,
@@ -650,3 +651,38 @@ def test_pantry_machine_read_amounts_are_not_rounded_up(env):
     g.add_stock(pid, 2189.1366, None, ids(g).location["Pantry"])
     html = c.get("/pantry").text
     assert 'name="amount" value="2189.1366"' in html and 'max="2189.1366"' in html
+
+
+def test_plan_add_and_remove_wait_for_the_plan_lock(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowGrocy(FakeGrocy):
+        def add_stock(self, *a):
+            started.set()
+            release.wait(5)
+            super().add_stock(*a)
+
+    g = SlowGrocy()
+    bootstrap(g)
+    pid, rid = flour_recipe(g)
+    gone = g.create("meal_plan", {"day": _future_day(4).isoformat(), "type": "recipe", "recipe_id": rid,
+                                  "recipe_servings": 2, "section_id": ids(g).section["Dinner"], "note": "", "done": 0})
+    g.create("shopping_list", {"shopping_list_id": ids(g).list["Extras"], "product_id": pid, "amount": 5, "done": 1})
+    app = create_app(g, FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)),
+                     Settings("", "", "", "KEY", None, 6, tmp_path, 3), PendingStore(tmp_path / "pending"))
+    with TestClient(app) as c:
+        bought = threading.Thread(target=lambda: c.post("/shopping/bought"))
+        bought.start()
+        assert started.wait(5)  # Bought holds the plan lock
+        waiting = [threading.Thread(target=lambda: c.post("/plan", data={
+                       "day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})),
+                   threading.Thread(target=lambda: c.post(f"/plan/{gone}/remove"))]
+        for t in waiting:
+            t.start()
+        time.sleep(0.3)
+        during = [r["id"] for r in g.objects("meal_plan")]
+        release.set()
+        for t in [bought, *waiting]:
+            t.join(5)
+    assert during == [gone]  # neither ran while Bought held the lock
+    assert len(g.objects("meal_plan", type="recipe")) == 1 and g.get_object("meal_plan", gone) is None

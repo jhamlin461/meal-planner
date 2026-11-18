@@ -117,7 +117,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env.filters["exact"] = _exact
     env.globals["next_op_id"] = _next_op_id
     templates = Jinja2Templates(env=env)
-    plan_lock = threading.Lock()  # Bought / Cooked it / list rebuild: a double tap or second device must not repeat them
+    plan_lock = threading.Lock()  # plan add/remove, Bought, Cooked it, list rebuild: never interleaved or repeated
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
     save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
 
@@ -135,7 +135,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return RedirectResponse(url, status_code=303)
 
     @app.exception_handler(GrocyError)
-    @app.exception_handler(httpx.ConnectError)
+    @app.exception_handler(httpx.TransportError)  # refused, timed out, dropped mid-response
     async def grocy_down(request: Request, exc: Exception):
         log.warning("Grocy unavailable: %s", exc)
         return page(request, "down.html", 503)
@@ -470,7 +470,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def plan_post(day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"), recipe_id: int = Form(),
                   servings: str = Form("")):
         recipe_or_404(recipe_id)
-        plan_meal(grocy, day, section, recipe_id, _servings(servings), settings)
+        with plan_lock:
+            plan_meal(grocy, day, section, recipe_id, _servings(servings), settings)
         return back(f"/plan?week={_monday(day).isoformat()}")
 
     def entry_week(entry_id: int) -> str:
@@ -482,7 +483,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/plan/{entry_id}/remove")
     def plan_remove(entry_id: int):
         week = entry_week(entry_id)
-        unplan_meal(grocy, entry_id, settings)
+        with plan_lock:
+            unplan_meal(grocy, entry_id, settings)
         return back(f"/plan?week={week}")
 
     @app.post("/plan/{entry_id}/cook")
