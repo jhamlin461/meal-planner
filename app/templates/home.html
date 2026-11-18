@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
-{% block title %}Home{% endblock %}
+{% block title %}Chores{% endblock %}
 {% macro when(r) %}{% if not r.date %}No due date.{% elif r.overdue %}Overdue since {{ r.date.strftime('%b') }} {{ r.date.day }}.{% elif r.today %}Due today.{% else %}Due {{ r.date.strftime('%A, %b') }} {{ r.date.day }}.{% endif %}{% endmacro %}
 {% macro item(kind, r, skip=False) %}
 <div class="card">
@@ -15,7 +15,7 @@
 </div>
 {% endmacro %}
 {% block content %}
-<h1>Home</h1>
+<h1>Chores</h1>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
 <h2>Chores</h2>
 {% for r in chores %}{{ item("chores", r, skip=True) }}{% else %}
