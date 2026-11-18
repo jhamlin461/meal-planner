@@ -810,7 +810,8 @@ def test_people_row_wraps_long_phone(hv):
     _, house, _, c = hv
     house.save_person("Cat", 1, "", "mobile_app_cat_s_pixel_10")
     html = c.get("/home/people").text
-    assert "overflow-wrap:anywhere" in html and "min-height:48px" in html and "Leave blank to use this person" in html
+    assert "breakable" in html and "style=" not in html and 'class="field"' in html
+    assert "Automatic uses the phone Home Assistant tracks" in html
 
 
 def test_who_cookie_set_and_used(hv):
