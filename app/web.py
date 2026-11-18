@@ -7,6 +7,7 @@ import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import anthropic
@@ -941,6 +942,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 if int(r["product_id"]) not in expired}
         msg = [f"{k}: {', '.join(v)}" for k, v in (("Expired", expired.values()), ("Use soon", soon.values())) if v]
         return {"count": len(expired) + len(soon), "message": "; ".join(msg)}
+
+    @app.get("/api/summary")
+    def api_summary():
+        """Read-only numbers for Home Assistant sensors (LAN only, like /api/expiring)."""
+        now = datetime.now()
+        try:  # one HA call (2 s cap) for everyone, not one per person
+            home = ha.home_states(timeout=2) if ha is not None else None
+        except HAError:
+            home = None
+        shim = SimpleNamespace(home_states=lambda timeout=None: home) if home is not None else None
+        people = {}
+        for p in house.people():
+            v = today_view(grocy, house, p, now, ha=shim, warn_days=settings.expiry_warn_days)
+            people[p.name] = {"now": len(v["now_items"]), "titles": [i.title for i in v["now_items"]]}
+        vol = grocy.volatile(settings.expiry_warn_days)
+        use_soon = {int(r["product_id"]) for k in ("expired_products", "overdue_products", "due_products")
+                    for r in vol.get(k) or []}
+        key = house.flag("laundry")
+        return {"people": people, "use_soon": len(use_soon), "running_low": len(vol.get("missing_products") or []),
+                "laundry_open": bool(key) and key in rm.open_items(grocy), "ha_ok": house.flag("ha_error") is None}
 
     return app
 

@@ -4,6 +4,29 @@
 # Add to secrets.yaml (the same value as the app's HOOK_SECRET):
 #   house_secret: <long random string>
 # Replace <lxc-ip> with the LXC's LAN address.
+# Names below are the people as saved in the app (Me -> People); change "Josh" and "Cat" to match.
+rest:
+  - resource: http://<lxc-ip>:8000/api/summary
+    scan_interval: 60
+    sensor:
+      - name: "House: Josh needs you now"
+        value_template: "{{ value_json.people['Josh'].now | default(0) }}"
+        json_attributes_path: "$.people.Josh"
+        json_attributes:
+          - titles
+      - name: "House: Cat needs you now"
+        value_template: "{{ value_json.people['Cat'].now | default(0) }}"
+        json_attributes_path: "$.people.Cat"
+        json_attributes:
+          - titles
+      - name: "House: use soon"
+        value_template: "{{ value_json.use_soon }}"
+      - name: "House: running low"
+        value_template: "{{ value_json.running_low }}"
+    binary_sensor:
+      - name: "House: laundry open"
+        value_template: "{{ value_json.laundry_open }}"
+
 rest_command:
   house_action:
     url: http://<lxc-ip>:8000/api/hook/action
@@ -68,3 +91,18 @@ automation:
           - unknown
     action:
       - service: rest_command.house_washer_started
+
+# Example dashboard card (Edit dashboard -> Add card -> Manual). Entity ids follow the sensor names above.
+# type: entities
+# title: House
+# entities:
+#   - entity: sensor.house_josh_needs_you_now
+#     name: Josh needs you now
+#   - entity: sensor.house_cat_needs_you_now
+#     name: Cat needs you now
+#   - entity: sensor.house_use_soon
+#     name: Use soon
+#   - entity: sensor.house_running_low
+#     name: Running low
+#   - entity: binary_sensor.house_laundry_open
+#     name: Laundry waiting

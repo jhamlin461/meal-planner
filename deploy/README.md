@@ -1,4 +1,4 @@
-# Deploying the meal planner
+# Deploying the house manager
 
 Runs on a Debian LXC on Proxmox with Docker Compose. Phones and the kitchen iPad reach it over Tailscale.
 
@@ -56,7 +56,7 @@ Open the app at **`https://<lxc-hostname>.<tailnet>.ts.net`** (what `tailscale s
 `http://<ip>:8000`. The camera barcode scanner (getUserMedia) and the iPad screen wake lock only work in a
 secure context, so over plain HTTP they silently fail.
 
-Port 8000 stays published on the LAN only so Home Assistant can poll `/api/expiring`. The app has no login of
+Port 8000 stays published on the LAN only so Home Assistant can poll `/api/expiring` and `/api/summary`. The app has no login of
 its own: the LAN plus your tailnet is the trust boundary. Do not forward ports 8000 or 9283 from your router.
 
 ## 4. Backups
@@ -79,6 +79,20 @@ up files separately, include both directories.
    polled every 30 minutes) and restart HA.
 3. Merge `ha/automation.yaml` into your automations. Replace `<phone1>`/`<phone2>` with your notify service
    names: Developer Tools -> Actions, search `notify.mobile_app_`.
+
+### House reminders and the sidebar
+
+1. Copy `ha/house.yaml` to HA's `config/packages/house.yaml` (turn packages on as its header says), add
+   `house_secret` to `secrets.yaml` (the same value as `HOOK_SECRET` in `deploy/.env`), replace `<lxc-ip>`, set
+   the washer entities if yours differ, and restart HA. Its REST sensors read `/api/summary` (no secret).
+2. In the app, open Me -> People and add each person (their Grocy user, HA person and phone).
+3. Both phones: install the HA Companion app, allow notifications, stay on Tailscale, and set the app's
+   External URL to `https://homeassistant.<tailnet>.ts.net` (HA is also on http, port 80). Pushes arrive
+   anywhere; Done and Snooze taps need HA reachable, so the External URL is what makes them work away from home.
+4. Sidebar: Settings -> Dashboards -> Add dashboard -> Webpage -> `https://<lxc-hostname>.<tailnet>.ts.net`,
+   title **House**, icon `mdi:home-heart`.
+5. Test scanning inside the HA app. If the camera is blocked there, Scan's **Open scanner in browser** link
+   opens it in the browser.
 
 ## First run checks
 
