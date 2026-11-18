@@ -414,7 +414,7 @@ def test_review_create_suggest_and_errors(env):
     assert "finite" in html
     html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg,
                                                      amount_1="1", op_in_0=["i0"])).text
-    assert "“dragon egg” is not used by any step" in html and g.objects("recipes") == []
+    assert "“dragon egg” isn&#39;t in any step yet" in html and g.objects("recipes") == []
     assert 'name="amount_0" value="250' in html  # conversion was applied and kept
 
 
@@ -423,7 +423,7 @@ def test_table_edit_rejects_invalid_and_saves_valid(env):
     rid = brownie_recipe(g)
     before = g.userfields("recipes", rid)["cfe_table"]
     r = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_1": ["o1", "i2", "i3"]})  # sugar unused
-    assert r.status_code == 200 and "“sugar” is not used by any step" in r.text
+    assert r.status_code == 200 and "“sugar” isn&#39;t in any step yet" in r.text
     assert g.userfields("recipes", rid)["cfe_table"] == before
     form = chips(BROWNIE)
     form["op_label"][0] = "brown"
@@ -456,7 +456,7 @@ def test_combines_chips_round_trip(env):
     rid = brownie_recipe(g)
     form = chips(BROWNIE)
     del form["op_in_4"]  # unticked chips are simply not posted: bake has none, so it is invalid
-    assert "has no inputs" in c.post(f"/recipes/{rid}/table", data=form).text
+    assert "“bake 350°F 30 to 40 min” doesn&#39;t combine anything yet" in c.post(f"/recipes/{rid}/table", data=form).text
     r = c.post(f"/recipes/{rid}/table", data=chips(BROWNIE), follow_redirects=False)
     assert r.status_code == 303
     assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ops == BROWNIE.ops
@@ -507,8 +507,48 @@ def test_unknown_input_id_rejected(env):
     before = g.userfields("recipes", rid)["cfe_table"]
     for bad in (["o1", "i1", "i2", "i3", "zz"], ["o1", "i1", "i2", "i3", "o3"], ["o2", "o1", "i1", "i2", "i3"]):
         r = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_1": bad})  # unknown, later, itself
-        assert r.status_code == 200 and "does not exist" in r.text
+        assert r.status_code == 200 and "combines something that isn&#39;t an ingredient or an earlier step" in r.text
     assert g.userfields("recipes", rid)["cfe_table"] == before
+
+
+def _shown(html: str) -> list[set[str]]:
+    """Per step row, the chips shown without "Show all": those not marked used by another step."""
+    rows = html.split('<li class="step-row">')[1:]
+    return [set(re.findall(r'<label class="chip(?: chip-step)?"[^>]*><input type="checkbox" name="op_in_\d+" value="([^"]+)"', r))
+            for r in rows]
+
+
+def test_editor_shows_only_unused_chips(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}/table").text
+    assert _shown(html) == [{"i0"}, {"o1", "i1", "i2", "i3"}, {"o2", "i4"}, {"o3", "i5", "i6", "i7", "i8"}, {"o4"}, {"o5"}]  # a new step can take bake
+    assert html.count('class="chip used"') + html.count('class="chip chip-step used"') > 0
+    assert html.count('class="show-all"') == 6  # one per step row; CSS hides it when nothing is tucked away
+    # unticking bake's input puts fold in (o4) back on show for bake and the new step; bake itself is unused too
+    html = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_4": [], "action": "addop"}).text
+    assert _shown(html)[4] == {"o4"} and _shown(html)[5] == {"o4", "o5"}
+
+
+def test_plain_language_errors(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    url = f"/recipes/{rid}/table"
+    cases = [
+        ({"op_in_3": ["i5", "i6", "i7", "i8"]},  # second mix feeds nothing: two last steps
+         "Every step except the last must feed into a later step; “mix, step 3” doesn't."),
+        ({"op_in_0": ["i0", "i2"], "op_in_1": ["o1", "i1", "i3"]},
+         "“melt” combines ingredients that aren't next to each other in the list. "
+         "Tick neighbouring ones, or split it into more steps."),
+        ({"op_in_1": ["o1", "i0", "i1", "i2", "i3"]}, "“unsalted butter” is ticked in 2 steps; each ingredient goes into just one."),
+        ({"op_in_2": ["o2", "o1", "i4"]}, "“melt” feeds into 2 steps; each step goes into just one."),
+        ({"op_id": [""], "op_label": [""]}, "Add at least one step."),
+    ]
+    for change, msg in cases:
+        html = c.post(url, data=change if "op_id" in change else {**chips(BROWNIE), **change}).text
+        errs = re.findall(r'<p class="card error" role="alert">([^<]*)</p>', html)
+        assert msg.replace("'", "&#39;") in errs, errs
+        assert not any(re.search(r"\b(op|ops|root|rows|i\d+|o\d+)\b", e) for e in errs), errs
 
 
 class DownGrocy(FakeGrocy):

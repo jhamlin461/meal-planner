@@ -1,8 +1,10 @@
 {% from "_icon.html" import icon %}
 {# Fields only; the including page owns the <form>. Per step: its id (hidden), label, and a chip per ingredient and
-   earlier step; the server renumbers steps, so ids never show. The last row is an empty new step. #}
-{% set names = chip_names(table) %}
-{% macro chip(k, ref, on, kind="") %}<label class="chip{{ kind }}" title="{{ names[ref] }}"><input type="checkbox" name="op_in_{{ k }}" value="{{ ref }}"{% if on %} checked{% endif %}><span>{{ names[ref] }}</span></label>{% endmacro %}
+   earlier step; the server renumbers steps, so ids never show. The last row is an empty new step. A chip another
+   step already ticks is marked "used" and tucked away until that row's "Show all" is ticked (CSS; app.js keeps the
+   marks current as boxes change). #}
+{% set names, users = chip_names(table), chip_users(table) %}
+{% macro chip(k, ref, on, kind="") %}{% set used = users.get(ref, [])|reject("equalto", k)|list %}<label class="chip{{ kind }}{{ ' used' if used and not on }}" title="{{ names[ref] }}"><input type="checkbox" name="op_in_{{ k }}" value="{{ ref }}"{% if on %} checked{% endif %}><span>{{ names[ref] }}</span></label>{% endmacro %}
 <fieldset class="editor">
 <legend>Table steps</legend>
 <p class="hint">Each step combines ingredients and earlier steps. Tap what goes into it.</p>
@@ -13,6 +15,7 @@
   <fieldset class="chips"><legend>Combines</legend>
     {% for g in table.ingredients %}{{ chip(k, "i" ~ loop.index0, o and ("i" ~ loop.index0) in o.inputs) }}{% endfor %}
     {% for e in table.ops[:k] %}{{ chip(k, e.id, o and e.id in o.inputs, " chip-step") }}{% endfor %}
+    <label class="show-all"><input type="checkbox"><span>Show all</span></label>
   </fieldset>
   {% if o %}<button class="btn" name="action" value="remove:{{ k }}">{{ icon("trash-can-outline") }}Remove step</button>{% endif %}
 </li>

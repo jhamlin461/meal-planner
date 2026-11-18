@@ -160,3 +160,10 @@ if (schedule) {
   schedule.addEventListener("change", sync);
   sync();
 }
+
+// Table editor: a chip another step already ticks is marked "used" and hidden (until "Show all"; CSS). The server
+// marks them on render; this keeps the marks current as boxes are ticked and unticked.
+document.querySelectorAll(".step-rows").forEach((list) => list.addEventListener("change", () => {
+  const ticked = new Set([...list.querySelectorAll(".chip input:checked")].map((b) => b.value));
+  list.querySelectorAll(".chip input").forEach((b) => b.parentElement.classList.toggle("used", !b.checked && ticked.has(b.value)));
+}));

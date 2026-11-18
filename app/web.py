@@ -134,10 +134,45 @@ def _chip_names(table: CfeTable) -> dict[str, str]:
                   for n, o in enumerate(table.ops, 1)}
 
 
+def _chip_users(table: CfeTable) -> dict[str, set[int]]:
+    """For each ingredient or step id, the step rows that tick it (the editor hides it from the others)."""
+    users: dict[str, set[int]] = {}
+    for n, o in enumerate(table.ops):
+        for r in o.inputs:
+            users.setdefault(r, set()).add(n)
+    return users
+
+
+_PLAIN = [  # cfe.validate() messages, in the editor's words; {0} is the step or ingredient as its chip names it
+    (r"op id (\S+) is duplicated", "{0} appears twice in the steps; press Update to number them again."),
+    (r"(\S+) has no inputs", "{0} doesn't combine anything yet; tick what goes into it."),
+    (r"(\S+) input (\S+) does not exist", "{0} combines something that isn't an ingredient or an earlier step."),
+    (r"(\S+) is not used by any op", "{0} isn't in any step yet; tick it in the step it goes into."),
+    (r"(\S+) is used by (\d+) ops", "{0} is ticked in {1} steps; each ingredient goes into just one."),
+    (r"(\S+) is an input of (\d+) ops", "{0} feeds into {1} steps; each step goes into just one."),
+    (r"(\S+) covers non-contiguous rows .*", "{0} combines ingredients that aren't next to each other in the list. "
+                                              "Tick neighbouring ones, or split it into more steps."),
+]
+
+
 def _named(errors: list[str], table: CfeTable) -> list[str]:
-    """Table validation messages in the editor's words: ids become the names on the chips, ops become steps."""
-    words = {k: f"“{v}”" for k, v in _chip_names(table).items()} | {"op": "step", "ops": "steps"}
-    return [re.sub(r"[\w-]+", lambda m: words.get(m[0], m[0]), e) for e in errors]
+    """Table validation messages in plain words, naming ingredients and steps as their chips do (never by id)."""
+    names = _chip_names(table)
+    q = lambda ref: f"“{names.get(ref, ref)}”"  # noqa: E731
+    out = []
+    for e in (part for err in errors for part in err.split("; ")):  # save_recipe joins its messages
+        if roots := re.fullmatch(r"expected exactly one root op, found \d+: \[(.*)\]", e):
+            ids = re.findall(r"'([^']*)'", roots[1])
+            out += ([f"Every step except the last must feed into a later step; {q(r)} doesn't." for r in ids[:-1]]
+                    or ["Add at least one step." if not table.ops else "Each step feeds into another, so none is last."])
+            continue
+        for pat, msg in _PLAIN:
+            if m := re.fullmatch(pat, e):
+                out.append(msg.format(q(m[1]), *m.groups()[1:]))
+                break
+        else:
+            out.append(re.sub(r"[\w-]+", lambda m: q(m[0]) if m[0] in names else m[0], e))
+    return out
 
 
 def _cfe(table: CfeTable | None, scale: float = 1.0) -> dict | None:
@@ -163,6 +198,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env.filters["num"] = _fmt
     env.filters["exact"] = _exact
     env.globals["chip_names"] = _chip_names
+    env.globals["chip_users"] = _chip_users
     templates = Jinja2Templates(env=env)
     plan_lock = threading.Lock()  # plan add/remove, Bought, Cooked it, list rebuild: never interleaved or repeated
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
