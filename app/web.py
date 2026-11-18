@@ -115,6 +115,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
     save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
 
+    @app.middleware("http")
+    async def no_cross_site_writes(request: Request, call_next):
+        """No login, so refuse writes a browser says came from another site (a missing header is allowed: curl, HA)."""
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse({"status": "error", "message": "cross-site request refused"}, status_code=403)
+        return await call_next(request)
+
     def page(request: Request, name: str, status_code: int = 200, **ctx):
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 

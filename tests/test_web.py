@@ -594,3 +594,14 @@ def test_remaining_suggestions_survive_accepting_one(env):
     assert "why 1" in c.get(f"/plan?week={monday.isoformat()}").text  # still there on a later visit
     c.post("/plan/suggest/clear", data={"week": monday.isoformat()})
     assert "why 1" not in c.get(f"/plan?week={monday.isoformat()}").text
+
+
+def test_cross_site_posts_are_refused(env):
+    g, _, _, c, _ = env
+    r = c.post("/shopping/extra", data={"name": "Milk"}, headers={"Sec-Fetch-Site": "cross-site"},
+               follow_redirects=False)
+    assert r.status_code == 403 and not g.objects("shopping_list")
+    assert c.get("/pantry", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+    for h in ({}, {"Sec-Fetch-Site": "same-origin"}):  # curl/HA send no header; the app's own pages same-origin
+        assert c.post("/shopping/extra", data={"name": "Milk"}, headers=h, follow_redirects=False).status_code == 303
+    assert len(g.objects("shopping_list")) == 2
