@@ -35,5 +35,5 @@ def test_alias_targets_are_canonical_units():
 
 
 def test_is_packaging():
-    assert all(is_packaging(u) for u in ("packet", "Packets", "pouch"))
+    assert all(is_packaging(u) for u in ("packet", "Packets", "pouch", "boxes", "Pouches", "sachets"))
     assert not any(is_packaging(u) for u in ("can", "g", "tbsp"))

@@ -18,7 +18,7 @@ PACKAGING_UNITS = {"packet", "pouch", "sachet", "container", "package", "bag", "
 def is_packaging(unit: str) -> bool:
     """Meal-kit packaging words (never a real measure); 'can' is deliberately absent."""
     u = unit.strip().lower()
-    return u in PACKAGING_UNITS or u.removesuffix("s") in PACKAGING_UNITS
+    return u in PACKAGING_UNITS or u.removesuffix("es") in PACKAGING_UNITS or u.removesuffix("s") in PACKAGING_UNITS
 
 
 def normalize_unit(text: str) -> str:
