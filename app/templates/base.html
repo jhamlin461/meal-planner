@@ -30,7 +30,6 @@
 {%- if section == key and pages %}
 <ul class="rail-sub" aria-label="{{ label }}">
 {% for href, text in pages %}<li><a href="{{ href }}"{{ current(href) }}>{{ text }}</a></li>{% endfor %}
-<li><a href="{{ scan_href }}"{% if on_scan %} aria-current="page"{% endif %}>{{ icon("barcode-scan") }}Scan</a></li>
 </ul>
 {%- endif %}</li>
 {% endfor %}
@@ -41,7 +40,8 @@
 {%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
 </nav>{% endif %}
 {% if pages and not on_scan %}<div class="title-row">{% block heading %}{% endblock %}
-<a class="button title-action" href="{{ scan_href }}">{{ icon("barcode-scan") }}Scan</a></div>
+{%- if path in ("/pantry", "/home/supplies") %}
+<a class="button title-action" href="{{ scan_href }}">{{ icon("barcode-scan") }}Scan</a>{% endif %}</div>
 {%- else %}{{ self.heading() }}{% endif %}
 {% block content %}{% endblock %}
 </main>

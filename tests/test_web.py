@@ -99,26 +99,31 @@ def test_chores_switcher_has_two_pages(env):
     assert "Supplies you keep at home will show here." in c.get("/home/supplies").text
 
 
-def test_scan_action_beside_title_on_meals_and_chores_pages(env):
+def test_scan_button_only_on_inventory_pages(env):
     c = env[3]
     row = re.compile(r'<div class="title-row"><h1[^>]*>.*?</h1>\s*<a class="button title-action" href="([^"]+)">'
                      r'.*?barcode-scan.*?Scan</a></div>', re.S)
-    for url, href in [("/plan", "/scan"), ("/shopping", "/scan"), ("/pantry", "/scan"), ("/recipes", "/scan"),
-                      ("/import", "/scan"), ("/home", "/scan?from=chores"), ("/home/supplies", "/scan?from=chores"),
-                      ("/home/chores/new", "/scan?from=chores")]:
+    for url, href in [("/pantry", "/scan"), ("/home/supplies", "/scan?from=chores")]:
         html = c.get(url).text
         assert row.findall(html) == [href] and html.count("<h1") == 1, url
+    for url in ["/plan", "/recipes", "/shopping", "/import", "/home", "/home/chores/new", "/scan", "/scan?from=chores"]:
+        html = c.get(url).text
+        assert "title-action" not in html and html.count("<h1") == 1, url
     c.cookies.set("who", "kitchen")
-    for url in ["/", "/me", "/scan", "/scan?from=chores"]:
+    for url in ["/", "/me"]:
         html = c.get(url).text
         assert "title-action" not in html and html.count("<h1") == 1, url
     for url in ["/plan", "/home", "/static/style.css", "/static/app.js"]:
         text = c.get(url).text
         assert ".fab" not in text and 'class="fab"' not in text and '"away"' not in text, url
-    # wide screens: Scan is the last item of the rail's nested list instead
-    rail = c.get("/plan").text
-    rail = rail[rail.index('class="rail-sub"'):]
-    assert re.findall(r'<a href="([^"]+)"', rail[:rail.index("</ul>")])[-1] == "/scan"
+
+
+def test_rail_has_no_scan_entries(env):
+    c = env[3]
+    for url in ["/plan", "/pantry", "/home", "/home/supplies", "/scan", "/scan?from=chores"]:
+        rail = c.get(url).text
+        rail = rail[rail.index('class="rail"'):rail.index("</nav>")]
+        assert "/scan" not in rail and "barcode-scan" not in rail, url
 
 
 def test_scan_page_keeps_section_switcher(env):
@@ -127,7 +132,6 @@ def test_scan_page_keeps_section_switcher(env):
     assert [t for _, _, t in _switcher(html, "Chores pages")] == ["Chores", "Supplies"]
     assert not [t for _, a, t in _switcher(html, "Chores pages") if "aria-current" in a]
     assert 'aria-label="Meals pages"' not in html and 'href="/home" aria-current="page"' in html
-    assert 'href="/scan?from=chores" aria-current="page"' in html  # rail's nested Scan item
     html = c.get("/scan").text
     assert [t for _, _, t in _switcher(html, "Meals pages")] == ["Plan", "Pantry", "Recipes", "Shopping"]
     assert not [t for _, a, t in _switcher(html, "Meals pages") if "aria-current" in a]

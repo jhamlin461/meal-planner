@@ -97,8 +97,8 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
   gap: 2px; color: var(--muted); text-decoration: none; font-size: .75rem; }
 .rail a[aria-current] { color: var(--action); }
 .rail-sub { display: none; }
-/* Scan is an action, not a place: on phones it sits beside the page title (wrapping below a title too long to share
-   the line); on wide screens the rail lists it instead. */
+/* Scan is an action, not a place: only the inventory pages (Pantry, Supplies) show it beside the page title,
+   wrapping below a title too long to share the line. */
 .title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
   margin: 0 0 16px; }
 .title-row h1 { margin: 0; flex: 0 1 auto; min-width: 0; }
@@ -106,7 +106,7 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 @media (min-width: 900px) {
   body { padding-left: var(--rail-w); }
   main { padding: 32px 24px 48px; }
-  .pages, .title-action { display: none; }
+  .pages { display: none; }
   .rail { top: 0; right: auto; width: var(--rail-w); padding: 20px 12px; overflow-y: auto; }
   .rail > ul { display: block; }
   .rail > ul > li > a { flex-direction: row; justify-content: flex-start; gap: 14px; min-height: 48px; padding: 0 12px;
