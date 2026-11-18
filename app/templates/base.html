@@ -2,7 +2,10 @@
 {%- set path = request.url.path -%}
 {%- set chores_scan = path.startswith("/scan") and request.query_params.get("from") == "chores" -%}
 {%- set section = section|default("today" if path == "/" else "me" if path in ("/me", "/who", "/home/people") else "home" if path == "/home" or path.startswith("/home/") or chores_scan else "kitchen") -%}
-{%- set subnav = subnav|default([("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping"), ("/scan", "Scan")] if section == "kitchen" else [("/home", "Chores"), ("/home/supplies", "Supplies"), ("/scan?from=chores", "Scan")] if section == "home" else []) -%}
+{%- set pages = [("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [("/home", "Chores"), ("/home/supplies", "Supplies")] if section == "home" else [] -%}
+{%- set scan_href = "/scan?from=chores" if section == "home" else "/scan" -%}
+{%- set on_scan = path.startswith("/scan") -%}
+{%- macro current(href) %}{% if not on_scan and path.startswith(href) and (href != "/home" or path == "/home") %} aria-current="page"{% endif %}{% endmacro -%}
 {%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
@@ -19,22 +22,27 @@
 <link rel="stylesheet" href="/static/style.css">
 {% block head %}{% endblock %}
 </head>
-<body data-section="{{ section }}"{% if subnav %} class="has-subnav"{% endif %}>
+<body data-section="{{ section }}">
 <nav class="rail" aria-label="Main">
 <ul>
 {% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
-{%- if section == key and subnav %}
-<ul class="subnav" aria-label="{{ label }}">
-{% for s_href, s_label in subnav %}<li><a href="{{ s_href }}"{% if (path + ("?from=chores" if chores_scan else "")).startswith(s_href) and (s_href != "/home" or path == "/home") %} aria-current="page"{% endif %}>{{ s_label }}</a></li>{% endfor %}
+{%- if section == key and pages %}
+<ul class="rail-sub" aria-label="{{ label }}">
+{% for href, text in pages %}<li><a href="{{ href }}"{{ current(href) }}>{{ text }}</a></li>{% endfor %}
+<li><a href="{{ scan_href }}"{% if on_scan %} aria-current="page"{% endif %}>{{ icon("barcode-scan") }}Scan</a></li>
 </ul>
 {%- endif %}</li>
 {% endfor %}
 </ul>
 </nav>
 <main{% block main_attrs %}{% endblock %}>
+{% if pages %}<nav class="segmented pages" aria-label="{{ 'Chores' if section == 'home' else 'Meals' }} pages">
+{%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
+</nav>{% endif %}
 {% block content %}{% endblock %}
 </main>
+{% if pages and not on_scan %}<a class="fab" href="{{ scan_href }}">{{ icon("barcode-scan") }}<span>Scan</span></a>{% endif %}
 <div id="toast" role="status" hidden></div>
 {% block scripts %}{% endblock %}
 <script src="/static/app.js" defer></script>

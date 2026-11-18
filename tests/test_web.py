@@ -68,9 +68,9 @@ def _tabs(html):
     return re.findall(r'<li><a href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav)
 
 
-def _strip(html):
-    sub = html[html.index('class="subnav"'):]
-    return re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', sub[:sub.index("</ul>")])
+def _switcher(html, label):
+    nav = html[html.index(f'<nav class="segmented pages" aria-label="{label}"'):]
+    return re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', nav[:nav.index("</nav>")])
 
 
 def test_tabs_are_today_meals_chores_me(env):
@@ -80,24 +80,50 @@ def test_tabs_are_today_meals_chores_me(env):
     assert env[3].get("/home").status_code == 200
 
 
-def test_meals_strip_has_scan(env):
-    html = env[3].get("/scan").text
-    assert [(h, t) for h, _, t in _strip(html)] == [("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"),
-                                                    ("/shopping", "Shopping"), ("/scan", "Scan")]
-    assert 'href="/plan" aria-current="page"' in html
-    assert [t for h, a, t in _strip(html) if "aria-current" in a] == ["Scan"]
+def test_meals_switcher_has_four_pages(env):
+    html = env[3].get("/pantry").text
+    assert [(h, t) for h, _, t in _switcher(html, "Meals pages")] == [("/plan", "Plan"), ("/pantry", "Pantry"),
+                                                                     ("/recipes", "Recipes"), ("/shopping", "Shopping")]
+    assert [t for h, a, t in _switcher(html, "Meals pages") if 'aria-current="page"' in a] == ["Pantry"]
+    assert 'href="/plan" aria-current="page"' in html and "subnav" not in html and "has-subnav" not in html
 
 
-def test_chores_strip_has_supplies_and_scan(env):
+def test_chores_switcher_has_two_pages(env):
     c = env[3]
-    for url in ["/home", "/home/supplies", "/scan?from=chores"]:
+    for url, current in [("/home", "Chores"), ("/home/supplies", "Supplies")]:
         html = c.get(url).text
-        assert [(h, t) for h, _, t in _strip(html)] == [("/home", "Chores"), ("/home/supplies", "Supplies"),
-                                                        ("/scan?from=chores", "Scan")], url
+        assert [(h, t) for h, _, t in _switcher(html, "Chores pages")] == [("/home", "Chores"),
+                                                                          ("/home/supplies", "Supplies")], url
+        assert [t for h, a, t in _switcher(html, "Chores pages") if "aria-current" in a] == [current], url
         assert 'href="/home" aria-current="page"' in html, url
     assert "Supplies you keep at home will show here." in c.get("/home/supplies").text
+
+
+def test_scan_button_on_meals_and_chores_pages(env):
+    c = env[3]
+    fab = re.compile(r'<a class="fab" href="([^"]+)">.*?barcode-scan.*?<span>Scan</span></a>', re.S)
+    assert fab.findall(c.get("/plan").text) == ["/scan"]
+    assert fab.findall(c.get("/home").text) == ["/scan?from=chores"]
+    assert fab.findall(c.get("/home/supplies").text) == ["/scan?from=chores"]
+    c.cookies.set("who", "kitchen")
+    for url in ["/", "/me", "/scan", "/scan?from=chores"]:
+        assert 'class="fab"' not in c.get(url).text, url
+    # wide screens: Scan is the last item of the rail's nested list instead
+    rail = c.get("/plan").text
+    rail = rail[rail.index('class="rail-sub"'):]
+    assert re.findall(r'<a href="([^"]+)"', rail[:rail.index("</ul>")])[-1] == "/scan"
+
+
+def test_scan_page_keeps_section_switcher(env):
+    c = env[3]
     html = c.get("/scan?from=chores").text
-    assert [t for h, a, t in _strip(html) if "aria-current" in a] == ["Scan"]
+    assert [t for _, _, t in _switcher(html, "Chores pages")] == ["Chores", "Supplies"]
+    assert not [t for _, a, t in _switcher(html, "Chores pages") if "aria-current" in a]
+    assert 'aria-label="Meals pages"' not in html and 'href="/home" aria-current="page"' in html
+    assert 'href="/scan?from=chores" aria-current="page"' in html  # rail's nested Scan item
+    html = c.get("/scan").text
+    assert [t for _, _, t in _switcher(html, "Meals pages")] == ["Plan", "Pantry", "Recipes", "Shopping"]
+    assert not [t for _, a, t in _switcher(html, "Meals pages") if "aria-current" in a]
 
 
 def test_me_page_theme_and_device(env):
