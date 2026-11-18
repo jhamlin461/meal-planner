@@ -100,7 +100,8 @@ REST API, pytest with fakes.
   - `home_states() -> dict[str, str]` — `person.*` → state (`home`, `not_home`, zone name)
   - `notify_services() -> list[str]` — names under the `notify` domain starting `mobile_app_` (GET `/api/services`)
   - `notify(service: str, title: str, message: str, tag: str, actions: list[tuple[str, str]]) -> None` — POST
-    `/api/services/notify/<service>` with `data: {tag, actions: [{action, title}]}`
+    `/api/services/notify/<service>` (the legacy `notify.mobile_app_*` services, not `notify.send_message`) with
+    `data: {tag, actions: [{action, title}], channel: "House reminders", ttl: 0, priority: "high"}`
   - `clear(service: str, tag: str) -> None` — message `clear_notification`, `data: {tag}`
   - Any transport error or non-2xx → `HAError`.
 - `tests/fakes.py`: `FakeHA` with `persons_map`, `states`, `services`, `sent: list[dict]`, `cleared: list[tuple]`,
@@ -143,7 +144,8 @@ REST API, pytest with fakes.
 - Routes: `GET /who` (choose: each person + "Kitchen (everyone)"), `POST /who` (`who=<id>|kitchen`), `GET /home/people`,
   `POST /home/people` (name, ha_person, notify_service; creates the Grocy user when new), `POST /home/people/{id}/delete`.
   The people form offers `ha.persons()` and `ha.notify_services()` as choices and pre-selects the obvious match
-  (person whose name contains the typed name; service containing the phone name is left to the user).
+  (person whose name contains the typed name; for a chosen `person.*`, the notify service of the phone tracked by that
+  person — HA's person state attributes list `device_trackers`; `device_tracker.<x>` ↔ `notify.mobile_app_<x>`).
 
 - [ ] **Step 1: Write failing tests:** `test_store_roundtrip_people_and_reminders` (tmp_path; save, reload a new
   `HouseStore` on the same file, values persist), `test_reminder_defaults`, `test_flags`;
@@ -272,13 +274,19 @@ REST API, pytest with fakes.
 - `deploy/ha/house.yaml` (HA package): `rest_command.house_action` (POST to `http://<lxc-ip>:8000/api/hook/action`
   with `X-House-Secret: !secret house_secret`), automation "House: notification action" (trigger
   `mobile_app_notification_action`, condition action starts with `HM:`, calls the rest_command with the action),
-  automation "House: washer finished" with placeholders `sensor.REPLACE_washer_run_state` and the finished /
-  running state values, triggering on `to: <finished>` OR `from: <running states>` `to: [off, unavailable]`, calling
-  `rest_command.house_washer_finished`. Header comment says where to find the real entity id (Developer tools → States, search "washer").
+  automation "House: washer finished": trigger state of `event.front_load_washer_notification`, condition
+  `trigger.to_state.attributes.event_type == 'washing_is_complete'` and `trigger.from_state.state not in
+  ['unavailable', 'unknown']` (HA restarts rewrite the event entity), calls `rest_command.house_washer_finished`;
+  automation "House: washer started": `sensor.front_load_washer_current_status` to `initial` or `detecting` (from
+  anything but `unavailable`/`unknown`) calls `rest_command.house_washer_started`. (Facts from the owner's HA, 8 cycles:
+  states initial → detecting → running → rinsing → spinning → end, then `power_off` ~30 s later.)
+- `POST /api/events/washer-started` (secret) → completes the open laundry task (the clothes were moved for the next
+  load), crediting nobody; `{"status": "cleared"|"none-open"}`.
 
 - [ ] **Step 1: Write failing tests:** `test_hook_requires_secret` (missing/wrong → 403), `test_action_done_completes_and_clears`,
   `test_double_done_executes_once` (two hook calls for a trash chore → one execution, garbage bags −1 once),
   `test_snooze_action`, `test_washer_finished_creates_one_task` (second call → `already-open`),
+  `test_washer_started_clears_open_laundry`,
   `test_laundry_reminder_targets_people_home_every_15_min`, `test_ha_package_has_secret_and_automations` (PyYAML is
   not a dependency: assert the file text contains `!secret house_secret` and both automation aliases).
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS.
@@ -347,7 +355,9 @@ REST API, pytest with fakes.
 - `house.yaml` adds REST sensors from `/api/summary` (one per person "needs you now", use soon, running low, laundry open)
   and an example dashboard card (entities card) in a commented block.
 - README: "Home Assistant" section — copy `house.yaml` into HA `packages/`, add `house_secret`, set the washer entity,
-  add the sidebar: Settings → Dashboards → Add dashboard → Webpage → `https://meal-planner.<tailnet>.ts.net`, title "House",
+  phone setup for reminders: both phones run the HA app with notifications allowed, stay on Tailscale, and set the
+  app's External URL to `https://homeassistant.<tailnet>.ts.net` so action buttons work away from home (pushes arrive
+  anywhere; taps need HA reachable). Then add the sidebar: Settings → Dashboards → Add dashboard → Webpage → `https://meal-planner.<tailnet>.ts.net`, title "House",
   icon `mdi:home-heart`; install the HA app on both phones and log in; test scanning inside the HA app (if the camera
   is blocked there, Scan's "Open scanner in browser" link is the fallback, added here: a link with `target="_blank"` on `/scan`).
 
