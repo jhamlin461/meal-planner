@@ -315,6 +315,32 @@ REST API, pytest with fakes.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS.
 - [ ] **Step 5:** Commit `feat: per-person Today screen`.
 
+### Task 8b: Navigation — Today · Meals · Chores · Me (owner change, 2026-11-18)
+
+**Files:**
+- Create: `app/templates/me.html`
+- Modify: `app/templates/base.html`, `app/static/style.css`, `app/web.py`, `app/templates/who.html`, `app/templates/scan.html` (section only), `tests/test_web.py`, `tests/test_home.py`
+
+**Interfaces:**
+- Bottom tabs / rail destinations, in order: **Today** (`/`, sun icon), **Meals** (`/plan`, silverware icon), **Chores**
+  (`/home`, broom icon), **Me** (`/me`, account-outline icon). Scan is no longer a destination.
+- Subnav strips: Meals = Plan `/plan`, Pantry `/pantry`, Recipes `/recipes`, Shopping `/shopping`, Scan `/scan`;
+  Chores = Chores `/home`, Supplies `/home/supplies`, Scan `/scan?from=chores`. Internal section keys stay
+  `kitchen`/`home` (URLs unchanged); only labels, icons and strips change. `/scan` shows the Meals strip, or the
+  Chores strip with `?from=chores`; the Scan link is marked current in whichever strip shows it.
+- `GET /home/supplies`: placeholder page in the Chores section ("Supplies you keep at home will show here.") until
+  Task 9 fills it. `/home/people` moves under Me (section `me`), reachable from the Me page.
+- `GET /me`: personal settings for this device — "This device is Josh's" with a Change link (`/who`), Theme
+  (Dark / Light radio, posts to the existing `POST /settings/theme`, current one checked), and a People link.
+  The footer "Use light theme" button is removed from every page. `/who` renders in the Me section.
+
+- [ ] **Step 1: Write failing tests:** `test_tabs_are_today_meals_chores_me` (labels and hrefs in order, no Scan tab),
+  `test_meals_strip_has_scan`, `test_chores_strip_has_supplies_and_scan` (`/scan?from=chores` shows the Chores strip),
+  `test_me_page_theme_and_device` (radio reflects cookie; posting light → `data-theme="light"`), `test_no_footer_theme_button`.
+  Update existing tests that assert the old labels/tabs.
+- [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** `uv run pytest -q` PASS.
+- [ ] **Step 5:** Commit `feat: Today, Meals, Chores and Me tabs; Scan inside Meals and Chores`.
+
 ### Task 9: Household supplies
 
 **Files:**
@@ -332,7 +358,7 @@ REST API, pytest with fakes.
 - `shopping.rebuild_running_low(grocy) -> dict[int, float]` — Grocy `volatile(...)["missing_products"]` (below
   `min_stock_amount`) into the `Running low` list, updated in place like `rebuild_meal_plan_list`; called wherever the
   Meal plan list is rebuilt. Bought handles Running low rows like Meal plan rows; Walmart cart and "Still to add" include them.
-- Pantry gets a Supplies view (`GET /pantry?view=supplies`): each supply with amount, keep-at-least (editable),
+- The Supplies view is `GET /home/supplies` (Chores strip, created as a placeholder in Task 8b): each supply with amount, keep-at-least (editable),
   and a "Used one" button (`POST /pantry/{pid}/consume` amount 1 package or 1 unit).
 - `FakeGrocy.volatile` computes `missing_products` from `min_stock_amount` vs stock (instead of the fixed result) when products have it set.
 
