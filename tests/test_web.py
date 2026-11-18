@@ -978,7 +978,8 @@ def test_supplies_view_used_one(env):
     sponge = supply(g, "Sponges", min_stock=0, stock=3)
     html = c.get("/home/supplies").text
     assert "Trash bags" in html and "Sponges" in html and "Glad bags" not in html and "Hefty bags" not in html
-    assert re.search(r"Trash bags</b>.*?5 piece", html, re.S)  # the total across brands
+    assert re.search(r'Trash bags</b></p>\s*<p class="muted">5 left\.</p>', html)  # the total across brands
+    assert '<p class="muted">3 left.</p>' in html and "pieces</span>" in html
     assert f'action="/home/supplies/{sponge}/used"' in html and "Used one" in html and "Keep at least" in html
     assert f'/home/supplies/{glad}/' not in html
     r = c.post(f"/home/supplies/{bags}/used", follow_redirects=False)
@@ -988,6 +989,7 @@ def test_supplies_view_used_one(env):
     c.post(f"/home/supplies/{bags}/used")
     assert g.stock_amounts()[bags] == 0  # a package, but never more than is in stock
     assert c.post(f"/home/supplies/{bags}/used").status_code == 200  # nothing left: no error
+    assert '<p class="warn">None left. Running low.</p>' in c.get("/home/supplies").text
     low = ids(g).list["Running low"]
     assert [(r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)] == [(bags, 2)]
     assert hefty not in [r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)]

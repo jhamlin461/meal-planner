@@ -3,13 +3,17 @@
 {% block content %}
 <h1>Supplies</h1>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
-{% for s in supplies %}
+{% for s in supplies %}{% set low = s.amount < s.min %}
 <div class="card">
-  <p class="row"><b class="grow breakable">{{ s.name }}</b><span class="{{ 'warn' if s.amount < s.min else 'muted' }}">{{ s.amount|num }} {{ s.unit }}{% if s.amount < s.min %} · running low{% endif %}</span></p>
+  <p class="row"><b class="grow breakable">{{ s.name }}</b></p>
+  <p class="{{ 'warn' if low else 'muted' }}">{% if s.amount > 0 %}{{ s.amount|num }}{% if s.unit and s.unit != "piece" %} {{ s.unit }}{% endif %}{% else %}None{% endif %} left.{% if low %} Running low.{% endif %}</p>
   <form class="inline" method="post" action="/home/supplies/{{ s.id }}/min">
     <label for="min-{{ s.id }}">Keep at least</label>
-    <input id="min-{{ s.id }}" type="number" name="amount" step="any" min="0" value="{{ s.min|exact }}" inputmode="decimal" required> {{ s.unit }}
-    <button class="btn">Save</button>
+    <span class="inline-group">
+      <input id="min-{{ s.id }}" type="number" name="amount" step="any" min="0" value="{{ s.min|exact }}" inputmode="decimal" required>
+      {%- if s.unit %}<span>{{ s.unit }}{{ "s" if s.unit == "piece" and s.min != 1 }}</span>{% endif %}
+      <button class="btn">Save</button>
+    </span>
   </form>
   <div class="card-actions">
     <form method="post" action="/home/supplies/{{ s.id }}/used"><button class="btn btn-primary"{% if s.amount <= 0 %} disabled{% endif %}>Used one</button></form>

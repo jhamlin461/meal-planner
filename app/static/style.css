@@ -38,6 +38,7 @@ button, .button, .btn { min-height: 48px; padding: 6px 16px; border: 0; border-r
   gap: 8px; text-align: center; text-decoration: none; transition: background-color .12s; }
 .btn, .secondary { background: transparent; color: var(--action); box-shadow: inset 0 0 0 1px var(--line); }
 .btn-primary { background: var(--action); color: #fff; box-shadow: none; }
+button:disabled { opacity: .45; cursor: default; }
 @media (hover: hover) { .btn:hover, .secondary:hover { background: var(--line); } .rail a:not([aria-current]):hover { color: var(--text); } }
 .default { position: absolute; left: -9999px; }
 input, select, textarea { min-height: 48px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
@@ -79,6 +80,9 @@ summary { min-height: 48px; display: flex; align-items: center; cursor: pointer;
 .row-link a { min-height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 2px; color: inherit; text-decoration: none; }
 .choice { padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; }
 form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+/* controls that wrap as one unit inside form.inline (e.g. amount, unit, Save) */
+.inline-group { display: inline-flex; gap: 8px; align-items: center; }
+.inline-group input[type=number] { width: 5em; }
 
 /* Navigation: bottom tab bar on phones, left rail from 900px. */
 .rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--rail);
