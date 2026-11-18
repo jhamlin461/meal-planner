@@ -568,6 +568,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if action == "add":
             if amount and not known:  # remember the answer for this product's next scan
                 grocy.set_userfields("products", r.product_id, {"package_amount": amount})
+                gid = _int(p.get("parent_product_id"))  # and for its generic, which Running low and Bought use
+                if gid and not _num(grocy.userfields("products", gid).get("package_amount")):
+                    grocy.set_userfields("products", gid, {"package_amount": amount})  # a brand has its generic's unit
             days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
             grocy.add_stock(r.product_id, pkg, date.today() + timedelta(days=days) if days > 0 else None,
                             _int(p.get("location_id")))

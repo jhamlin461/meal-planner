@@ -1201,3 +1201,22 @@ def test_scan_dialogs_save_on_enter_and_new_scan_clears_result(env):
     param = re.search(r"decodeFromVideoDevice\(undefined, video, \((\w+)\) =>", js).group(1)
     hidden = re.search(r"(\w+)\.hidden = true;\s*run\(`Looking up", js).group(1)
     assert hidden != param and f'const {hidden} = document.getElementById("scan-result")' in js
+
+
+def test_typed_pack_size_reaches_running_low_bought(env):
+    """Running low names the generic, so a size typed for a new brand is kept on its generic too."""
+    g, ai, _, c, _ = env
+    bags = supply(g)  # keep at least 2, no package size
+    ai.guess = ProductGuess(generic_name="Trash bags", is_new_generic=False, stock_unit="piece", package_amount=None,
+                            location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
+    r = c.post("/api/scan/photo", data={"code": "5151", "action": "add"},
+               files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
+    assert r["status"] == "need_amount"
+    assert c.post("/api/scan", json={"code": "5151", "action": "add", "amount": 32}).json()["status"] == "ok"
+    assert g.userfields("products", bags)["package_amount"] == 32
+    g.set_amount(r["product_id"], 1)  # used down to one: running low by 1
+    c.get("/shopping")
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Running low"])
+    c.post(f"/shopping/{row['id']}/toggle")
+    c.post("/shopping/bought")
+    assert g.stock_amounts()[bags] == 33  # one package of 32, not the shortfall of 1
