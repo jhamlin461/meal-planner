@@ -145,3 +145,40 @@ class FakeAI:
 
     def suggest_week(self, context):
         return self._ret(self.week)
+
+
+class FakeHA:
+    """In-memory Home Assistant. down=True makes every call raise HAError."""
+
+    def __init__(self):
+        self.persons_map: dict[str, str] = {}
+        self.states: dict[str, str] = {}
+        self.services: list[str] = []
+        self.sent: list[dict] = []
+        self.cleared: list[tuple] = []
+        self.down = False
+
+    def _check(self):
+        if self.down:
+            from app.ha import HAError
+            raise HAError("down")
+
+    def persons(self):
+        self._check()
+        return dict(self.persons_map)
+
+    def home_states(self):
+        self._check()
+        return dict(self.states)
+
+    def notify_services(self):
+        self._check()
+        return list(self.services)
+
+    def notify(self, service, title, message, tag, actions):
+        self._check()
+        self.sent.append({"service": service, "title": title, "message": message, "tag": tag, "actions": actions})
+
+    def clear(self, service, tag):
+        self._check()
+        self.cleared.append((service, tag))

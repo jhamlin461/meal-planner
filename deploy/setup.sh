@@ -25,6 +25,7 @@ ask() {
   done
   put "$key" "$v"
 }
+ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "$1/api/"; }
 grocy_ok() { curl -fsS -o /dev/null -H "GROCY-API-KEY: $1" "$GROCY/api/system/info"; }
 
 command -v docker >/dev/null || { echo "Installing Docker…"; curl -fsSL https://get.docker.com | sh; }
@@ -38,6 +39,18 @@ ask ANTHROPIC_API_KEY "Anthropic API key" secret required
 ask FDC_API_KEY "USDA FoodData Central key (DEMO_KEY works, slowly)" secret
 ask WALMART_STORE_ID "Walmart store id (optional)"
 ask SHOPPING_WEEKDAY "Shopping day, 0=Mon … 6=Sun" "" required
+
+while :; do
+  ask HA_URL "Home Assistant URL (e.g. https://homeassistant.your-tailnet.ts.net)" "" required
+  ask HA_TOKEN "Home Assistant long-lived access token" secret required
+  ha_ok "$(get HA_URL)" "$(get HA_TOKEN)" && break
+  echo "  Home Assistant rejected that URL or token, try again."
+done
+if [[ -z $(get HOOK_SECRET) ]]; then
+  secret=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  put HOOK_SECRET "$secret"
+  echo "Add this line to Home Assistant's secrets.yaml:  house_secret: $secret"
+fi
 
 docker compose up -d --build
 

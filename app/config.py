@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 
 
@@ -13,6 +14,15 @@ class Settings:
     shopping_weekday: int
     data_dir: Path
     expiry_warn_days: int
+    ha_url: str = ""
+    ha_token: str = ""
+    hook_secret: str = ""
+    quiet_hours: tuple[time, time] = (time(22), time(7))
+
+
+def _quiet(v: str) -> tuple[time, time]:
+    a, b = v.split("-")
+    return time.fromisoformat(a), time.fromisoformat(b)
 
 
 def load_settings() -> Settings:
@@ -26,4 +36,8 @@ def load_settings() -> Settings:
         shopping_weekday=int(e("SHOPPING_WEEKDAY", "6")),
         data_dir=Path(e("DATA_DIR", "/data")),
         expiry_warn_days=int(e("EXPIRY_WARN_DAYS", "3")),
+        ha_url=e("HA_URL", ""),
+        ha_token=e("HA_TOKEN", ""),
+        hook_secret=e("HOOK_SECRET", ""),
+        quiet_hours=_quiet(e("QUIET_HOURS", "22:00-07:00")),
     )
