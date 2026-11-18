@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 from app.ha import HAError
-from app.house import HouseStore, Person, Reminder
+from app.house import LOCK, HouseStore, Person, Reminder
 
 log = logging.getLogger(__name__)
-LOCK = threading.Lock()  # one reminder change at a time: the loop, and (Task 7) Done / Snooze
 ICONS = {"chore": "broom", "task": "calendar-check", "battery": "battery-sync-outline"}
 NAMED_ICONS = (("litter", "cat"), ("trash", "trash-can-outline"), ("laundry", "washing-machine"))
 
@@ -93,57 +92,77 @@ def tick(grocy, house: HouseStore, ha, settings, now: datetime) -> None:
         keys = house.keys()  # before Grocy: a reminder saved after this read can't be mistaken for a deleted item
         open_ = _open(grocy)
         try:
-            _clear_finished(house, ha, keys, open_)
-            if in_quiet(now, settings.quiet_hours):
-                return
-            home = ha.home_states()
-            house.set_flag("ha_error", None)
-            _send_due(house, ha, open_, home, now)
+            home = ha.home_states()  # HA unreachable as a whole: nothing else can work this tick
         except HAError as e:
-            log.warning("Home Assistant unreachable: %s", e)
-            house.set_flag("ha_error", f"Home Assistant unreachable: {e}"[:200])
+            return _flag(house, [e])
+        errors = _clear_finished(house, ha, keys, open_)
+        if not in_quiet(now, settings.quiet_hours):
+            errors += _send_due(house, ha, open_, home, now)
+        _flag(house, errors)
 
 
-def _clear_finished(house: HouseStore, ha, keys: list[str], open_: dict) -> None:
-    """Deleted or completed: clear every phone and forget it. Recurring and moved on: clear every phone, keep settings."""
+def _flag(house: HouseStore, errors: list[HAError]) -> None:
+    for e in errors:
+        log.warning("Home Assistant: %s", e)
+    house.set_flag("ha_error", f"Home Assistant unreachable: {errors[0]}"[:200] if errors else None)
+
+
+def _clear_finished(house: HouseStore, ha, keys: list[str], open_: dict) -> list[HAError]:
+    """Deleted or completed: clear every phone and forget it. Recurring and moved on: clear every phone, keep settings.
+    A phone HA no longer knows (4xx) is forgotten; one HA couldn't reach stays in sent_to and is retried next tick."""
+    errors = []
     for key in keys:
         r = house.reminder(key)
         due = open_[key][1] if key in open_ else None
         if key in open_ and r.sent_for in (None, due and due.isoformat()):
             continue
+        retry = []
         for service in r.sent_to:
-            ha.clear(service, key)  # HAError leaves sent_to as is, so the next tick retries
-        if key in open_:
-            house.save_reminder(Reminder(key, r.audience, r.remind_at, r.repeat_min, verb=r.verb))
-        else:
+            try:
+                ha.clear(service, key)
+            except HAError as e:
+                errors.append(e)
+                if not (e.status and 400 <= e.status < 500):
+                    retry.append(service)
+        if key not in open_ and not retry:
             house.drop_reminder(key)
+        else:  # sent_for stays until every phone is cleared, so the clear is retried
+            house.save_reminder(Reminder(key, r.audience, r.remind_at, r.repeat_min, sent_to=retry, verb=r.verb,
+                                         sent_for=r.sent_for if retry else None))
+    return errors
 
 
-def _send_due(house: HouseStore, ha, open_: dict, home: dict[str, str], now: datetime) -> None:
-    people = house.people()
+def _send_due(house: HouseStore, ha, open_: dict, home: dict[str, str], now: datetime) -> list[HAError]:
+    """Send each fired item to its recipients; a phone that fails doesn't hold up the others or later items.
+    Between repeats, only recipients not reached yet (just home, or their phone failed) are tried."""
+    people, errors = house.people(), []
     for it in _items(open_, house, now):
         r = house.reminder(it.key)
         snoozed, snooze_over = r.snooze_until is not None and now < r.snooze_until, r.snooze_until is not None
         if it.fire_at > now or snoozed:
             continue
-        if not snooze_over and r.last_sent and now - r.last_sent < timedelta(minutes=it.repeat_min):
-            continue
-        to = recipients(it, people, home)
+        again = snooze_over or r.last_sent is None or now - r.last_sent >= timedelta(minutes=it.repeat_min)
+        to = [p for p in recipients(it, people, home) if again or p.notify_service not in r.sent_to]
         if not to:
-            continue  # nobody to tell yet: held until someone comes home
-        kind, id = it.key.split(":")
-        r.sent_for = it.due.isoformat()
+            continue  # nobody (new) to tell: held until someone comes home
+        kind, num = it.key.split(":")
+        reached = False
         for p in to:
             try:
                 ha.notify(p.notify_service, it.title, it.context, it.key,
-                          [(f"HM:done:{kind}:{id}:{p.id}", it.verb), (f"HM:snooze:{kind}:{id}:{p.id}", "Snooze 15 min")])
-            except HAError:
-                house.save_reminder(r)  # remember the phones already reached so they get cleared later
-                raise
+                          [(f"HM:done:{kind}:{num}:{p.id}", it.verb), (f"HM:snooze:{kind}:{num}:{p.id}", "Snooze 15 min")])
+            except HAError as e:
+                errors.append(e)
+                continue
+            reached = True
             if p.notify_service not in r.sent_to:
                 r.sent_to.append(p.notify_service)
-        r.last_sent, r.snooze_until = now, None
-        house.save_reminder(r)
+        if reached:  # nobody reached: everyone is retried next tick
+            r.sent_for = it.due.isoformat()
+            if again:
+                r.last_sent, r.snooze_until = now, None
+            house.save_reminder(r)
+    return errors
 
 
 def start_loop(app_state_fn, interval: int = 60) -> threading.Thread:

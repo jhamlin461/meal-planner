@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 import httpx
 from starlette.datastructures import FormData as MultiDict
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.house import HouseStore
 from app.importer import PendingStore
+from app.reminders import tick
 from app.setup_grocy import bootstrap
 from app.web import create_app
 from tests.fakes import FakeAI, FakeGrocy, FakeHA
@@ -108,7 +110,7 @@ def test_upkeep_charge(hv):
     c.post(f"/home/upkeep/{b['id']}/done")
     assert len(g.battery_log) == 1
     c.post(f"/home/upkeep/{b['id']}/delete")
-    assert not g.objects("batteries") and house.keys() == []
+    assert not g.objects("batteries") and gone_after_tick(g, house)
 
 
 def test_done_credits_device_person(hv):
@@ -136,12 +138,18 @@ def test_skip_moves_date_without_consuming(hv):
     assert g.chores_status()[0]["next_estimated_execution_time"].startswith("2026-11-19")
 
 
+def gone_after_tick(g, house) -> bool:
+    """Deleting leaves the reminder for the loop, which clears the phones it reached and then drops it."""
+    tick(g, house, FakeHA(), Settings("", "", "", "KEY", None, 6, Path("."), 3), datetime(2026, 11, 18, 12))
+    return house.keys() == []
+
+
 def test_delete_chore_drops_reminder(hv):
     g, house, c, *_ = hv
     c.post("/home/chores/new", data={"name": "Dishes", "schedule": "daily", "who": "turns", "remind_at": "09:00"})
     (ch,) = g.objects("chores")
     c.post(f"/home/chores/{ch['id']}/delete")
-    assert not g.objects("chores") and house.keys() == []
+    assert not g.objects("chores") and gone_after_tick(g, house)
 
 
 def test_home_shows_empty_state_then_lists(hv):

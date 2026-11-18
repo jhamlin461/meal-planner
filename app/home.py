@@ -2,7 +2,7 @@
 import re
 from datetime import date
 
-from app.house import HouseStore, Person, Reminder
+from app.house import LOCK, HouseStore, Person, Reminder
 
 DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 SUPPLIES = "Household supplies"
@@ -130,16 +130,16 @@ def save(grocy, house: HouseStore, entity: str, kind: str, row: dict, rem: dict,
         id = grocy.create(entity, row)
     else:
         grocy.update(entity, id, row)
-    r = house.reminder(f"{kind}:{id}")
-    for k, v in rem.items():
-        setattr(r, k, v)
-    house.save_reminder(r)
+    with LOCK:
+        r = house.reminder(f"{kind}:{id}")
+        for k, v in rem.items():
+            setattr(r, k, v)
+        house.save_reminder(r)
     return id
 
 
 def remove(grocy, house: HouseStore, entity: str, kind: str, id: int) -> None:
-    grocy.delete(entity, id)
-    house.drop_reminder(f"{kind}:{id}")
+    grocy.delete(entity, id)  # the reminder loop clears every phone it reached, then drops the reminder
 
 
 def supplies(grocy) -> list[dict]:

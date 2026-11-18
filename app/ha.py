@@ -2,7 +2,9 @@ import httpx
 
 
 class HAError(Exception):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status  # HA's HTTP status; None when HA wasn't reached
 
 
 class HA:
@@ -20,7 +22,7 @@ class HA:
         except httpx.HTTPError as e:
             raise HAError(f"{method} {path} failed: {e}") from e
         if not r.is_success:
-            raise HAError(f"{method} {path} -> {r.status_code}: {r.text[:200]}")
+            raise HAError(f"{method} {path} -> {r.status_code}: {r.text[:200]}", r.status_code)
         try:
             return r.json() if r.content else None
         except ValueError as e:

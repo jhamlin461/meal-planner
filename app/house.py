@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+LOCK = threading.RLock()  # held across a reminder read-modify-write (the reminder loop, Home edits, Done / Snooze)
+
 
 @dataclass
 class Person:

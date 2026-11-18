@@ -122,6 +122,17 @@ def test_whoever_home_targets_only_people_home(tmp_path):
     assert recipients(it, house.people(), ha.states) == []
 
 
+def test_someone_arriving_between_repeats_hears_at_once(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    ha.states["person.cat"] = "not_home"
+    task(g, house, audience="home", remind_at="10:00")
+    tick(g, house, ha, s, at(18, 10))
+    assert sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 20))) == []
+    ha.states["person.cat"] = "home"
+    assert [m["service"] for m in sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 30)))] == [CAT_PHONE]
+    assert len(sends(ha, lambda: tick(g, house, ha, s, at(18, 12)))) == 2  # the repeat goes to both, on time
+
+
 def test_nobody_home_holds_until_someone_arrives(tmp_path):
     g, house, ha, s, josh, cat = world(tmp_path)
     ha.states = {"person.josh": "not_home", "person.cat": "not_home"}
@@ -199,15 +210,16 @@ def test_ha_down_sets_flag_and_recovers(tmp_path):
     ha.down = False
     tick(g, house, ha, s, at(18, 10, 3))
     assert len(ha.cleared) == 2 and f"task:{tid}" not in house.keys() and house.flag("ha_error") is None
-    # one phone fails mid-send: the flag is set, the reached phone is remembered, the send retries next tick
+    # one phone fails mid-send: the flag is set, the reached phone counts as sent, only the failed one is retried
     flaky = FlakyHA()
     flaky.states = ha.states
     tid = task(g, house, audience="home", remind_at="10:00")
     tick(g, house, flaky, s, at(18, 11))
     r = house.reminder(f"task:{tid}")
-    assert house.flag("ha_error") and r.sent_to == [JOSH_PHONE] and r.last_sent is None
-    tick(g, house, ha, s, at(18, 11, 1))
-    assert house.flag("ha_error") is None and house.reminder(f"task:{tid}").last_sent == at(18, 11, 1)
+    assert house.flag("ha_error") and r.sent_to == [JOSH_PHONE] and r.last_sent == at(18, 11)
+    assert [m["service"] for m in sends(ha, lambda: tick(g, house, ha, s, at(18, 11, 1)))] == [CAT_PHONE]
+    r = house.reminder(f"task:{tid}")
+    assert house.flag("ha_error") is None and r.last_sent == at(18, 11) and sorted(r.sent_to) == [CAT_PHONE, JOSH_PHONE]
 
 
 def test_create_app_starts_loop_only_with_ha_url(tmp_path, monkeypatch):
@@ -222,3 +234,118 @@ def test_create_app_starts_loop_only_with_ha_url(tmp_path, monkeypatch):
     assert started == []
     web.create_app(g, FakeAI(), None, s, PendingStore(tmp_path / "p"), house=house, ha=ha)
     assert started == [(g, house, ha, s)]
+
+
+class DeadCatHA(FakeHA):
+    """Cat's phone was replaced: HA answers 400/404 for her notify service, every time."""
+
+    def __init__(self, clear_status=404):
+        super().__init__()
+        self.clear_status = clear_status
+
+    def notify(self, service, *a):
+        from app.ha import HAError
+        if service == CAT_PHONE:
+            raise HAError("400 unknown service", status=400)
+        super().notify(service, *a)
+
+    def clear(self, service, tag):
+        from app.ha import HAError
+        if service == CAT_PHONE:
+            raise HAError("cat clear failed", status=self.clear_status)
+        super().clear(service, tag)
+
+
+def test_dead_phone_neither_spams_nor_starves(tmp_path):
+    g, house, _, s, josh, cat = world(tmp_path)
+    ha = DeadCatHA()
+    ha.states = {"person.josh": "home", "person.cat": "home"}
+    both = task(g, house, audience="home", remind_at="10:00")
+    mine = task(g, house, audience=f"person:{josh}", remind_at="10:00")
+    for m in range(5):
+        tick(g, house, ha, s, at(18, 10, m))
+    assert sorted(x["tag"] for x in ha.sent) == [f"task:{both}", f"task:{mine}"]
+    assert house.reminder(f"task:{both}").sent_to == [JOSH_PHONE] and house.flag("ha_error")
+
+
+def test_clear_on_a_gone_phone_forgets_it_and_a_failed_clear_retries(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    tid = task(g, house, audience="home", remind_at="10:00")
+    tick(g, house, ha, s, at(18, 10))
+    g.complete_task(tid)
+    gone = DeadCatHA(clear_status=404)
+    gone.states = ha.states
+    tick(g, house, gone, s, at(18, 10, 1))  # 404: Cat's phone no longer exists, nothing left to clear
+    assert gone.cleared == [(JOSH_PHONE, f"task:{tid}")] and f"task:{tid}" not in house.keys()
+    # a recurring chore moved on, but HA dropped the connection clearing Cat's phone: kept, retried next tick
+    cid = chore(g, house, audience="home")
+    tick(g, house, ha, s, at(18, 18))
+    g.execute_chore(cid, 3)
+    flaky = DeadCatHA(clear_status=None)
+    flaky.states = ha.states
+    tick(g, house, flaky, s, at(18, 18, 1))
+    r = house.reminder(f"chore:{cid}")
+    assert r.sent_to == [CAT_PHONE] and r.sent_for == "2026-11-18T00:00:00" and r.last_sent is None
+    assert house.flag("ha_error")
+    ha.cleared.clear()
+    tick(g, house, ha, s, at(18, 18, 2))
+    assert ha.cleared == [(CAT_PHONE, f"chore:{cid}")]
+    assert house.reminder(f"chore:{cid}") == Reminder(f"chore:{cid}", "home", "18:00") and house.flag("ha_error") is None
+
+
+def test_ha_flag_clears_during_quiet_hours(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    task(g, house, due="2026-11-17", audience="home")
+    ha.down = True
+    tick(g, house, ha, s, at(18, 22, 10))
+    assert house.flag("ha_error")
+    ha.down = False
+    tick(g, house, ha, s, at(18, 22, 30))
+    assert house.flag("ha_error") is None and ha.sent == []
+
+
+def test_start_loop_survives_a_failing_tick():
+    import threading
+    from app.reminders import start_loop
+    calls, second = [], threading.Event()
+
+    def state():
+        calls.append(1)
+        if len(calls) > 1:
+            second.set()
+            threading.Event().wait()  # park the daemon thread
+        raise RuntimeError("Grocy is down")
+
+    start_loop(state, interval=0)
+    assert second.wait(5)
+
+
+def test_home_save_waits_for_the_reminder_lock(tmp_path):
+    import threading
+    from app import home as hm
+    from app.house import LOCK
+    g, house, ha, s, josh, cat = world(tmp_path)
+    with LOCK:  # as if a tick were running
+        t = threading.Thread(target=hm.save, args=(g, house, "chores", "chore", {"name": "Mop"}, {"remind_at": "07:00"}))
+        t.start()
+        t.join(0.3)
+        assert t.is_alive() and house.keys() == []
+    t.join(5)
+    assert [house.reminder(k).remind_at for k in house.keys()] == ["07:00"]
+
+
+def test_deleting_on_the_home_page_clears_every_phone(tmp_path):
+    import app.web as web
+    from fastapi.testclient import TestClient
+    from app.importer import PendingStore
+    from tests.fakes import FakeAI
+    g, house, ha, s, josh, cat = world(tmp_path)
+    plain = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
+    c = TestClient(web.create_app(g, FakeAI(), None, plain, PendingStore(tmp_path / "p"), house=house, ha=ha),
+                   follow_redirects=False)
+    tid = task(g, house, audience="home", remind_at="10:00")
+    tick(g, house, ha, s, at(18, 10))
+    assert c.post(f"/home/tasks/{tid}/delete").status_code == 303
+    tick(g, house, ha, s, at(18, 10, 1))
+    assert sorted(ha.cleared) == [(CAT_PHONE, f"task:{tid}"), (JOSH_PHONE, f"task:{tid}")]
+    assert f"task:{tid}" not in house.keys()

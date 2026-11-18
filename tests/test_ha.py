@@ -62,14 +62,19 @@ def test_notify_services_mobile_only():
 
 
 def test_http_error_raises_haerror():
-    with pytest.raises(HAError):
+    with pytest.raises(HAError) as e:
         make(lambda r: httpx.Response(500, text="boom")).home_states()
+    assert e.value.status == 500
+    with pytest.raises(HAError) as e:
+        make(lambda r: httpx.Response(400, text="unknown service")).clear("mobile_app_gone", "chore:1")
+    assert e.value.status == 400
 
     def boom(req):
         raise httpx.ConnectError("down")
 
-    with pytest.raises(HAError):
+    with pytest.raises(HAError) as e:
         make(boom).notify("mobile_app_x", "t", "m", "k", [])
+    assert e.value.status is None
 
 
 def test_non_json_reply_raises_haerror():
