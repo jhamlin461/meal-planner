@@ -7,6 +7,19 @@ if (document.querySelector("[data-wakelock]")) {
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") lock(); });
 }
 
+// The Scan button steps aside while the page scrolls down (so it never sits on a control) and comes back on scroll
+// up or at the top. Hidden it is not focusable, so Tab brings it back first for keyboard users.
+const fab = document.querySelector(".fab");
+if (fab) {
+  let lastY = scrollY;
+  addEventListener("scroll", () => {
+    if (Math.abs(scrollY - lastY) < 8) return;
+    fab.classList.toggle("away", scrollY > lastY && scrollY > 0);
+    lastY = scrollY;
+  }, { passive: true });
+  addEventListener("keydown", (e) => { if (e.key === "Tab") fab.classList.remove("away"); });
+}
+
 const toastEl = document.getElementById("toast");
 let toastTimer;
 function toast(text, onFix) {

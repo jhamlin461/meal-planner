@@ -98,10 +98,14 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 .rail a[aria-current] { color: var(--action); }
 .rail-sub { display: none; }
 /* Scan is an action, not a place: one floating button above the tab bar on Meals and Chores pages. */
-.fab { position: fixed; z-index: 11; right: calc(16px + env(safe-area-inset-right));
+/* It steps down behind the tab bar while the page scrolls down (app.js adds .away) and returns on scroll up. */
+.fab { position: fixed; z-index: 9; right: calc(16px + env(safe-area-inset-right));
   bottom: calc(80px + env(safe-area-inset-bottom)); min-height: 52px; padding: 0 22px 0 18px; border-radius: 26px;
   display: flex; align-items: center; gap: 10px; background: var(--action); color: #fff; font-weight: 650;
-  text-decoration: none; box-shadow: 0 6px 16px rgba(0,0,0,.3); }
+  text-decoration: none; box-shadow: 0 6px 16px rgba(0,0,0,.3); transition: transform .2s ease-out, opacity .2s; }
+.fab.away { transform: translateY(calc(100% + 96px)); opacity: 0; visibility: hidden;
+  transition: transform .2s ease-in, opacity .2s, visibility 0s .2s; }
+.fab:focus-visible { outline-color: var(--text); }
 body:has(> .fab) main { padding-bottom: calc(148px + env(safe-area-inset-bottom)); }
 @media (min-width: 900px) {
   body { padding-left: var(--rail-w); }

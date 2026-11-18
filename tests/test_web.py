@@ -126,6 +126,34 @@ def test_scan_page_keeps_section_switcher(env):
     assert not [t for _, a, t in _switcher(html, "Meals pages") if "aria-current" in a]
 
 
+def _render_base(path, query=""):
+    from types import SimpleNamespace
+    from urllib.parse import parse_qsl
+    import jinja2
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent.parent / "app/templates"),
+                             autoescape=True)
+    req = SimpleNamespace(url=SimpleNamespace(path=path), query_params=dict(parse_qsl(query)), cookies={})
+    return env.get_template("base.html").render(request=req)
+
+
+def test_switcher_matches_whole_path_segments():
+    def current(path, label="Meals pages"):
+        return [t for _, a, t in _switcher(_render_base(path), label) if "aria-current" in a]
+    assert current("/plan") == ["Plan"] and current("/recipes/7") == ["Recipes"]
+    assert current("/plans") == [] and current("/shoppinglist") == []
+    assert current("/home", "Chores pages") == ["Chores"] and current("/home/supplies", "Chores pages") == ["Supplies"]
+
+
+def test_scan_button_steps_aside_while_scrolling(env):
+    c = env[3]
+    css, js = c.get("/static/style.css").text, c.get("/static/app.js").text
+    away = css[css.index(".fab.away {"):]
+    assert "visibility: hidden" in away[:away.index("}")]
+    focus = css[css.index(".fab:focus-visible {"):]
+    assert "var(--text)" in focus[:focus.index("}")]
+    assert 'querySelector(".fab")' in js and '"scroll"' in js and "passive: true" in js and '"away"' in js
+
+
 def test_me_page_theme_and_device(env):
     c = env[3]
     c.cookies.set("who", "kitchen")

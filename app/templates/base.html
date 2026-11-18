@@ -5,7 +5,7 @@
 {%- set pages = [("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [("/home", "Chores"), ("/home/supplies", "Supplies")] if section == "home" else [] -%}
 {%- set scan_href = "/scan?from=chores" if section == "home" else "/scan" -%}
 {%- set on_scan = path.startswith("/scan") -%}
-{%- macro current(href) %}{% if not on_scan and path.startswith(href) and (href != "/home" or path == "/home") %} aria-current="page"{% endif %}{% endmacro -%}
+{%- macro current(href) %}{% if not on_scan and (path == href or path.startswith(href + "/")) and (href != "/home" or path == "/home") %} aria-current="page"{% endif %}{% endmacro -%}
 {%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
