@@ -503,9 +503,23 @@ def test_api_expiring_message(env):
     g.volatile_result["due_products"] = [{"product_id": milk, "best_before_date": "2026-11-20"},
                                          {"product_id": spinach, "best_before_date": "2026-11-21 00:00:00"}]
     assert c.get("/api/expiring").json() == {"count": 2, "message": "Use soon: milk (Fri), spinach (Sat)"}
+    yogurt = product(g, "yogurt")
+    g.volatile_result["expired_products"] = [{"product_id": yogurt, "best_before_date": "2026-11-10"}]
+    assert c.get("/api/expiring").json() == {
+        "count": 3, "message": "Expired: yogurt; Use soon: milk (Fri), spinach (Sat)"}
 
 
 def test_plan_and_shopping_pages_render_empty(env):
     c = env[3]
     for url in ("/plan", "/shopping", "/plan?week=2026-11-18"):
         assert c.get(url).status_code == 200, url
+
+
+def test_toggle_from_stale_page_still_works(env):
+    g, _, _, c, _ = env
+    _, rid = flour_recipe(g)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
+    c.get("/shopping")  # another page load rebuilds the list
+    assert c.post(f"/shopping/{row['id']}/toggle").status_code == 200
+    assert g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])[0]["done"] == 1

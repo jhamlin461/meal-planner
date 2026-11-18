@@ -55,12 +55,19 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
 
     list_id = ids(grocy).list["Meal plan"]
     old = grocy.objects("shopping_list", shopping_list_id=list_id)
-    was_done = {int(r["product_id"]) for r in old if r.get("product_id") and _done(r)}
-    for r in old:
-        grocy.delete("shopping_list", int(r["id"]))
+    kept: set[int] = set()
+    for r in old:  # update in place so row ids (and done flags) stay stable for pages already open
+        pid = int(r["product_id"]) if r.get("product_id") else None
+        if pid in short and pid not in kept:
+            kept.add(pid)
+            if abs(float(r.get("amount") or 0) - short[pid]) > 1e-9:
+                grocy.update("shopping_list", int(r["id"]), {"amount": short[pid]})
+        else:  # no longer needed, free-text, or a duplicate row
+            grocy.delete("shopping_list", int(r["id"]))
     for pid, amount in short.items():
-        grocy.create("shopping_list", {"shopping_list_id": list_id, "product_id": pid, "amount": amount,
-                                       "done": 1 if pid in was_done else 0})
+        if pid not in kept:
+            grocy.create("shopping_list", {"shopping_list_id": list_id, "product_id": pid, "amount": amount,
+                                           "done": 0})
     return short
 
 

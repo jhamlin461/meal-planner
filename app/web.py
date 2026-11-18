@@ -555,14 +555,19 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def api_expiring():
         names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
         vol = grocy.volatile(settings.expiry_warn_days)
-        parts = []
-        for r in (r for key in ("overdue_products", "due_products") for r in vol.get(key) or []):
+        def label(r: dict, with_day: bool) -> str:
+            name = names.get(int(r["product_id"]), f"product {r['product_id']}")
             try:
-                when = f" ({date.fromisoformat(str(r['best_before_date'])[:10]):%a})"
+                return name + (f" ({date.fromisoformat(str(r['best_before_date'])[:10]):%a})" if with_day else "")
             except (KeyError, ValueError):
-                when = ""
-            parts.append(names.get(int(r["product_id"]), f"product {r['product_id']}") + when)
-        return {"count": len(parts), "message": "Use soon: " + ", ".join(parts) if parts else ""}
+                return name
+
+        expired = {int(r["product_id"]): label(r, False) for r in vol.get("expired_products") or []}
+        soon = {int(r["product_id"]): label(r, True)
+                for key in ("overdue_products", "due_products") for r in vol.get(key) or []
+                if int(r["product_id"]) not in expired}
+        msg = [f"{k}: {', '.join(v)}" for k, v in (("Expired", expired.values()), ("Use soon", soon.values())) if v]
+        return {"count": len(expired) + len(soon), "message": "; ".join(msg)}
 
     return app
 

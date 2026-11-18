@@ -96,3 +96,16 @@ def test_rebuild_survives_free_text_row_and_bad_base_servings(fake_grocy_with_we
 
 def test_walmart_items_skips_missing_product(fake_grocy_with_week):
     assert walmart_items(fake_grocy_with_week, {999: 5}) == ([], [])
+
+
+def test_rebuild_keeps_row_ids_and_dedupes(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    rebuild_meal_plan_list(g, TODAY, 6)
+    [row] = _list(g, "Meal plan")
+    g.update("shopping_list", row["id"], {"done": 1})
+    dup = g.create("shopping_list", {"shopping_list_id": ids(g).list["Meal plan"], "product_id": 10, "amount": 1,
+                                     "done": 0})
+    rebuild_meal_plan_list(g, TODAY, 6)
+    [again] = _list(g, "Meal plan")
+    assert again["id"] == row["id"] and again["done"] == 1 and again["id"] != dup
+    assert again["amount"] == 200  # 4 servings at 150 g per 2 = 300 g, minus 100 g in stock
