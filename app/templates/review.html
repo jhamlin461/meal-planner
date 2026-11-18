@@ -41,7 +41,7 @@
 </li>
 {% endfor %}</ul>
 <h2>Table</h2>
-{% if cfe %}<div class="scroll">{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}</div>
+{% if cfe %}{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}
 {% else %}{% for e in table_errors %}<p class="error">{{ e }}</p>{% endfor %}{% endif %}
 {% include "_cfe_editor.html" %}
 <p class="row"><button name="action" value="save">Save recipe</button><button class="secondary" name="action" value="update">Update</button></p>

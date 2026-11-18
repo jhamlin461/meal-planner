@@ -778,15 +778,18 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
         def entry(r: dict) -> dict:
             is_recipe = r.get("type") == "recipe"
+            rid = _int(r.get("recipe_id"))
             return {"id": int(r["id"]), "recipe": is_recipe, "done": bool(int(float(r.get("done") or 0))),
-                    "text": rnames.get(_int(r.get("recipe_id")), "(deleted recipe)") if is_recipe
+                    "rid": rid if rid in rnames else None,
+                    "text": rnames.get(rid, "(deleted recipe)") if is_recipe
                     else r.get("note", ""),
                     "servings": _fmt(r.get("recipe_servings"))}
 
         days = [{"day": d.day, "lunch": [entry(r) for r in d.lunch], "dinner": [entry(r) for r in d.dinner]}
                 for d in week_view(grocy, monday)]
         return page(request, "plan.html", days=days, monday=monday, prev=monday - timedelta(days=7),
-                    next=monday + timedelta(days=7), recipes=choices, short=list(short), picks=picks, error=error)
+                    next=monday + timedelta(days=7), recipes=choices, short=list(short), picks=picks, error=error,
+                    today=date.today())
 
     @app.get("/plan")
     def plan_get(request: Request, week: date | None = None, short: list[str] = Query(default=[])):
@@ -838,7 +841,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         except AIError as e:
             return plan_page(request, monday, error=str(e))
         names = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}
-        shown = [{"day": p.day.isoformat(), "label": p.day.strftime("%a %b %d"), "section": p.section,
+        shown = [{"day": p.day.isoformat(), "label": p.day.strftime("%A"), "section": p.section,
                   "recipe_id": p.recipe_id, "name": names.get(p.recipe_id, ""), "reason": p.reason} for p in picks]
         last_picks[monday] = shown
         return plan_page(request, monday, picks=shown)

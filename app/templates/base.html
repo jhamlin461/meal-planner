@@ -19,7 +19,7 @@
 <link rel="stylesheet" href="/static/style.css">
 {% block head %}{% endblock %}
 </head>
-<body{% if subnav %} class="has-subnav"{% endif %}>
+<body data-section="{{ section }}"{% if subnav %} class="has-subnav"{% endif %}>
 <nav class="rail" aria-label="Main">
 <ul>
 {% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}

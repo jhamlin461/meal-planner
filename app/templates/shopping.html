@@ -1,37 +1,47 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Shopping{% endblock %}
-{% macro rows(items) %}
-<ul class="rows">
-{% for r in items %}<li><form class="inline" method="post" action="/shopping/{{ r.id }}/toggle">
-  <button class="{{ '' if r.done else 'secondary' }}" aria-pressed="{{ 'true' if r.done else 'false' }}" aria-label="Got {{ r.name }}">{{ "✓" if r.done else "◻" }}</button>
-  <span class="grow">{% if r.done %}<s>{{ r.name }}</s>{% else %}{{ r.name }}{% endif %}
-  {% if r.pid %}<span class="muted">· {{ r.amount|num }} {{ r.unit }}{% if r.packs %} · {{ r.packs }} × {{ r.pkg|num }} {{ r.unit }} pack{% endif %}</span>{% endif %}</span>
+{% macro rows(items, empty) %}
+<ul class="rows shop-rows">
+{% for r in items %}<li><form method="post" action="/shopping/{{ r.id }}/toggle">
+  <button class="shop-item" aria-pressed="{{ 'true' if r.done else 'false' }}">
+    <span class="tick">{{ icon("check") }}</span>
+    <span class="grow breakable"><span class="shop-name">{{ r.name }}</span>
+    {%- if r.pid %}<span class="muted">{{ r.amount|num }} {{ r.unit }}{% if r.packs %}, {{ r.packs }} × {{ r.pkg|num }} {{ r.unit }} pack{% endif %}</span>{% endif %}</span>
+  </button>
 </form></li>
-{% else %}<li class="muted">Nothing here.</li>
+{% else %}<li class="empty">{{ empty }}</li>
 {% endfor %}</ul>
 {% endmacro %}
 {% block content %}
 <h1>Shopping</h1>
-{% if bad %}<p class="error">That does not look like a Walmart item link or number.</p>{% endif %}
+{% if bad %}<p class="card error" role="alert">That does not look like a Walmart item link or number. Copy the link from the item's page on walmart.com.</p>{% endif %}
 <h2>Meal plan</h2>
-{{ rows(lists["Meal plan"]) }}
+{{ rows(lists["Meal plan"], "Nothing needed for the planned meals.") }}
 <h2>Running low</h2>
-{{ rows(lists["Running low"]) }}
+{{ rows(lists["Running low"], "No supplies are running low.") }}
 <h2>Extras</h2>
-{{ rows(lists["Extras"]) }}
+{{ rows(lists["Extras"], "No extras yet.") }}
 <form class="inline" method="post" action="/shopping/extra">
-  <input class="grow" name="name" placeholder="Add an extra" aria-label="Extra item" required><button>Add</button>
+  <input class="grow" name="name" placeholder="Add an extra" aria-label="Extra item" required>
+  <button class="btn">{{ icon("plus") }}Add</button>
 </form>
-<form method="post" action="/shopping/bought"><p><button>Bought (move ticked items to stock)</button></p></form>
+<form method="post" action="/shopping/bought" class="card bought">
+  <p class="muted">Back from the shop? Ticked items go into stock and come off the lists.</p>
+  <div class="card-actions"><button class="btn btn-primary">Put ticked items in stock</button></div>
+</form>
 <h2>Walmart</h2>
-{% if cart_link %}<p><a class="button" href="{{ cart_link }}" rel="noreferrer">Open Walmart cart</a></p>{% endif %}
+{% if cart_link %}<p><a class="btn btn-primary wide" href="{{ cart_link }}" rel="noreferrer">{{ icon("cart-outline") }}Open Walmart cart</a></p>{% endif %}
 {% if rest %}
-<h3>Still to add on Walmart</h3>
+<h3 class="sub">Still to add on Walmart</h3>
+<p class="muted">These have no Walmart item yet. Search for one, then paste its link so the cart can include it next time.</p>
 <ul class="rows">
-{% for p in rest %}<li><a href="{{ p.url }}" rel="noreferrer">{{ p.name }}</a>
+{% for p in rest %}<li>
+  <p class="row"><b class="grow breakable">{{ p.name }}</b><a class="btn" href="{{ p.url }}" rel="noreferrer" aria-label="Search Walmart for {{ p.name }}">Search Walmart</a></p>
   <form class="inline" method="post" action="/products/{{ p.id }}/walmart">
-    <input class="grow" name="link" placeholder="Paste Walmart link" aria-label="Walmart link for {{ p.name }}" required><button class="secondary">Save</button>
+    <input class="grow" name="link" placeholder="Paste Walmart link" aria-label="Walmart link for {{ p.name }}" required>
+    <button class="btn">Save link</button>
   </form></li>
 {% endfor %}</ul>
-{% elif not cart_link %}<p class="muted">Nothing left to order.</p>{% endif %}
+{% elif not cart_link %}<p class="empty">Nothing left to order.</p>{% endif %}
 {% endblock %}

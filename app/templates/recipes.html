@@ -1,10 +1,12 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Recipes{% endblock %}
 {% block content %}
 <h1>Recipes</h1>
-<p class="row"><a class="button" href="/import">Import recipes</a>{% if waiting %}<a href="/import">{{ waiting }} waiting for review</a>{% endif %}</p>
-<ul class="rows">
-{% for r in recipes %}<li><a href="/recipes/{{ r.id }}">{{ r.name }}</a></li>
-{% else %}<li class="muted">No recipes yet.</li>
+<p class="row"><a class="btn btn-primary" href="/import">{{ icon("plus") }}Import recipes</a>
+{%- if waiting %}<a class="btn" href="/import">Review {{ waiting }} waiting</a>{% endif %}</p>
+{% if recipes %}<ul class="rows">
+{% for r in recipes %}<li class="row-link"><a href="/recipes/{{ r.id }}"><span class="grow breakable">{{ r.name }}</span>{{ icon("chevron-right") }}</a></li>
 {% endfor %}</ul>
+{% else %}<p class="empty">No recipes yet. Import one from a recipe card PDF or a website.</p>{% endif %}
 {% endblock %}

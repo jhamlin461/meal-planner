@@ -1000,3 +1000,18 @@ def test_supplies_view_used_one(env):
     assert g.get_object("products", bags)["min_stock_amount"] == 3 and g.get_object("products", glad)["min_stock_amount"] == 0
     assert c.post(f"/home/supplies/{sponge}/min", data={"amount": -1}).status_code == 422
     assert c.post("/home/supplies/999/used").status_code == 404
+
+
+def test_kitchen_pages_use_shell(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    for url in ("/plan", "/shopping", "/recipes", f"/recipes/{rid}"):
+        html = c.get(url).text
+        assert 'data-section="kitchen"' in html and "style=" not in html, url
+
+
+def test_shopping_has_three_sections(env):
+    html = env[3].get("/shopping").text
+    heads = [h for h in re.findall(r"<h2[^>]*>(.*?)</h2>", html)]
+    assert [h for h in heads if h in ("Meal plan", "Running low", "Extras")] == ["Meal plan", "Running low", "Extras"]

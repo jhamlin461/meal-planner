@@ -1,4 +1,6 @@
+<div class="cfe-wrap" role="region" aria-label="Recipe table" tabindex="0">
 <table class="cfe">
 {% for line in pre %}<tr><td class="cfe-pre" colspan="{{ ncols }}">{{ line }}</td></tr>
 {% endfor %}{% for row in grid %}<tr>{% for c in row %}<td class="cfe-{{ c.kind }}" rowspan="{{ c.rowspan }}" colspan="{{ c.colspan }}">{{ c.text }}</td>{% endfor %}</tr>
 {% endfor %}</table>
+</div>
