@@ -1189,3 +1189,15 @@ def test_pantry_keeps_supplies_out_and_reads_like_supplies(env):
     assert "12 left" in html and "500 g left" in html and "12 piece" not in html
     day = f"{date.today() + timedelta(days=2):%A}"
     assert f"Use by {day}" in html and f"Best before {day}" in html
+
+
+def test_scan_dialogs_save_on_enter_and_new_scan_clears_result(env):
+    html = env[3].get("/scan").text
+    for dialog in ('<dialog id="ask"', '<dialog id="fix"'):
+        d = html[html.index(dialog):]
+        d = d[:d.index("</dialog>")]
+        assert d.index('value="ok"') < d.index('value="cancel"'), dialog  # Enter submits the first button
+    js = env[3].get("/static/app.js").text
+    param = re.search(r"decodeFromVideoDevice\(undefined, video, \((\w+)\) =>", js).group(1)
+    hidden = re.search(r"(\w+)\.hidden = true;\s*run\(`Looking up", js).group(1)
+    assert hidden != param and f'const {hidden} = document.getElementById("scan-result")' in js

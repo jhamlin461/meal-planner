@@ -21,7 +21,7 @@
 <dialog id="ask" aria-labelledby="ask-text">
   <form method="dialog">
     <label class="field"><span id="ask-text"></span><input id="ask-amount" name="amount" type="number" step="any" min="0" inputmode="decimal" required></label>
-    <div class="card-actions"><button class="btn" value="cancel" formnovalidate>Skip</button><button class="btn btn-primary" value="ok">Save</button></div>
+    <div class="card-actions"><button class="btn btn-primary" value="ok">Save</button><button class="btn" value="cancel" formnovalidate>Skip</button></div>
   </form>
 </dialog>
 <dialog id="fix" aria-labelledby="fix-text">
@@ -29,7 +29,7 @@
     <label class="field"><span id="fix-text">What is <b id="fix-name"></b>?</span>
       <input name="generic" list="generics" required autocomplete="off"></label>
     <datalist id="generics">{% for g in generics %}<option value="{{ g }}">{% endfor %}</datalist>
-    <div class="card-actions"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn btn-primary" value="ok">Save</button></div>
+    <div class="card-actions"><button class="btn btn-primary" value="ok">Save</button><button class="btn" value="cancel" formnovalidate>Cancel</button></div>
   </form>
 </dialog>
 {% endblock %}

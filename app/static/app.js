@@ -44,7 +44,7 @@ if (video) {
   const photo = document.getElementById("photo");
   const dlg = document.getElementById("fix");
   const sheet = document.getElementById("ask");
-  const result = document.getElementById("scan-result");
+  const card = document.getElementById("scan-result");
   const idle = "Point the camera at a barcode.";
   const action = () => document.querySelector("[name=scan-action]:checked").value;
   let busy = false, last = "", lastAt = 0, unknownCode = "", shown = null;
@@ -54,7 +54,7 @@ if (video) {
     document.getElementById("ask-text").textContent = text;
     const input = document.getElementById("ask-amount");
     input.value = value ?? "";
-    const [noBtn, yesBtn] = sheet.querySelectorAll("button");
+    const noBtn = sheet.querySelector("[value=cancel]"), yesBtn = sheet.querySelector("[value=ok]");
     noBtn.textContent = no;
     yesBtn.textContent = yes;
     sheet.returnValue = "";  // Esc keeps the last value
@@ -71,7 +71,7 @@ if (video) {
   function report(title, note) {
     document.getElementById("result-title").textContent = title;
     document.getElementById("result-note").textContent = note;
-    result.hidden = false;
+    card.hidden = false;
   }
 
   document.getElementById("result-fix").addEventListener("click", () => {
@@ -148,7 +148,7 @@ if (video) {
     last = code;
     lastAt = now;
     unknown.hidden = true;
-    result.hidden = true;
+    card.hidden = true;
     run(`Looking up ${code}…`, async () => show(await post("/api/scan", {code, action: action()}), code));
   }).catch((e) => { status.textContent = `Camera unavailable: ${e.message}`; });
 }

@@ -7,7 +7,7 @@
 <section class="card soon" aria-labelledby="soon">
 <h2 id="soon">Use soon</h2>
 <ul class="rows">
-{% for s in soon %}<li class="row"><span class="grow breakable">{{ s.name }}</span><span class="{{ 'error' if s.past else 'warn' }}">{{ s.when }}</span></li>
+{% for s in soon %}<li class="row"><span class="grow breakable">{{ s.name }}</span>{% if s.when %}<span class="{{ 'error' if s.past else 'warn' }}">{{ s.when }}</span>{% endif %}</li>
 {% endfor %}</ul>
 </section>
 {% endif %}
