@@ -520,6 +520,25 @@ Build `fake_grocy_with_week` as a pytest fixture in `tests/fakes.py` (bootstrapp
 
 ---
 
+### Task 17: Kit packets become real measurements (runs after Task 14, before Task 15)
+
+Owner requirement added 2026-11-18 (spec: Importer → Kit packets). Meal-kit "packets" must never survive into a saved recipe or into a product conversion.
+
+**Files:**
+- Modify: `app/ai.py` (`CFE_PROMPT`), `app/qty.py`, `app/importer.py` (`add_conversion`), `app/web.py` + `app/templates/review.html` (review rows), tests in `tests/test_qty.py`, `tests/test_importer.py`, `tests/test_web.py`
+
+**Interfaces:**
+- Produces: `qty.PACKAGING_UNITS = {"packet", "pouch", "sachet", "container", "package", "bag", "box"}` and `qty.is_packaging(unit: str) -> bool` (case-insensitive, plural "s" stripped; "can" is NOT packaging — cans are bought as cans).
+- `CFE_PROMPT` gains a rule: never use a packaging unit; convert each packet to a real unit using the size printed on the card, else the typical meal-kit packet size with "est." in the note; replace kit-only seasoning blends with component spices (one row each, estimated, note "from <blend name>"); an ingredient row's op coverage rules still hold.
+- `add_conversion` raises `ValueError` when `is_packaging(from_unit)`.
+- Review screen: a row whose unit `is_packaging` gets no factor prompt and no "Suggest" button; it asks for the real amount in the product's stock unit (the existing `amount_<i>` input) with the hint "Packet sizes vary — enter the real amount".
+
+- [ ] **Step 1: Write failing tests:** `test_is_packaging` (`packet`, `Packets`, `pouch` → True; `can`, `g`, `tbsp` → False); `test_add_conversion_rejects_packaging_unit`; `test_cfe_prompt_forbids_packets` (asserts `"packet" in CFE_PROMPT.lower()` and `"est." in CFE_PROMPT`); `test_review_packet_row_asks_for_amount_not_factor` (draft ingredient `1 packet sour cream`, product Sour cream stocked in g → review page has `amount_0`, has no `factor_0`; POST with `amount_0=30` saves a position of 30 and creates no `quantity_unit_conversions` row).
+- [ ] **Step 2:** Run — FAIL. **Step 3:** Implement. **Step 4:** Run — PASS (full suite).
+- [ ] **Step 5:** Commit `feat: convert meal-kit packets to real measurements`.
+
+---
+
 ### Task 15: Deployment (Proxmox LXC, Tailscale, Home Assistant)
 
 **Files:**
