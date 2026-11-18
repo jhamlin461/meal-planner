@@ -7,7 +7,7 @@
   <label class="choice"><input type="radio" name="scan-action" value="use"> Use</label>
 </div>
 <video id="scanner" playsinline muted></video>
-<p><a class="button secondary" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank">Open scanner in browser</a></p>
+<p><a class="button secondary" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
 <p id="scan-status" class="muted">Point the camera at a barcode.</p>
 <div id="unknown" class="card" hidden>
   <p>I don't know barcode <b id="unknown-code"></b>. Take a photo of the package and I'll work it out.</p>

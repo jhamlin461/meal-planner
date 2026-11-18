@@ -961,7 +961,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     for r in vol.get(k) or []}
         key = house.flag("laundry")
         return {"people": people, "use_soon": len(use_soon), "running_low": len(vol.get("missing_products") or []),
-                "laundry_open": bool(key) and key in rm.open_items(grocy), "ha_ok": house.flag("ha_error") is None}
+                "laundry_open": bool(key) and key in rm.open_items(grocy), "ha_ok": home is not None}
 
     return app
 
