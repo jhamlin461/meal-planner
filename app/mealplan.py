@@ -59,17 +59,19 @@ def unplan_meal(grocy, entry_id: int, settings, today: date | None = None) -> No
 
 def cook(grocy, entry_id: int) -> list[str]:
     entry = grocy.get_object("meal_plan", entry_id)
-    if entry is None or int(float(entry.get("done") or 0)):
+    if entry is None or entry.get("type") != "recipe" or int(float(entry.get("done") or 0)):
         return []
     rid = int(entry["recipe_id"])
     recipe = grocy.get_object("recipes", rid) or {}
     factor = float(entry["recipe_servings"]) / (float(recipe.get("base_servings") or 0) or 1.0)
     stock = grocy.stock_amounts()
     names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
-    short = []
-    for pos in grocy.objects("recipes_pos", recipe_id=rid):
+    needs: dict[int, float] = {}
+    for pos in grocy.objects("recipes_pos", recipe_id=rid):  # a product can repeat across positions
         pid = int(pos["product_id"])
-        need = float(pos["amount"]) * factor
+        needs[pid] = needs.get(pid, 0.0) + float(pos["amount"]) * factor
+    short = []
+    for pid, need in needs.items():
         have = stock.get(pid, 0.0)
         use = min(need, have)
         if use > 0:

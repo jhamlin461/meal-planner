@@ -71,3 +71,19 @@ def test_week_view_groups_by_day_and_section(fake_grocy_with_week):
     days = week_view(g, date(2026, 11, 16))
     assert len(days) == 7 and days[0].day == date(2026, 11, 16)
     assert len(days[2].dinner) == 1 and len(days[3].lunch) == 1 and days[3].dinner == []
+
+
+def test_cook_note_is_noop(fake_grocy_with_week):
+    g = _g(fake_grocy_with_week)
+    plan_meal(g, date(2026, 11, 18), "Dinner", 1, None, SETTINGS, today=TODAY)
+    [note] = g.objects("meal_plan", type="note")
+    assert cook(g, note["id"]) == []
+    assert g.stock_amounts()[10] == 100 and int(g.get_object("meal_plan", note["id"])["done"]) == 0
+
+
+def test_cook_repeated_ingredient_consumes_once_and_reports_once(fake_grocy_with_week):
+    g = _g(fake_grocy_with_week)
+    g.create("recipes_pos", {"recipe_id": 1, "product_id": 10, "amount": 150, "note": ""})
+    eid = plan_meal(g, date(2026, 11, 20), "Dinner", 1, 2, SETTINGS, today=TODAY)  # need 300, stock 100
+    assert cook(g, eid) == ["Flour"]
+    assert g.stock_amounts().get(10, 0) == 0
