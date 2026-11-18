@@ -40,7 +40,7 @@ Inside the LXC:
 
 ```
 tailscale file get /root/
-git clone /root/meal-planner.bundle /root/Recipes && cd /root/Recipes/deploy
+git clone -b main /root/meal-planner.bundle /root/Recipes && cd /root/Recipes/deploy
 cp .env.example .env        # fill in below (set TZ to your own time zone)
 docker compose up -d
 ```
