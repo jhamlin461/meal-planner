@@ -28,8 +28,8 @@ class HA:
         except ValueError as e:
             raise HAError(f"{method} {path}: non-JSON reply") from e
 
-    def _persons(self) -> list[dict]:
-        return [s for s in self._req("GET", "/api/states") if s["entity_id"].startswith("person.")]
+    def _persons(self, **kw) -> list[dict]:
+        return [s for s in self._req("GET", "/api/states", **kw) if s["entity_id"].startswith("person.")]
 
     def persons(self) -> dict[str, str]:
         return {s["entity_id"]: s.get("attributes", {}).get("friendly_name", s["entity_id"]) for s in self._persons()}
@@ -37,8 +37,9 @@ class HA:
     def person_trackers(self) -> dict[str, list[str]]:
         return {s["entity_id"]: list(s.get("attributes", {}).get("device_trackers") or []) for s in self._persons()}
 
-    def home_states(self) -> dict[str, str]:
-        return {s["entity_id"]: s["state"] for s in self._persons()}
+    def home_states(self, timeout: float | None = None) -> dict[str, str]:
+        """timeout: seconds for this call (a page that can't wait); the client's 15 s otherwise."""
+        return {s["entity_id"]: s["state"] for s in self._persons(**({"timeout": timeout} if timeout else {}))}
 
     def notify_services(self) -> list[str]:
         return [n for d in self._req("GET", "/api/services") if d["domain"] == "notify"

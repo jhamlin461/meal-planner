@@ -261,7 +261,7 @@ class FakeHA:
         self._check()
         return {p: list(self.trackers.get(p, [])) for p in self.persons_map}
 
-    def home_states(self):
+    def home_states(self, timeout=None):
         self._check()
         return dict(self.states)
 

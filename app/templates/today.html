@@ -31,7 +31,7 @@
 {% if coming %}
 <h2>Coming up</h2>
 <ul class="rows coming">
-{% for c in coming %}<li class="row"><span class="tick" aria-hidden="true"></span><div class="grow breakable"><div>{{ c.title }}</div><div class="when {{ 'warn' if c.soon else 'muted' }}">{{ c.when }}</div></div></li>
+{% for c in coming %}<li class="row">{{ icon(c.icon) }}<div class="grow breakable"><div>{{ c.title }}</div><div class="when {{ 'warn' if c.soon else 'muted' }}">{{ c.when }}</div></div></li>
 {% endfor %}
 </ul>
 {% endif %}
