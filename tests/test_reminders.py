@@ -349,3 +349,17 @@ def test_deleting_on_the_home_page_clears_every_phone(tmp_path):
     tick(g, house, ha, s, at(18, 10, 1))
     assert sorted(ha.cleared) == [(CAT_PHONE, f"task:{tid}"), (JOSH_PHONE, f"task:{tid}")]
     assert f"task:{tid}" not in house.keys()
+
+
+def test_laundry_reminder_targets_people_home_every_15_min(tmp_path):
+    from app.reminders import washer_finished
+    g, house, ha, s, josh, cat = world(tmp_path)
+    ha.states["person.cat"] = "not_home"
+    assert washer_finished(g, house, at(18, 10, 7)) == "created"
+    out = sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 7)))
+    assert [(m["service"], m["title"], m["actions"][0][1]) for m in out] == [(JOSH_PHONE, "Move the laundry", "Moved it")]
+    assert out[0]["tag"] == house.flag("laundry")
+    assert sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 21))) == []
+    assert len(sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 22)))) == 1
+    ha.states["person.cat"] = "home"
+    assert [m["service"] for m in sends(ha, lambda: tick(g, house, ha, s, at(18, 10, 23)))] == [CAT_PHONE]

@@ -1,0 +1,70 @@
+# House manager: Home Assistant package. Copy to config/packages/house.yaml and turn packages on in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# Add to secrets.yaml (the same value as the app's HOOK_SECRET):
+#   house_secret: <long random string>
+# Replace <lxc-ip> with the LXC's LAN address.
+rest_command:
+  house_action:
+    url: http://<lxc-ip>:8000/api/hook/action
+    method: post
+    headers:
+      X-House-Secret: !secret house_secret
+    content_type: application/json
+    payload: '{"action": {{ action | tojson }}}'
+  house_washer_finished:
+    url: http://<lxc-ip>:8000/api/events/washer-finished
+    method: post
+    headers:
+      X-House-Secret: !secret house_secret
+  house_washer_started:
+    url: http://<lxc-ip>:8000/api/events/washer-started
+    method: post
+    headers:
+      X-House-Secret: !secret house_secret
+
+automation:
+  # Done / Snooze tapped on a house reminder (action ids HM:<done|snooze>:<kind>:<id>:<person>)
+  - alias: "House: notification action"
+    mode: queued
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+    condition:
+      - condition: template
+        value_template: "{{ (trigger.event.data.action | default('') | string).startswith('HM:') }}"
+    action:
+      - service: rest_command.house_action
+        data:
+          action: "{{ trigger.event.data.action }}"
+
+  # The washer says the cycle is done. HA restarts rewrite the event entity (from unavailable/unknown): ignored.
+  - alias: "House: washer finished"
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: event.front_load_washer_notification
+    condition:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state is not none and trigger.from_state is not none
+             and trigger.to_state.attributes.event_type == 'washing_is_complete'
+             and trigger.from_state.state not in ['unavailable', 'unknown'] }}
+    action:
+      - service: rest_command.house_washer_finished
+
+  # A new load starting means the last one was moved (status runs initial -> detecting -> running -> rinsing ->
+  # spinning -> end, then power_off about 30 s later).
+  - alias: "House: washer started"
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: sensor.front_load_washer_current_status
+        to:
+          - initial
+          - detecting
+        not_from:
+          - unavailable
+          - unknown
+    action:
+      - service: rest_command.house_washer_started

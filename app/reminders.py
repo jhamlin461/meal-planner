@@ -1,5 +1,6 @@
 """Reminder engine: what is due, who hears about it, and the loop that sends and clears phone notifications."""
 import logging
+import re
 import threading
 import time as clock
 from dataclasses import dataclass
@@ -108,27 +109,41 @@ def _flag(house: HouseStore, errors: list[HAError]) -> None:
 
 
 def _clear_finished(house: HouseStore, ha, keys: list[str], open_: dict) -> list[HAError]:
-    """Deleted or completed: clear every phone and forget it. Recurring and moved on: clear every phone, keep settings.
-    A phone HA no longer knows (4xx) is forgotten; one HA couldn't reach stays in sent_to and is retried next tick."""
+    """Deleted or completed: clear every phone and forget it. Recurring and moved on: clear every phone, keep settings."""
     errors = []
     for key in keys:
         r = house.reminder(key)
         due = open_[key][1] if key in open_ else None
         if key in open_ and r.sent_for in (None, due and due.isoformat()):
             continue
-        retry = []
-        for service in r.sent_to:
-            try:
-                ha.clear(service, key)
-            except HAError as e:
-                errors.append(e)
-                if not (e.status and 400 <= e.status < 500):
-                    retry.append(service)
-        if key not in open_ and not retry:
-            house.drop_reminder(key)
-        else:  # sent_for stays until every phone is cleared, so the clear is retried
-            house.save_reminder(Reminder(key, r.audience, r.remind_at, r.repeat_min, sent_to=retry, verb=r.verb,
-                                         sent_for=r.sent_for if retry else None))
+        errors += _clear(house, ha, r, drop=key not in open_)
+    return errors
+
+
+def _clear_phones(ha, r: Reminder) -> tuple[list[str], list[HAError]]:
+    """Clear r's notification on every phone it reached; returns the phones to retry. A phone HA no longer knows (4xx)
+    is forgotten; one HA couldn't reach is kept, so the clear is retried."""
+    retry, errors = [], []
+    for service in r.sent_to:
+        try:
+            if ha is None:
+                raise HAError("Home Assistant is not set up")
+            ha.clear(service, r.key)
+        except HAError as e:
+            errors.append(e)
+            if not (e.status and 400 <= e.status < 500):
+                retry.append(service)
+    return retry, errors
+
+
+def _clear(house: HouseStore, ha, r: Reminder, drop: bool) -> list[HAError]:
+    """Clear every phone, then reset the sent state (settings stay) or, with drop, forget the reminder."""
+    retry, errors = _clear_phones(ha, r)
+    if drop and not retry:
+        house.drop_reminder(r.key)
+    else:  # sent_for stays until every phone is cleared, so the next tick retries the clear
+        house.save_reminder(Reminder(r.key, r.audience, r.remind_at, r.repeat_min, sent_to=retry, verb=r.verb,
+                                     sent_for=r.sent_for if retry else None))
     return errors
 
 
@@ -178,3 +193,87 @@ def start_loop(app_state_fn, interval: int = 60) -> threading.Thread:
     t = threading.Thread(target=run, name="reminders", daemon=True)
     t.start()
     return t
+
+
+# ---- Done and Snooze, from a phone or the app -----------------------------------------------------------------------
+ACTION = re.compile(r"HM:(done|snooze):(chore|task|battery):(\d+):(\d+)")
+
+
+def _report(house: HouseStore, errors: list[HAError]) -> None:
+    if errors:
+        _flag(house, errors)  # the next tick clears it once HA answers again
+
+
+def complete(grocy, house: HouseStore, ha, key: str, person: Person | None) -> bool:
+    """Done: run the chore / complete the task / charge the upkeep item if it is still open, crediting `person`, and
+    clear it on every phone. A recurring item keeps its settings for the next turn; a task's reminder is dropped.
+    False when it was already done (gone from Grocy's open list)."""
+    kind, num = key.split(":")
+    with LOCK:
+        is_open = key in _open(grocy)
+        if is_open:
+            if kind == "chore":
+                grocy.execute_chore(int(num), person.grocy_user_id if person else None)
+            elif kind == "task":
+                grocy.complete_task(int(num))
+            else:
+                grocy.charge_battery(int(num))
+        _report(house, _clear(house, ha, house.reminder(key), drop=kind == "task" or not is_open))
+        return is_open
+
+
+def snooze(house: HouseStore, ha, key: str, now: datetime, minutes: int = 15) -> None:
+    with LOCK:
+        r = house.reminder(key)
+        r.sent_to, errors = _clear_phones(ha, r)
+        r.snooze_until = now + timedelta(minutes=minutes)
+        house.save_reminder(r)
+    _report(house, errors)
+
+
+def action(grocy, house: HouseStore, ha, action_id: str, now: datetime) -> str | None:
+    """A phone's Done or Snooze button (`HM:<done|snooze>:<kind>:<id>:<person id>`). It acts only on the occurrence
+    that phone was told about: if someone already did it (the other phone, the app), it only clears the phones.
+    None for an id that isn't ours."""
+    m = ACTION.fullmatch(action_id)
+    if not m:
+        return None
+    verb, kind, num, pid = m.groups()
+    key = f"{kind}:{num}"
+    with LOCK:
+        r, open_ = house.reminder(key), _open(grocy)
+        due = open_[key][1] if key in open_ else None
+        if r.sent_for is None or due is None or r.sent_for != due.isoformat():
+            _report(house, _clear(house, ha, r, drop=key not in open_))
+            return "already-done"
+        if verb == "snooze":
+            snooze(house, ha, key, now)
+            return "snoozed"
+        complete(grocy, house, ha, key, house.person(int(pid)))
+        return "done"
+
+
+# ---- laundry ----------------------------------------------------------------------------------------------------------
+LAUNDRY = "Move the laundry"
+
+
+def washer_finished(grocy, house: HouseStore, now: datetime) -> str:
+    """One open "Move the laundry" task at a time, reminding whoever is home every 15 minutes from now."""
+    with LOCK:
+        key = house.flag("laundry")
+        if key and key in _open(grocy):
+            return "already-open"
+        cat = next((c["id"] for c in grocy.objects("task_categories") if c["name"] == "Household"), None)
+        tid = grocy.create("tasks", {"name": LAUNDRY, "description": "", "due_date": now.date().isoformat(),
+                                     "assigned_to_user_id": None, "category_id": cat})
+        house.save_reminder(Reminder(f"task:{tid}", "home", now.strftime("%H:%M"), 15, verb="Moved it"))
+        house.set_flag("laundry", f"task:{tid}")
+        return "created"
+
+
+def washer_started(grocy, house: HouseStore, ha) -> str:
+    """A new load means the last one was moved: complete its task (crediting nobody) and clear the phones."""
+    with LOCK:
+        key = house.flag("laundry")
+        house.set_flag("laundry", None)
+        return "cleared" if key and complete(grocy, house, ha, key, None) else "none-open"

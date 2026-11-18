@@ -1,9 +1,10 @@
 """Web UI: pantry, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
+import hmac
 import logging
 import math
 import mimetypes
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 from pathlib import Path
 from typing import Literal
@@ -11,7 +12,7 @@ from typing import Literal
 import anthropic
 import httpx
 import jinja2
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,6 +27,7 @@ from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
 from app import home as hm
 from app.house import HouseStore, Person
+from app import reminders as rm
 from app.reminders import start_loop
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
@@ -195,12 +197,23 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         who = current_who(request)
         return who.grocy_user_id if isinstance(who, Person) else assigned if who == "kitchen" else None
 
+    def done(request: Request, kind: str, id: int) -> bool:
+        """In-app Done: always runs (the person is looking at it) and clears every phone it was sent to."""
+        who = current_who(request)
+        if who == "kitchen" and kind == "chore":
+            uid = next((r.get("next_execution_assigned_to_user_id") for r in grocy.chores_status() if r["chore_id"] == id), None)
+            who = next((p for p in house.people() if p.grocy_user_id == uid), None)
+        return rm.complete(grocy, house, ha, f"{kind}:{id}", who if isinstance(who, Person) else None)
+
     def chore_done(request: Request, cid: int, skipped: bool):
         row = next((r for r in grocy.chores_status() if r["chore_id"] == cid), None)
         if row is None:
             raise HTTPException(404, "No such chore")
+        if not skipped:
+            done(request, "chore", cid)
+            return home_back("Done.")
         grocy.execute_chore(cid, done_by(request, row.get("next_execution_assigned_to_user_id")), skipped)
-        return home_back("Skipped." if skipped else "Done.")
+        return home_back("Skipped.")
 
     @app.post("/home/chores/{cid}/done")
     def chore_done_post(request: Request, cid: int):
@@ -211,14 +224,45 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return chore_done(request, cid, True)
 
     @app.post("/home/tasks/{tid}/done")
-    def task_done_post(tid: int):
-        grocy.complete_task(tid)
-        return home_back("Done.")
+    def task_done_post(request: Request, tid: int):
+        return home_back("Done." if done(request, "task", tid) else "That was already done.")
 
     @app.post("/home/upkeep/{bid}/done")
-    def upkeep_done_post(bid: int):
-        grocy.charge_battery(bid)
-        return home_back("Done.")
+    def upkeep_done_post(request: Request, bid: int):
+        return home_back("Done." if done(request, "battery", bid) else "That was already done.")
+
+    @app.post("/today/{kind}/{id}/done")
+    def today_done(request: Request, kind: Literal["chore", "task", "battery"], id: int):
+        done(request, kind, id)
+        return back("/")
+
+    @app.post("/today/{kind}/{id}/snooze")
+    def today_snooze(kind: Literal["chore", "task", "battery"], id: int):
+        rm.snooze(house, ha, f"{kind}:{id}", datetime.now())
+        return back("/")
+
+    # ---- Home Assistant hooks (header X-House-Secret; no HOOK_SECRET set = hooks off) ----------------------------
+    def hook_secret(x_house_secret: str = Header("")):
+        if not settings.hook_secret or not hmac.compare_digest(x_house_secret.encode(), settings.hook_secret.encode()):
+            raise HTTPException(403, "Wrong or missing X-House-Secret")
+
+    class ActionIn(BaseModel):
+        action: str
+
+    @app.post("/api/hook/action", dependencies=[Depends(hook_secret)])
+    def hook_action(body: ActionIn):
+        status = rm.action(grocy, house, ha, body.action, datetime.now())
+        if status is None:
+            raise HTTPException(400, "Not a house action")
+        return {"status": status}
+
+    @app.post("/api/events/washer-finished", dependencies=[Depends(hook_secret)])
+    def washer_finished():
+        return {"status": rm.washer_finished(grocy, house, datetime.now())}
+
+    @app.post("/api/events/washer-started", dependencies=[Depends(hook_secret)])
+    def washer_started():
+        return {"status": rm.washer_started(grocy, house, ha)}
 
     kinds = {  # kind -> (grocy entity, form template, what to call it)
         "chores": ("chores", "chore", "chore_form.html", "chore"),
