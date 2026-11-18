@@ -25,7 +25,7 @@ ask() {
   done
   put "$key" "$v"
 }
-ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "$1/api/"; }
+ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "${1%/}/api/"; }
 grocy_ok() { curl -fsS -o /dev/null -H "GROCY-API-KEY: $1" "$GROCY/api/system/info"; }
 
 command -v docker >/dev/null || { echo "Installing Docker…"; curl -fsSL https://get.docker.com | sh; }

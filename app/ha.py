@@ -21,7 +21,10 @@ class HA:
             raise HAError(f"{method} {path} failed: {e}") from e
         if not r.is_success:
             raise HAError(f"{method} {path} -> {r.status_code}: {r.text[:200]}")
-        return r.json() if r.content else None
+        try:
+            return r.json() if r.content else None
+        except ValueError as e:
+            raise HAError(f"{method} {path}: non-JSON reply") from e
 
     def _persons(self) -> list[dict]:
         return [s for s in self._req("GET", "/api/states") if s["entity_id"].startswith("person.")]

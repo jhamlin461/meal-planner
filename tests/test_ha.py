@@ -70,3 +70,8 @@ def test_http_error_raises_haerror():
 
     with pytest.raises(HAError):
         make(boom).notify("mobile_app_x", "t", "m", "k", [])
+
+
+def test_non_json_reply_raises_haerror():
+    with pytest.raises(HAError):
+        make(lambda r: httpx.Response(200, text="<html>", headers={"content-type": "text/html"})).home_states()

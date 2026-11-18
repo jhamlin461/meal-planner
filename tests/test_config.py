@@ -11,3 +11,8 @@ def test_quiet_hours_parsed(monkeypatch):
 def test_quiet_hours_default(monkeypatch):
     monkeypatch.delenv("QUIET_HOURS", raising=False)
     assert load_settings().quiet_hours == (time(22), time(7))
+
+
+def test_blank_quiet_hours_uses_default(monkeypatch):
+    monkeypatch.setenv("QUIET_HOURS", "")
+    assert load_settings().quiet_hours == (time(22), time(7))

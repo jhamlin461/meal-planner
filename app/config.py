@@ -39,5 +39,5 @@ def load_settings() -> Settings:
         ha_url=e("HA_URL", ""),
         ha_token=e("HA_TOKEN", ""),
         hook_secret=e("HOOK_SECRET", ""),
-        quiet_hours=_quiet(e("QUIET_HOURS", "22:00-07:00")),
+        quiet_hours=_quiet(e("QUIET_HOURS") or "22:00-07:00"),
     )
