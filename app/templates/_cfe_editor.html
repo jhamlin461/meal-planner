@@ -1,19 +1,21 @@
 {% from "_icon.html" import icon %}
-{# Fields only; the including page owns the <form>. One line per step: id, label, inputs (comma-separated refs). #}
+{# Fields only; the including page owns the <form>. Per step: its id (hidden), label, and a chip per ingredient and
+   earlier step; the server renumbers steps, so ids never show. The last row is an empty new step. #}
+{% set names = chip_names(table) %}
+{% macro chip(k, ref, on, kind="") %}<label class="chip{{ kind }}" title="{{ names[ref] }}"><input type="checkbox" name="op_in_{{ k }}" value="{{ ref }}"{% if on %} checked{% endif %}><span>{{ names[ref] }}</span></label>{% endmacro %}
 <fieldset class="editor">
 <legend>Table steps</legend>
-<p class="hint">Each step combines ingredients (i0, i1) and earlier steps (o1, o2).</p>
-<ul class="refs">{% for ing in table.ingredients %}<li><b>i{{ loop.index0 }}</b> <span class="breakable">{{ ing.name }}</span></li>{% endfor %}</ul>
-<div class="op-head" aria-hidden="true"><span>Id</span><span>What to do</span><span>Combines</span></div>
-{% for o in table.ops %}<div class="op">
-  <input name="op_id" value="{{ o.id }}" size="3" aria-label="Step id">
-  <input name="op_label" value="{{ o.label }}" placeholder="what to do" aria-label="Label">
-  <input name="op_inputs" value="{{ o.inputs|join(', ') }}" placeholder="o1, i2" aria-label="Combines">
-</div>
-{% endfor %}<div class="op">
-  <input name="op_id" value="{{ next_op_id(table) }}" size="3" aria-label="New step id">
-  <input name="op_label" placeholder="new step" aria-label="New step label">
-  <input name="op_inputs" placeholder="o1, i2" aria-label="New step combines">
-</div>
+<p class="hint">Each step combines ingredients and earlier steps. Tap what goes into it.</p>
+<ol class="step-rows">
+{% for o in table.ops + [none] %}{% set k = loop.index0 %}<li class="step-row">
+  <input type="hidden" name="op_id" value="{{ o.id if o else '' }}">
+  <label class="field"><span>{{ "What to do" if o else "New step" }}</span><input name="op_label" value="{{ o.label if o else '' }}"></label>
+  <fieldset class="chips"><legend>Combines</legend>
+    {% for g in table.ingredients %}{{ chip(k, "i" ~ loop.index0, o and ("i" ~ loop.index0) in o.inputs) }}{% endfor %}
+    {% for e in table.ops[:k] %}{{ chip(k, e.id, o and e.id in o.inputs, " chip-step") }}{% endfor %}
+  </fieldset>
+  {% if o %}<button class="btn" name="action" value="remove:{{ k }}">{{ icon("trash-can-outline") }}Remove step</button>{% endif %}
+</li>
+{% endfor %}</ol>
 <p><button class="btn" name="action" value="addop">{{ icon("plus") }}Add step</button></p>
 </fieldset>

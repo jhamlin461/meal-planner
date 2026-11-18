@@ -1,5 +1,6 @@
 """Web UI: pantry, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
 import hmac
+import itertools
 import logging
 import math
 import mimetypes
@@ -95,17 +96,48 @@ def _factor(s: str) -> float:
     return f
 
 
-def _next_op_id(table: CfeTable) -> str:
-    taken = {o.id for o in table.ops}
-    return next(f"o{n}" for n in range(1, len(taken) + 2) if f"o{n}" not in taken)
-
-
 def _table_from_form(form, old: CfeTable) -> CfeTable:
-    """Rebuild the ops from the editor's parallel op_id/op_label/op_inputs fields; fully blank lines are dropped."""
-    ops = [Op(id=i.strip(), label=lab.strip(), inputs=[r.strip() for r in inp.split(",") if r.strip()])
-           for i, lab, inp in zip(form.getlist("op_id"), form.getlist("op_label"), form.getlist("op_inputs"))
-           if lab.strip() or inp.strip()]
-    return old.model_copy(update={"ops": ops})
+    """Rebuild the ops from the editor: per step row an op_id (hidden), an op_label and the ticked chips op_in_<row>
+    (ingredient ids or earlier steps' op_ids). Blank rows are dropped, action remove:<row> drops that step and the
+    ticks pointing at it, and steps are renumbered o1, o2, ... in row order. A tick that names no ingredient and no
+    earlier step (unknown, later, itself) is kept as-is so validate() rejects it."""
+    rows = [(i.strip(), lab.strip(), [r.strip() for r in form.getlist(f"op_in_{k}") if r.strip()])
+            for k, (i, lab) in enumerate(zip(form.getlist("op_id"), form.getlist("op_label")))]
+    act = str(form.get("action") or "")
+    k = _int(act.removeprefix("remove:")) if act.startswith("remove:") else None
+    gone = {rows.pop(k)[0]} if k is not None and 0 <= k < len(rows) else set()
+    rows = [r for r in rows if r[1] or r[2]]
+    ings = {f"i{n}" for n in range(len(old.ingredients))}
+    earlier: dict[str, int] = {}  # old step id -> its row
+    picked = []
+    for n, (oid, _, refs) in enumerate(rows):
+        picked.append([r if r in ings else earlier.get(r, r) for r in refs if r in ings or r not in gone])
+        if oid:
+            earlier[oid] = n
+    unknown = {r for refs in picked for r in refs if isinstance(r, str)}
+    fresh = (f"o{n}" for n in itertools.count(1) if f"o{n}" not in unknown)
+    new = [next(fresh) for _ in rows]
+    return old.model_copy(update={"ops": [Op(id=new[n], label=lab, inputs=[new[r] if isinstance(r, int) else r for r in refs])
+                                          for n, ((_, lab, _), refs) in enumerate(zip(rows, picked))]})
+
+
+def _chip_names(table: CfeTable) -> dict[str, str]:
+    """What the UI calls each ingredient and step id: ingredient names (with the amount when a name repeats) and
+    step labels."""
+    names = [g.name for g in table.ingredients]
+    out = {}
+    for n, g in enumerate(table.ingredients):
+        amount = ingredient_text(g.model_copy(update={"name": ""}), 1) or g.note
+        out[f"i{n}"] = f"{g.name}, {amount}" if names.count(g.name) > 1 and amount else g.name
+    labels = [o.label for o in table.ops]
+    return out | {o.id: f"{o.label}, step {n}" if labels.count(o.label) > 1 and o.label else o.label or f"step {n}"
+                  for n, o in enumerate(table.ops, 1)}
+
+
+def _named(errors: list[str], table: CfeTable) -> list[str]:
+    """Table validation messages in the editor's words: ids become the names on the chips, ops become steps."""
+    words = {k: f"“{v}”" for k, v in _chip_names(table).items()} | {"op": "step", "ops": "steps"}
+    return [re.sub(r"[\w-]+", lambda m: words.get(m[0], m[0]), e) for e in errors]
 
 
 def _cfe(table: CfeTable | None, scale: float = 1.0) -> dict | None:
@@ -130,7 +162,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters["num"] = _fmt
     env.filters["exact"] = _exact
-    env.globals["next_op_id"] = _next_op_id
+    env.globals["chip_names"] = _chip_names
     templates = Jinja2Templates(env=env)
     plan_lock = threading.Lock()  # plan add/remove, Bought, Cooked it, list rebuild: never interleaved or repeated
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
@@ -672,8 +704,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def save_table(request: Request, rid: int, form):
         r = recipe_or_404(rid)
         table = _table_from_form(form, table_for(rid))
-        errors = [] if form.get("action") == "addop" else validate(table)
-        if form.get("action") == "addop" or errors:
+        action = str(form.get("action") or "")
+        editing = action == "addop" or action.startswith("remove:")  # re-render only
+        errors = [] if editing else _named(validate(table), table)
+        if editing or errors:
             return page(request, "table.html", r=r, table=table, errors=errors)
         grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
         return back(f"/recipes/{rid}")
@@ -713,7 +747,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["packaging"] = is_packaging(row["unit"])
             row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
-                    table_errors=validate(table), errors=errors)
+                    table_errors=_named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
     def review(request: Request, pid: str):
@@ -727,7 +761,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/import/{pid}")
     async def review_post(request: Request, pid: str):
-        """One form for the whole review; `action` is save, create:<i>, suggest:<i> or addop (re-render)."""
+        """One form for the whole review; `action` is save, create:<i>, suggest:<i>, addop or remove:<step> (re-render)."""
         form = await request.form()
         return await run_in_threadpool(review_submit, request, pid, form)  # Grocy/Claude calls block for seconds
 

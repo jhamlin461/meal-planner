@@ -50,6 +50,12 @@ def brownie_recipe(g):
     return save_recipe(g, draft, [IngredientMatch(i, p, 10) for i, p in enumerate(pids)], None, None)
 
 
+def chips(t: CfeTable) -> dict:
+    """The table editor's form for a table: one label per step and its ticked chips."""
+    return {"op_id": [o.id for o in t.ops], "op_label": [o.label for o in t.ops],
+            **{f"op_in_{k}": list(o.inputs) for k, o in enumerate(t.ops)}}
+
+
 def soup_draft():
     t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"),
                                       Ingredient(qty=1, unit="", name="dragon egg")],
@@ -358,7 +364,7 @@ def test_pantry_use_soon_and_actions(env):
 def review_form(**extra):
     base = {"product_0": "", "amount_0": "", "prev_0": "", "factor_0": "", "new_name_0": "flour",
             "product_1": "", "amount_1": "", "prev_1": "", "factor_1": "", "new_name_1": "dragon egg",
-            "op_id": ["o1", "o2"], "op_label": ["mix", ""], "op_inputs": ["i0, i1", ""], "action": "save"}
+            "op_id": ["o1", ""], "op_label": ["mix", ""], "op_in_0": ["i0", "i1"], "action": "save"}
     return {**base, **extra}
 
 
@@ -407,8 +413,8 @@ def test_review_create_suggest_and_errors(env):
     html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="inf")).text
     assert "finite" in html
     html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg,
-                                                     amount_1="1", op_inputs=["i0", ""])).text
-    assert "i1 is not used by any op" in html and g.objects("recipes") == []
+                                                     amount_1="1", op_in_0=["i0"])).text
+    assert "“dragon egg” is not used by any step" in html and g.objects("recipes") == []
     assert 'name="amount_0" value="250' in html  # conversion was applied and kept
 
 
@@ -416,20 +422,93 @@ def test_table_edit_rejects_invalid_and_saves_valid(env):
     g, _, _, c, _ = env
     rid = brownie_recipe(g)
     before = g.userfields("recipes", rid)["cfe_table"]
-    ids_ = [o.id for o in BROWNIE.ops]
-    labels = [o.label for o in BROWNIE.ops]
-    inputs = [", ".join(o.inputs) for o in BROWNIE.ops]
-    bad = inputs.copy()
-    bad[1] = "o1, i2, i3"  # i1 unused
-    r = c.post(f"/recipes/{rid}/table", data={"op_id": ids_, "op_label": labels, "op_inputs": bad})
-    assert r.status_code == 200 and "i1 is not used by any op" in r.text
+    r = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_1": ["o1", "i2", "i3"]})  # sugar unused
+    assert r.status_code == 200 and "“sugar” is not used by any step" in r.text
     assert g.userfields("recipes", rid)["cfe_table"] == before
-    labels[0] = "brown"
-    r = c.post(f"/recipes/{rid}/table", data={"op_id": ids_ + ["o6"], "op_label": labels + [""],
-                                              "op_inputs": inputs + [""]}, follow_redirects=False)
+    form = chips(BROWNIE)
+    form["op_label"][0] = "brown"
+    r = c.post(f"/recipes/{rid}/table", data={**form, "op_id": form["op_id"] + [""], "op_label": form["op_label"] + [""]},
+               follow_redirects=False)
     assert r.status_code == 303
     saved = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
     assert saved.ops[0].label == "brown" and len(saved.ops) == 5 and saved.ingredients == BROWNIE.ingredients
+
+
+def test_review_shows_no_internal_ids(env):
+    g, ai, store, c, _ = env
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"), Ingredient(qty=1, unit="", name="egg")],
+                 ops=[Op(id="r1", label="whisk", inputs=["i0"]), Op(id="a1", label="fold in", inputs=["r1", "i1"])])
+    ai.draft = RecipeDraft(title="Cake", servings=2, steps=["Mix"], table=t)
+    c.post("/import", data={"urls": "https://example.com/cake"})
+    pages = [c.get(f"/import/{store.all()[0].id}").text, c.get(f"/recipes/{brownie_recipe(g)}/table").text]
+    for html in pages:
+        visible = re.sub(r"<[^>]*>", " ", html)  # text only; ids may live in values, never on screen
+        assert not re.search(r"\b[iora]\d+\b", visible), re.findall(r".{20}\b[iora]\d+\b.{20}", visible)
+        assert not re.search(r'(aria-label|placeholder|title)="[^"]*\b[iora]\d+\b', html)
+        assert "o1, i2" not in html and "Combines" in html and "Remove step" in html
+        assert "Each step combines ingredients and earlier steps. Tap what goes into it." in html
+    assert re.search(r'value="i1"[^>]*>\s*<span>egg</span>', pages[0])
+    assert re.search(r'value="r1"[^>]*>\s*<span>whisk</span>', pages[0])  # earlier step chip, by its label
+
+
+def test_combines_chips_round_trip(env):
+    g, ai, store, c, _ = env
+    rid = brownie_recipe(g)
+    form = chips(BROWNIE)
+    del form["op_in_4"]  # unticked chips are simply not posted: bake has none, so it is invalid
+    assert "has no inputs" in c.post(f"/recipes/{rid}/table", data=form).text
+    r = c.post(f"/recipes/{rid}/table", data=chips(BROWNIE), follow_redirects=False)
+    assert r.status_code == 303
+    assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ops == BROWNIE.ops
+    # AI ids (r1, a1) are accepted and renumbered o1, o2 in row order
+    t = soup_draft().table.model_copy(update={"ops": [Op(id="r1", label="beat", inputs=["i1"]),
+                                                      Op(id="a1", label="mix", inputs=["r1", "i0"])]})
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.draft = RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    pid = store.all()[0].id
+    r = c.post(f"/import/{pid}", data={**review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg,
+                                                     prev_1=egg, amount_1="1"), **chips(t)}, follow_redirects=False)
+    assert r.status_code == 303
+    saved = CfeTable.model_validate_json(g.userfields("recipes", int(r.headers["location"].rsplit("/", 1)[1]))["cfe_table"])
+    assert [(o.id, o.label, o.inputs) for o in saved.ops] == [("o1", "beat", ["i1"]), ("o2", "mix", ["o1", "i0"])]
+
+
+def test_duplicate_names_show_amounts(env):
+    g, _, _, c, _ = env
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="tsp", name="kosher salt"),
+                                      Ingredient(qty=None, unit="", name="kosher salt", note="to taste"),
+                                      Ingredient(qty=1, unit="cup", name="rice")],
+                 ops=[Op(id="o1", label="season", inputs=["i0", "i1", "i2"])])
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}/table").text  # brownies mix twice: earlier steps tell them apart by position
+    assert "<span>mix, step 2</span>" in html and "<span>mix, step 3</span>" in html and "<span>melt</span>" in html
+    g.set_userfields("recipes", rid, {"cfe_table": t.model_dump_json()})
+    html = c.get(f"/recipes/{rid}/table").text
+    assert "<span>kosher salt, 1 tsp</span>" in html and "<span>kosher salt, to taste</span>" in html
+    assert "<span>rice</span>" in html
+
+
+def test_remove_step_remaps_references(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    before = g.userfields("recipes", rid)["cfe_table"]
+    html = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "action": "remove:0"}).text  # remove "melt"
+    assert g.userfields("recipes", rid)["cfe_table"] == before  # removing only re-renders
+    assert 'value="melt"' not in html and html.count("Remove step") == 4
+    form = dict(re.findall(r'name="(op_in_\d+)" value="(o\d+)" checked', html))
+    assert form == {"op_in_1": "o1", "op_in_2": "o2", "op_in_3": "o3"}  # mix(o2) took o1; nothing points at melt
+    assert re.findall(r'name="op_id" value="([^"]*)"', html) == ["o1", "o2", "o3", "o4", ""]
+
+
+def test_unknown_input_id_rejected(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    before = g.userfields("recipes", rid)["cfe_table"]
+    for bad in (["o1", "i1", "i2", "i3", "zz"], ["o1", "i1", "i2", "i3", "o3"], ["o2", "o1", "i1", "i2", "i3"]):
+        r = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_1": bad})  # unknown, later, itself
+        assert r.status_code == 200 and "does not exist" in r.text
+    assert g.userfields("recipes", rid)["cfe_table"] == before
 
 
 class DownGrocy(FakeGrocy):
@@ -461,7 +540,7 @@ def test_review_packet_row_asks_for_amount_not_factor(env):
     c.post("/import", data={"urls": "https://example.com/tacos"})
     pid = store.all()[0].id
     form = dict(product_0=sour, prev_0=sour, amount_0="", factor_0="", new_name_0="sour cream", op_id=["o1"],
-                op_label=["mix"], op_inputs=["i0"])
+                op_label=["mix"], op_in_0=["i0"])
     html = c.post(f"/import/{pid}", data={**form, "action": "update"}).text
     assert 'name="amount_0"' in html and "factor_0" not in html and "Suggest" not in html
     assert "Packet sizes vary — enter the real amount" in html
@@ -915,7 +994,7 @@ def test_saved_table_has_real_amount_for_packet_rows(env):
     c.post("/import", data={"urls": "https://example.com/tacos"})
     pid = store.all()[0].id
     r = c.post(f"/import/{pid}", data=dict(product_0=sour, prev_0=sour, amount_0="57", new_name_0="sour cream",
-                                           op_id=["o1"], op_label=["mix"], op_inputs=["i0"], action="save"),
+                                           op_id=["o1"], op_label=["mix"], op_in_0=["i0"], action="save"),
                follow_redirects=False)
     rid = int(r.headers["location"].rsplit("/", 1)[1])
     [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients

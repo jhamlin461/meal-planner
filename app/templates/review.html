@@ -15,14 +15,14 @@
 <p class="muted">Amounts are in the product's stock unit. Changed a product? Press Update to recalculate.</p>
 <ul class="rows review-rows">
 {% for row in rows %}{% set i = loop.index0 %}<li>
-  <p class="review-text breakable"><b>i{{ i }}</b> {{ row.text }}</p>
+  <p class="review-text breakable">{{ row.text }}</p>
   <div class="row">
-    <select name="product_{{ i }}" class="grow" aria-label="Product for i{{ i }}">
+    <select name="product_{{ i }}" class="grow" aria-label="Product for {{ row.text }}">
       <option value="">Pick a product</option>
       {% for g in generics %}<option value="{{ g.id }}"{% if g.id == row.product_id %} selected{% endif %}>{{ g.name }}</option>{% endfor %}
     </select>
     <input type="hidden" name="prev_{{ i }}" value="{{ row.prev or '' }}">
-    <span class="inline-group"><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for i{{ i }}"><span>{{ row.stock_unit }}</span></span>
+    <span class="inline-group"><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for {{ row.text }}"><span>{{ row.stock_unit }}</span></span>
   </div>
   {% if row.packaging %}<p class="warn">Packet sizes vary — enter the real amount</p>{% endif %}
   {% if not row.product_id %}<div class="row">
