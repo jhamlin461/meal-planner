@@ -271,6 +271,12 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
         + validate(draft.table)
     if errs:
         raise ValueError("; ".join(errs))
+    products = {}
+    for m in by_index.values():  # check every product before writing anything
+        prod = grocy.get_object("products", m.product_id) if m.product_id is not None else None
+        if prod is None or not prod.get("qu_id_stock"):
+            raise ValueError(f"product {m.product_id} no longer exists or has no stock unit; pick it again")
+        products[m.product_id] = prod
     taken = {r["name"].lower() for r in grocy.objects("recipes")}
     name, n = draft.title, 2
     while name.lower() in taken:
@@ -278,20 +284,29 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
     steps = "".join(f"<li>{escape(s)}</li>" for s in draft.steps)
     rid = grocy.create("recipes", {"name": name, "base_servings": draft.servings or 2,
                                    "description": f"<ol>{steps}</ol>"})
-    for i, ing in enumerate(ings):
-        m = by_index[i]
-        product = grocy.get_object("products", m.product_id)
-        grocy.create("recipes_pos", {
-            "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount,
-            "qu_id": int(product["qu_id_stock"]),
-            "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")})
-    uf = {"cfe_table": draft.table.model_dump_json(), "source_url": source_url or "", "source_pdf": ""}
-    if pdf_path:
-        dest = Path(pdf_path).parent.parent / "sources" / f"{rid}.pdf"
-        dest.parent.mkdir(exist_ok=True)
-        shutil.copyfile(pdf_path, dest)
-        uf["source_pdf"] = f"sources/{rid}.pdf"
-    grocy.set_userfields("recipes", rid, uf)
+    made: list[int] = []
+    try:
+        for i, ing in enumerate(ings):
+            m = by_index[i]
+            made.append(grocy.create("recipes_pos", {
+                "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount,
+                "qu_id": int(products[m.product_id]["qu_id_stock"]),
+                "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")}))
+        uf = {"cfe_table": draft.table.model_dump_json(), "source_url": source_url or "", "source_pdf": ""}
+        if pdf_path:
+            dest = Path(pdf_path).parent.parent / "sources" / f"{rid}.pdf"
+            dest.parent.mkdir(exist_ok=True)
+            shutil.copyfile(pdf_path, dest)
+            uf["source_pdf"] = f"sources/{rid}.pdf"
+        grocy.set_userfields("recipes", rid, uf)
+    except Exception:  # undo, so a retry neither finds a half recipe nor saves "Title (2)"
+        try:
+            for pos in made:
+                grocy.delete("recipes_pos", pos)
+            grocy.delete("recipes", rid)
+        except Exception:
+            log.exception("could not roll back half-saved recipe %s", rid)
+        raise
     return rid
 
 

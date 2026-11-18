@@ -1,10 +1,15 @@
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import httpx
+
+from app.grocy import GrocyError
 from app.setup_grocy import ids
 from app.shopping import rebuild_meal_plan_list
 
 LEFTOVER_PREFIX = "Leftovers: "
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -70,15 +75,20 @@ def cook(grocy, entry_id: int) -> list[str]:
     for pos in grocy.objects("recipes_pos", recipe_id=rid):  # a product can repeat across positions
         pid = int(pos["product_id"])
         needs[pid] = needs.get(pid, 0.0) + float(pos["amount"]) * factor
+    grocy.update("meal_plan", entry_id, {"done": 1})  # first: a retry after a failed consume must not deduct twice
     short = []
     for pid, need in needs.items():
         have = stock.get(pid, 0.0)
         use = min(need, have)
-        if use > 0:
-            grocy.consume(pid, use)
-        if need - have > 1e-6:
+        try:
+            if use > 0:
+                grocy.consume(pid, use)
+            failed = False
+        except (GrocyError, httpx.HTTPError):
+            log.warning("cook %s: consume of product %s failed", entry_id, pid, exc_info=True)
+            failed = True
+        if failed or need - have > 1e-6:  # either way the pantry needs a look
             short.append(names.get(pid, str(pid)))
-    grocy.update("meal_plan", entry_id, {"done": 1})
     return short
 
 

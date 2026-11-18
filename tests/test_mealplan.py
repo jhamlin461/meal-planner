@@ -87,3 +87,23 @@ def test_cook_repeated_ingredient_consumes_once_and_reports_once(fake_grocy_with
     eid = plan_meal(g, date(2026, 11, 20), "Dinner", 1, 2, SETTINGS, today=TODAY)  # need 300, stock 100
     assert cook(g, eid) == ["Flour"]
     assert g.stock_amounts().get(10, 0) == 0
+
+
+def test_cook_marks_done_first_and_reports_failed_consumes(fake_grocy_with_week):
+    from app.grocy import GrocyError
+    g = _g(fake_grocy_with_week)
+    sugar = g.create("products", {"name": "Sugar"})
+    g.create("recipes_pos", {"recipe_id": 1, "product_id": sugar, "amount": 10, "qu_id": 1, "note": ""})
+    g.add_stock(sugar, 100, None, None)
+    eid = plan_meal(g, date(2026, 11, 20), "Dinner", 1, 2, SETTINGS, today=TODAY)  # 150 flour (have 100), 10 sugar
+    real = g.consume
+
+    def consume(pid, amount):
+        if pid == 10:
+            raise GrocyError("POST /stock/products/10/consume -> 500")
+        real(pid, amount)
+
+    g.consume = consume
+    assert cook(g, eid) == ["Flour"]  # flour failed (and was short); sugar still consumed
+    assert g.stock_amounts()[sugar] == 90 and int(g.get_object("meal_plan", eid)["done"]) == 1
+    assert cook(g, eid) == [] and g.stock_amounts()[sugar] == 90  # a retry never double-deducts

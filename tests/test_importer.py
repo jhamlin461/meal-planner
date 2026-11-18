@@ -269,3 +269,42 @@ def test_stock_amount_for_hand_picked_product():
     assert stock_amount_for(g, flour, 2, "cups") == 250
     assert stock_amount_for(g, flour, 2, "tbsp.") is None  # no conversion known
     assert stock_amount_for(g, flour, None, "cup") is None
+
+
+class FailingGrocy(FakeGrocy):
+    """Fails the n-th create of `entity` with a GrocyError (an injected Grocy outage mid-save)."""
+
+    def __init__(self, entity, n=1):
+        super().__init__()
+        self.fail_entity, self.fail_n = entity, n
+
+    def create(self, entity, data):
+        if entity == self.fail_entity:
+            self.fail_n -= 1
+            if self.fail_n == 0:
+                from app.grocy import GrocyError
+                raise GrocyError(f"POST /objects/{entity} -> 500")
+        return super().create(entity, data)
+
+
+def test_save_failure_midway_leaves_no_half_recipe():
+    from app.grocy import GrocyError
+    g = FailingGrocy("recipes_pos", n=2)
+    bootstrap(g)
+    flour, egg = product(g, "Flour", "g"), product(g, "Egg", "piece")
+    d = make_draft([(250, "g", "flour"), (2, "", "egg")])
+    with pytest.raises(GrocyError):
+        save_recipe(g, d, [IngredientMatch(0, flour, 250), IngredientMatch(1, egg, 2)], None, None)
+    assert g.objects("recipes") == [] and g.objects("recipes_pos") == []
+    g.fail_entity = None  # Grocy back: a retry saves under the plain title, not "Soup (2)"
+    rid = save_recipe(g, d, [IngredientMatch(0, flour, 250), IngredientMatch(1, egg, 2)], None, None)
+    assert g.get_object("recipes", rid)["name"] == "Soup"
+
+
+def test_save_checks_every_product_before_creating_anything():
+    g = grocy()
+    flour = product(g, "Flour", "g")
+    d = make_draft([(250, "g", "flour"), (2, "", "egg")])
+    with pytest.raises(ValueError, match="no longer exists"):
+        save_recipe(g, d, [IngredientMatch(0, flour, 250), IngredientMatch(1, 999, 2)], None, None)
+    assert g.objects("recipes") == []

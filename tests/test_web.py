@@ -292,7 +292,8 @@ def test_grocy_down_shows_503(tmp_path, exc):
     app = create_app(DownGrocy(exc), FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)), settings,
                      PendingStore(tmp_path / "pending"))
     r = TestClient(app).get("/recipes")
-    assert r.status_code == 503 and "Can't reach Grocy — nothing was saved. Try again in a minute." in r.text
+    assert r.status_code == 503 and "may not have finished — check before trying again" in r.text
+    assert "nothing was saved" not in r.text  # Grocy can fail midway through a multi-write action
 
 
 def test_review_packet_row_asks_for_amount_not_factor(env):
