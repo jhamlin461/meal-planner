@@ -1,7 +1,7 @@
 # House Manager — Design
 
 Date: 2026-11-18
-Status: draft for owner approval (builder check done)
+Status: approved by owner 2026-11-18
 Builds on: [2026-11-18-meal-planner-design.md](2026-11-18-meal-planner-design.md). Everything that spec says about
 the kitchen (import, Cooking for Engineers tables, pantry, plan, shopping, Walmart) still holds unless this
 document changes it.
