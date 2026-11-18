@@ -786,10 +786,31 @@ def test_people_form_fills_phone_from_chosen_person(hv):
     assert house.people()[1].notify_service == "mobile_app_pixel_10_pro"
 
 
-def test_people_form_preselects_from_typed_name(hv):
-    html = hv[3].get("/home/people?name=Cat").text
-    assert '<option value="person.catherine" selected>' in html
-    assert '<option value="mobile_app_cat_s_pixel_10" selected>' in html
+def test_name_match_ignores_person_prefix_and_fragments(hv):
+    _, house, _, c = hv
+    c.post("/home/people", data={"name": "on", "ha_person": "", "notify_service": ""})  # "person." and "son" must not match
+    assert house.people()[0].ha_person == ""
+
+
+def test_explicit_no_phone_sticks_blank_falls_back(hv):
+    _, house, _, c = hv
+    c.post("/home/people", data={"name": "Cat", "ha_person": "person.catherine", "notify_service": "none"})
+    c.post("/home/people", data={"name": "Cathy", "ha_person": "person.catherine", "notify_service": ""})
+    assert [p.notify_service for p in house.people()] == ["", "mobile_app_cat_s_pixel_10"]
+
+
+def test_duplicate_name_refused(hv):
+    _, house, _, c = hv
+    c.post("/home/people", data={"name": "Josh"})
+    r = c.post("/home/people", data={"name": "josh"})
+    assert r.status_code == 400 and "josh is already on the list." in r.text and len(house.people()) == 1
+
+
+def test_people_row_wraps_long_phone(hv):
+    _, house, _, c = hv
+    house.save_person("Cat", 1, "", "mobile_app_cat_s_pixel_10")
+    html = c.get("/home/people").text
+    assert "overflow-wrap:anywhere" in html and "min-height:48px" in html and "Leave blank to use this person" in html
 
 
 def test_who_cookie_set_and_used(hv):

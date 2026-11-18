@@ -106,3 +106,9 @@ def test_create_user_posts_then_finds_id():
     body = seen[0][2]
     assert seen[0][:2] == ("POST", "/users") and body["username"] == "josh" and body["first_name"] == "Josh"
     assert len(body["password"]) >= 20
+
+
+def test_create_user_not_found_raises():
+    h = lambda req: httpx.Response(204) if req.method == "POST" else httpx.Response(200, json=[])  # noqa: E731
+    with pytest.raises(GrocyError, match="user not created"):
+        Grocy("http://g", "k", transport=httpx.MockTransport(h)).create_user("josh", "Josh")

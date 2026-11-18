@@ -208,25 +208,31 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def match_person(name: str, persons: dict[str, str]) -> str:
         n = name.strip().lower()
-        return next((e for e, f in persons.items() if n and (n in f.lower() or n in e.lower())), "")
+        return next((e for e, f in persons.items() if n and (n in f.lower() or n in e.removeprefix("person.").lower())), "")
+
+    def people_page(request: Request, status_code: int = 200, typed: str = "", error: str | None = None):
+        return page(request, "people.html", status_code, people=house.people(), who=current_who(request), typed=typed,
+                    error=error, **ha_choices())
 
     @app.get("/home/people")
-    def people_get(request: Request, name: str = "", ha_person: str = ""):
-        c = ha_choices()
-        ha_person = ha_person or match_person(name, c["ha_persons"])
-        return page(request, "people.html", people=house.people(), who=current_who(request), typed=name,
-                    sel_person=ha_person, sel_service=c["phone_of"].get(ha_person, ""), **c)
+    def people_get(request: Request):
+        return people_page(request)
 
     @app.post("/home/people")
-    def people_post(name: str = Form(), ha_person: str = Form(""), notify_service: str = Form("")):
+    def people_post(request: Request, name: str = Form(), ha_person: str = Form(""), notify_service: str = Form("")):
         name = name.strip()
         if not name:
             raise HTTPException(400, "Type a name")
+        if any(p.name.lower() == name.lower() for p in house.people()):
+            return people_page(request, 400, name, f"{name} is already on the list.")
         c = ha_choices()
         ha_person = ha_person or match_person(name, c["ha_persons"])
-        notify_service = notify_service or c["phone_of"].get(ha_person, "")
+        # blank = use the person's own phone; "none" = deliberately no phone
+        notify_service = "" if notify_service == "none" else notify_service or c["phone_of"].get(ha_person, "")
         username = name.lower().replace(" ", "")
-        uid = next((int(u["id"]) for u in grocy.users() if u["username"] == username), None)             or grocy.create_user(username, name)
+        uid = next((int(u["id"]) for u in grocy.users() if u["username"] == username), None)
+        if uid is None:
+            uid = grocy.create_user(username, name)
         house.save_person(name, uid, ha_person, notify_service)
         return back("/home/people")
 
