@@ -74,7 +74,7 @@ if (video) {
       return show(await post("/api/scan", {code, action: d.action}), code);
     }
     if (d.status === "need_amount") {  // package size unknown: ask, then send the same scan with the amount
-      const n = Number(prompt(`How much ${d.product} (${d.unit})?`));
+      const n = Number(prompt(`How much is in one package of ${d.product}? (${d.unit}) — we'll remember it.`));
       if (n > 0 && Number.isFinite(n)) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
       toast(`Nothing changed for ${d.product}.`);
     } else if (d.status === "unknown") {

@@ -786,6 +786,67 @@ def test_scan_with_unknown_package_size_asks_for_amount(env):
         assert c.post("/api/scan", json={"code": "321", "action": "add", "amount": bad}).status_code == 422
 
 
+def _barcoded(g, name="Brand Rice", code="321", **kw):
+    pid = product(g, name, parent_product_id=product(g, name.split()[-1]), **kw)
+    g.create("product_barcodes", {"product_id": pid, "barcode": code})
+    return pid
+
+
+def test_add_with_typed_amount_remembers_package_size(env):
+    g, _, _, c, _ = env
+    pid = _barcoded(g)
+    assert c.post("/api/scan", json={"code": "321", "action": "add"}).json()["status"] == "need_amount"
+    r = c.post("/api/scan", json={"code": "321", "action": "add", "amount": 32}).json()
+    assert r["status"] == "ok" and r["amount"] == 32
+    assert g.userfields("products", pid)["package_amount"] == 32
+    r = c.post("/api/scan", json={"code": "321", "action": "add"}).json()
+    assert r["status"] == "ok" and r["amount"] == 32 and g.stock_amounts()[pid] == 64
+
+
+def test_typed_amount_never_overwrites_known_size(env):
+    g, _, _, c, _ = env
+    pid = _barcoded(g)
+    g.set_userfields("products", pid, {"package_amount": 32})
+    c.post("/api/scan", json={"code": "321", "action": "add", "amount": 5})
+    assert g.userfields("products", pid)["package_amount"] == 32
+
+
+def test_use_with_amount_is_not_remembered(env):
+    g, _, _, c, _ = env
+    pid = _barcoded(g)
+    g.add_stock(pid, 500, None, None)
+    c.post("/api/scan", json={"code": "321", "action": "use", "amount": 120})
+    assert "package_amount" not in g.userfields("products", pid)
+
+
+def test_supply_used_one_takes_one_unit(env):
+    g, _, _, c, _ = env
+    bags = supply(g, stock=64, package_amount=32)
+    c.post(f"/home/supplies/{bags}/used")
+    assert g.stock_amounts()[bags] == 63
+
+
+def test_scan_use_on_supply_takes_one_unit(env):
+    g, _, _, c, _ = env
+    bags = supply(g, stock=64, package_amount=32)
+    g.create("product_barcodes", {"product_id": bags, "barcode": "555"})
+    r = c.post("/api/scan", json={"code": "555", "action": "use"}).json()
+    assert r["status"] == "ok" and r["amount"] == 1 and g.stock_amounts()[bags] == 63
+    bare = supply(g, "Sponges", stock=5)  # no package size: still never asks
+    g.create("product_barcodes", {"product_id": bare, "barcode": "556"})
+    r = c.post("/api/scan", json={"code": "556", "action": "use"}).json()
+    assert r["status"] == "ok" and g.stock_amounts()[bare] == 4
+
+
+def test_scan_use_on_food_still_takes_a_package(env):
+    g, _, _, c, _ = env
+    pid = _barcoded(g, "Brand Beans", "777")
+    g.set_userfields("products", pid, {"package_amount": 400})
+    g.add_stock(pid, 1200, None, None)
+    assert c.post("/api/scan", json={"code": "777", "action": "use"}).json()["amount"] == 400
+    assert g.stock_amounts()[pid] == 800
+
+
 def test_bought_without_package_size_adds_row_amount(env):
     g, _, _, c, _ = env
     pid, rid = flour_recipe(g)  # no package_amount
@@ -1048,7 +1109,10 @@ def test_supplies_view_used_one(env):
     assert g.stock_amounts()[bags] == 4  # no package size: one unit, taken from a brand
     g.set_userfields("products", bags, {"package_amount": 10})
     c.post(f"/home/supplies/{bags}/used")
-    assert g.stock_amounts()[bags] == 0  # a package, but never more than is in stock
+    assert g.stock_amounts()[bags] == 3  # a known package size no longer matters: still one unit
+    for _ in range(3):
+        c.post(f"/home/supplies/{bags}/used")
+    assert g.stock_amounts()[bags] == 0
     assert c.post(f"/home/supplies/{bags}/used").status_code == 200  # nothing left: no error
     assert '<p class="warn">None left. Running low.</p>' in c.get("/home/supplies").text
     low = ids(g).list["Running low"]

@@ -455,11 +455,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/home/supplies/{pid}/used")
     def supply_used(pid: int):
-        """One package when its size is known, else one unit; never more than is in stock (Grocy refuses that)."""
+        """One unit (a bag, a roll), whatever the package size; never more than is in stock (Grocy refuses that)."""
         p = product_or_404(pid)  # a generic: Grocy takes the stock from its brands
-        pkg = _num(grocy.userfields("products", pid).get("package_amount")) or 1
         with plan_lock:
-            use = min(pkg, grocy.stock_amounts().get(pid, 0.0))
+            use = min(1.0, grocy.stock_amounts().get(pid, 0.0))
             if use > 0:
                 grocy.consume(pid, use)
             rebuild_running_low(grocy)
@@ -543,15 +542,20 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         p = grocy.get_object("products", r.product_id) or {}
         info = {"product": r.name, "generic": r.generic_name, "created": r.created, "product_id": r.product_id,
                 "action": action}
-        pkg = amount or _num(grocy.userfields("products", r.product_id).get("package_amount"))
+        known = _num(grocy.userfields("products", r.product_id).get("package_amount"))
+        pkg = amount or known
         unit = unit_names().get(_int(p.get("qu_id_stock")), "")
         supply = p.get("product_group_id") and str(p["product_group_id"]) == str(supplies_group(grocy))
+        if supply and action == "use":
+            pkg = 1.0  # supplies are used one at a time
         if action == "add" and r.created and supply and not float(generic_of(p).get("min_stock_amount") or 0):
             # a new supply: ask its keep-at-least once per generic, not per brand
             return {"status": "need_min", **info, "unit": unit, "default": pkg or 1}
         if pkg is None:
             return {"status": "need_amount", **info, "unit": unit}
         if action == "add":
+            if amount and not known:  # remember the answer for this product's next scan
+                grocy.set_userfields("products", r.product_id, {"package_amount": amount})
             days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
             grocy.add_stock(r.product_id, pkg, date.today() + timedelta(days=days) if days > 0 else None,
                             _int(p.get("location_id")))
