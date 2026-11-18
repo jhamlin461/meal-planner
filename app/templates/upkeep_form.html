@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit upkeep item' if id else 'Add upkeep item' }}{% endblock %}
+{% block heading %}<h1>{{ 'Edit upkeep item' if id else 'Add upkeep item' }}</h1>{% endblock %}
 {% block content %}
-<h1>{{ 'Edit upkeep item' if id else 'Add upkeep item' }}</h1>
 <form method="post" action="/home/upkeep/{{ id or 'new' }}" class="card">
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <label class="field"><span>Name</span><input name="name" value="{{ v.get('name', '') }}" required></label>

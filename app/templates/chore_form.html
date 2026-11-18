@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit chore' if id else 'Add chore' }}{% endblock %}
+{% block heading %}<h1>{{ 'Edit chore' if id else 'Add chore' }}</h1>{% endblock %}
 {% block content %}
-<h1>{{ 'Edit chore' if id else 'Add chore' }}</h1>
 <form method="post" action="/home/chores/{{ id or 'new' }}" class="card">
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <label class="field"><span>Name</span><input name="name" value="{{ v.get('name', '') }}" required></label>

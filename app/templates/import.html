@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Import{% endblock %}
 {% block head %}{% if busy %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block heading %}<h1>Import recipes</h1>{% endblock %}
 {% block content %}
-<h1>Import recipes</h1>
 <form method="post" enctype="multipart/form-data" class="card">
   <p><label>PDFs<br><input type="file" name="files" accept="application/pdf" multiple></label></p>
   <p><label>Web pages, one link per line<br><textarea name="urls" rows="4"></textarea></label></p>

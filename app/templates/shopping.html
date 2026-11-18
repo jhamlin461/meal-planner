@@ -13,8 +13,8 @@
 {% else %}<li class="empty">{{ empty }}</li>
 {% endfor %}</ul>
 {% endmacro %}
+{% block heading %}<h1>Shopping</h1>{% endblock %}
 {% block content %}
-<h1>Shopping</h1>
 {% if bad %}<p class="card error" role="alert">That does not look like a Walmart item link or number. Copy the link from the item's page on walmart.com.</p>{% endif %}
 <h2>Meal plan</h2>
 {{ rows(lists["Meal plan"], "Nothing needed for the planned meals.") }}

@@ -40,9 +40,11 @@
 {% if pages %}<nav class="segmented pages" aria-label="{{ 'Chores' if section == 'home' else 'Meals' }} pages">
 {%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
 </nav>{% endif %}
+{% if pages and not on_scan %}<div class="title-row">{% block heading %}{% endblock %}
+<a class="button title-action" href="{{ scan_href }}">{{ icon("barcode-scan") }}Scan</a></div>
+{%- else %}{{ self.heading() }}{% endif %}
 {% block content %}{% endblock %}
 </main>
-{% if pages and not on_scan %}<a class="fab" href="{{ scan_href }}">{{ icon("barcode-scan") }}<span>Scan</span></a>{% endif %}
 <div id="toast" role="status" hidden></div>
 {% block scripts %}{% endblock %}
 <script src="/static/app.js" defer></script>

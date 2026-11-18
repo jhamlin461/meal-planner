@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ 'Edit task' if id else 'Add task' }}{% endblock %}
+{% block heading %}<h1>{{ 'Edit task' if id else 'Add task' }}</h1>{% endblock %}
 {% block content %}
-<h1>{{ 'Edit task' if id else 'Add task' }}</h1>
 <form method="post" action="/home/tasks/{{ id or 'new' }}" class="card">
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <label class="field"><span>Title</span><input name="title" value="{{ v.get('title', '') }}" required></label>

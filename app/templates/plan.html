@@ -32,8 +32,8 @@
 {% if past %}</details>{% endif %}{% endif %}
 </div>
 {% endmacro %}
+{% block heading %}<h1>Week of {{ md(monday) }}</h1>{% endblock %}
 {% block content %}
-<h1>Week of {{ md(monday) }}</h1>
 <div class="week-bar">
   <a class="btn" href="/plan?week={{ prev.isoformat() }}">{{ icon("chevron-left") }}Previous week</a>
   <a class="btn" href="/plan?week={{ next.isoformat() }}">Next week{{ icon("chevron-right") }}</a>

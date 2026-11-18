@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Review import{% endblock %}
 {% block head %}{% if p.status == "processing" %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block heading %}<h1>{{ p.source if p.status != "ready" else p.draft.title }}</h1>{% endblock %}
 {% block content %}
 {% if p.status != "ready" %}
-<h1>{{ p.source }}</h1>
 {% if p.status == "failed" %}<p class="error">Import failed: {{ p.error }}</p>{% else %}<p class="muted">Still reading this recipe…</p>{% endif %}
 <form method="post" action="/import/{{ p.id }}/discard" onsubmit="return confirm('Discard this import?')"><button class="secondary">Discard</button></form>
 {% else %}
-<h1>{{ p.draft.title }}</h1>
 <p class="muted">{{ p.source }} · {{ p.draft.servings }} servings</p>
 {% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
 <form method="post">

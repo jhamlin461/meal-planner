@@ -99,15 +99,22 @@ def test_chores_switcher_has_two_pages(env):
     assert "Supplies you keep at home will show here." in c.get("/home/supplies").text
 
 
-def test_scan_button_on_meals_and_chores_pages(env):
+def test_scan_action_beside_title_on_meals_and_chores_pages(env):
     c = env[3]
-    fab = re.compile(r'<a class="fab" href="([^"]+)">.*?barcode-scan.*?<span>Scan</span></a>', re.S)
-    assert fab.findall(c.get("/plan").text) == ["/scan"]
-    assert fab.findall(c.get("/home").text) == ["/scan?from=chores"]
-    assert fab.findall(c.get("/home/supplies").text) == ["/scan?from=chores"]
+    row = re.compile(r'<div class="title-row"><h1[^>]*>.*?</h1>\s*<a class="button title-action" href="([^"]+)">'
+                     r'.*?barcode-scan.*?Scan</a></div>', re.S)
+    for url, href in [("/plan", "/scan"), ("/shopping", "/scan"), ("/pantry", "/scan"), ("/recipes", "/scan"),
+                      ("/import", "/scan"), ("/home", "/scan?from=chores"), ("/home/supplies", "/scan?from=chores"),
+                      ("/home/chores/new", "/scan?from=chores")]:
+        html = c.get(url).text
+        assert row.findall(html) == [href] and html.count("<h1") == 1, url
     c.cookies.set("who", "kitchen")
     for url in ["/", "/me", "/scan", "/scan?from=chores"]:
-        assert 'class="fab"' not in c.get(url).text, url
+        html = c.get(url).text
+        assert "title-action" not in html and html.count("<h1") == 1, url
+    for url in ["/plan", "/home", "/static/style.css", "/static/app.js"]:
+        text = c.get(url).text
+        assert ".fab" not in text and 'class="fab"' not in text and '"away"' not in text, url
     # wide screens: Scan is the last item of the rail's nested list instead
     rail = c.get("/plan").text
     rail = rail[rail.index('class="rail-sub"'):]
@@ -142,16 +149,6 @@ def test_switcher_matches_whole_path_segments():
     assert current("/plan") == ["Plan"] and current("/recipes/7") == ["Recipes"]
     assert current("/plans") == [] and current("/shoppinglist") == []
     assert current("/home", "Chores pages") == ["Chores"] and current("/home/supplies", "Chores pages") == ["Supplies"]
-
-
-def test_scan_button_steps_aside_while_scrolling(env):
-    c = env[3]
-    css, js = c.get("/static/style.css").text, c.get("/static/app.js").text
-    away = css[css.index(".fab.away {"):]
-    assert "visibility: hidden" in away[:away.index("}")]
-    focus = css[css.index(".fab:focus-visible {"):]
-    assert "var(--text)" in focus[:focus.index("}")]
-    assert 'querySelector(".fab")' in js and '"scroll"' in js and "passive: true" in js and '"away"' in js
 
 
 def test_me_page_theme_and_device(env):

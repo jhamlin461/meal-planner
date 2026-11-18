@@ -14,8 +14,8 @@
   {% else %}<p class="muted">Mark this one in Grocy.</p>{% endif %}
 </div>
 {% endmacro %}
+{% block heading %}<h1>Chores</h1>{% endblock %}
 {% block content %}
-<h1>Chores</h1>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
 <h2>Repeating</h2>
 {% for r in chores %}{{ item("chores", r, skip=True) }}{% else %}
