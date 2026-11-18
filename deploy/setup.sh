@@ -64,4 +64,8 @@ fi
 
 docker compose up -d --force-recreate mealplanner   # pick up the new .env
 docker compose run --rm mealplanner python -m app.setup_grocy
-echo "Done. Open the app at the https://….ts.net address that 'tailscale serve' printed."
+if command -v tailscale >/dev/null; then
+  tailscale serve --bg 8000 >/dev/null   # HTTPS on the tailnet; idempotent
+  url=$(tailscale serve status 2>/dev/null | grep -o 'https://[^ ]*' | head -n1)
+fi
+echo "Done. Open the app at ${url:-the https://….ts.net address from 'tailscale serve status'}"
