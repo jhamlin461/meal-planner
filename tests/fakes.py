@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 
 class FakeGrocy:
     """In-memory Grocy. entities: entity -> {id: row}; stock: product_id -> [entry dicts]."""
@@ -61,7 +63,8 @@ class FakeGrocy:
     def add_stock(self, product_id, amount, best_before: date | None, location_id):
         self.stock.setdefault(product_id, []).append(
             {"product_id": product_id, "amount": amount,
-             "best_before_date": best_before, "location_id": location_id})
+             "best_before_date": best_before.isoformat() if best_before else None,
+             "location_id": location_id})
 
     def consume(self, product_id, amount):
         left = amount
@@ -80,3 +83,25 @@ class FakeGrocy:
 
     def volatile(self, days):
         return self.volatile_result
+
+
+@pytest.fixture
+def fake_grocy_with_week():
+    """Bootstrapped FakeGrocy: flour (10), recipe 1 (base 2, 150 g flour), 100 g stock,
+    a Dinner entry 2026-11-19 for 4 servings, one Extras row."""
+    from app.setup_grocy import bootstrap, ids
+
+    g = FakeGrocy()
+    bootstrap(g)
+    i = ids(g)
+    g._next_id = 100
+    g.entities["products"] = {10: {"id": 10, "name": "Flour"}}
+    g.entities["recipes"] = {1: {"id": 1, "name": "Bread", "base_servings": 2}}
+    g.entities["recipes_pos"] = {1: {"id": 1, "recipe_id": 1, "product_id": 10, "amount": 150,
+                                     "qu_id": i.unit["g"], "note": ""}}
+    g.add_stock(10, 100, date(2027, 1, 1), i.location["Pantry"])
+    g.create("meal_plan", {"day": "2026-11-19", "type": "recipe", "recipe_id": 1, "recipe_servings": 4,
+                           "section_id": i.section["Dinner"], "note": "", "done": 0})
+    g.create("shopping_list", {"shopping_list_id": i.list["Extras"], "product_id": 10, "amount": 1,
+                               "done": 0, "note": "extra"})
+    return g
