@@ -39,6 +39,13 @@ HA's REST API can't write YAML, but everything the package did can be done with 
      panel view holding a webpage (`iframe`) card for the app's HTTPS URL (from `tailscale serve status`, passed in
      by setup.sh as `APP_URL`).
   3. Prints the result in plain words.
+- **Migration from the interim YAML install** (already live in the owner's HA: `packages/house.yaml`,
+  `packages/meal_planner.yaml`, a `packages:` line, and a "House" Webpage dashboard with url_path `house-manager`):
+  `ha_setup` must reuse that dashboard (update, don't duplicate) and print a clear note that the two package files
+  must be deleted from HA's `packages/` folder before the new version runs, otherwise notification taps would be
+  handled twice (harmless thanks to the occurrence guard, but noisy) and the YAML REST sensors would clash with the
+  pushed `sensor.house_*` entities. README gets the same note. App person names come from People (the owner's are
+  "Joshua" and "Catherine"); pushed sensor ids use the slugified name (`sensor.house_joshua_needs_you_now`).
 - **Removed**: the `/api/hook/action` and `/api/events/washer-*` endpoints, `HOOK_SECRET`, `deploy/ha/house.yaml`,
   `deploy/ha/configuration.yaml`, `deploy/ha/automation.yaml`, and their README steps; `/api/summary` and
   `/api/expiring` stay (read-only).

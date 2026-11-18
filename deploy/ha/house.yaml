@@ -9,9 +9,9 @@ rest:
   - resource: http://<lxc-ip>:8000/api/summary
     scan_interval: 60
     sensor:
-      - name: "House: Josh needs you now"
+      - name: "House: Joshua needs you now"
         value_template: "{{ (value_json.people.get('Josh') or {}).get('now', 0) }}"
-        json_attributes_path: "$.people.Josh"
+        json_attributes_path: "$.people.Joshua"
         json_attributes:
           - titles
       - name: "House: Catherine needs you now"
