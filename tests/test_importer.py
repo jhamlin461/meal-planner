@@ -7,7 +7,7 @@ from app.ai import AIError, IngredientPick, Picks, ProductGuess, RecipeDraft
 from app.cfe import CfeTable, Ingredient, Op
 from app.config import Settings
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, extract_jsonld_recipe,
-                          page_text, process, propose_matches, save_recipe)
+                          page_text, process, propose_matches, save_recipe, stock_amount_for)
 from app.setup_grocy import bootstrap, ids
 from tests.fakes import FakeAI, FakeGrocy
 
@@ -244,3 +244,12 @@ def test_create_generic_creates_and_reuses():
     uf = g.userfields("products", pid)
     assert uf["package_amount"] == 1 and uf["g_per_unit"] == 1 and uf["kcal_100"] == 20
     assert create_generic(g, FakeAI(error=AIError("not called")), http, settings, "crushed TOMATOES") == pid
+
+
+def test_stock_amount_for_hand_picked_product():
+    g = grocy()
+    flour = product(g, "Flour", "g")
+    add_conversion(g, flour, "cup", 125)
+    assert stock_amount_for(g, flour, 2, "cups") == 250
+    assert stock_amount_for(g, flour, 2, "tbsp.") is None  # no conversion known
+    assert stock_amount_for(g, flour, None, "cup") is None

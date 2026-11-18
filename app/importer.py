@@ -232,6 +232,15 @@ def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
                             if i in picks else None) for i, ing in enumerate(ings)]
 
 
+def stock_amount_for(grocy, product_id: int, qty: float | None, unit: str) -> float | None:
+    """`qty unit` in the product's stock unit (as propose_matches computes it), or None if not convertible."""
+    product = grocy.get_object("products", product_id)
+    if product is None:
+        return None
+    names = {v: k for k, v in ids(grocy).unit.items()}
+    return _stock_amount(product, qty, unit, grocy.objects("quantity_unit_conversions"), names)
+
+
 def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> None:
     """Product-specific `from_unit` -> stock unit conversion (1 from_unit = factor stock units); upserts."""
     if not factor > 0:  # 0 breaks to_stock_amount's 1/f reverse edge; negatives poison shopping sums

@@ -60,6 +60,8 @@ def validate(t: CfeTable) -> list[str]:
     refs = {f"i{k}" for k in range(len(t.ingredients))} | set(ids)
     used: dict[str, list[str]] = {}
     for o in t.ops:
+        if not o.inputs:
+            errs.append(f"{o.id} has no inputs")
         for r in o.inputs:
             if r not in refs:
                 errs.append(f"{o.id} input {r} does not exist")

@@ -77,6 +77,17 @@ class FakeGrocy:
             if entries[0]["amount"] <= 0:
                 entries.pop(0)
 
+    def transfer(self, product_id, amount, from_location, to_location):
+        for e in self.stock.get(product_id, []):
+            if e["location_id"] == from_location and amount > 0:
+                take = min(amount, e["amount"])
+                if take < e["amount"]:
+                    e["amount"] -= take
+                    self.stock[product_id].append({**e, "amount": take, "location_id": to_location})
+                else:
+                    e["location_id"] = to_location
+                amount -= take
+
     def set_amount(self, product_id, new_amount):
         self.stock[product_id] = ([{"product_id": product_id, "amount": new_amount,
                                     "best_before_date": None, "location_id": None}]

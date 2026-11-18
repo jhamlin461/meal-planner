@@ -78,6 +78,10 @@ class Grocy:
         self._req("POST", f"/stock/products/{product_id}/consume",
                   json={"amount": amount, "spoiled": False, "allow_subproduct_substitution": True})
 
+    def transfer(self, product_id: int, amount: float, from_location: int, to_location: int) -> None:
+        self._req("POST", f"/stock/products/{product_id}/transfer",
+                  json={"amount": amount, "location_id_from": from_location, "location_id_to": to_location})
+
     def set_amount(self, product_id: int, new_amount: float) -> None:
         self._req("POST", f"/stock/products/{product_id}/inventory", json={"new_amount": new_amount})
 

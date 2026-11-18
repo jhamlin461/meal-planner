@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -77,3 +79,14 @@ def test_fake_grocy_roundtrip():
     f.consume(child, 200)
     assert f.stock_amounts()[child] == 300.0
     assert f.objects("products", name="Flour")[0]["id"] == parent
+
+
+def test_transfer_posts_locations():
+    seen = {}
+
+    def handler(req):
+        seen["path"], seen["body"] = req.url.path, req.read()
+        return httpx.Response(200, json=[])
+    Grocy("http://g/api", "k", transport=httpx.MockTransport(handler)).transfer(5, 2.5, 1, 3)
+    assert seen["path"] == "/api/stock/products/5/transfer"
+    assert json.loads(seen["body"]) == {"amount": 2.5, "location_id_from": 1, "location_id_to": 3}

@@ -49,3 +49,8 @@ def test_partial_renders_brownie():
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent.parent / "app" / "templates"))
     html = env.get_template("_cfe_table.html").render(pre=BROWNIE.pre, grid=layout(BROWNIE), ncols=ncols(BROWNIE))
     assert 'rowspan="9"' in html and f'colspan="{ncols(BROWNIE)}"' in html and "Preheat oven" in html
+
+
+def test_validate_flags_op_without_inputs():
+    t = BROWNIE.model_copy(update={"ops": BROWNIE.ops + [Op(id="o6", label="rest", inputs=[])]})
+    assert "o6 has no inputs" in validate(t)
