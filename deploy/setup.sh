@@ -19,6 +19,8 @@ ask() {
   if [[ -n $secret && -n $cur ]]; then shown="…${cur: -4}"; else shown=$cur; fi
   while :; do
     if [[ -n $secret ]]; then read -rsp "$q [${shown:-none}]: " v; echo; else read -rp "$q [${shown:-none}]: " v; fi
+    v=${v//$'\r'/}; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"  # pasted CR / spaces
+    [[ $v == \"*\" || $v == \'*\' ]] && v=${v:1:${#v}-2}                              # pasted quotes
     v=${v:-$cur}
     [[ -z $required || -n $v ]] && break
     echo "  This one is required."
@@ -27,6 +29,9 @@ ask() {
 }
 ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "${1%/}/api/"; }
 grocy_ok() { curl -fsS -o /dev/null -H "GROCY-API-KEY: $1" "$GROCY/api/system/info"; }
+# prints the HTTP status Claude gives this key (200 = good, 401 = wrong key, 000 = no internet)
+anthropic_status() { curl -s -o /dev/null -w '%{http_code}' -H "x-api-key: $1" -H "anthropic-version: 2023-06-01" \
+  https://api.anthropic.com/v1/models || true; }
 
 command -v docker >/dev/null || { echo "Installing Docker…"; curl -fsSL https://get.docker.com | sh; }
 
@@ -35,7 +40,14 @@ chmod 600 .env
 
 echo "Press Enter to keep the value in [brackets]."
 ask TZ "Time zone (e.g. America/Chicago)" "" required
-ask ANTHROPIC_API_KEY "Anthropic API key" secret required
+while :; do
+  ask ANTHROPIC_API_KEY "Anthropic API key (console.anthropic.com -> API Keys)" secret required
+  case $(anthropic_status "$(get ANTHROPIC_API_KEY)") in
+    200) break ;;
+    401|403) echo "  Claude rejected that key. Copy it again from console.anthropic.com -> API Keys." ;;
+    *) echo "  Couldn't reach Claude to check the key (no internet?); keeping it."; break ;;
+  esac
+done
 ask FDC_API_KEY "USDA FoodData Central key (DEMO_KEY works, slowly)" secret
 ask WALMART_STORE_ID "Walmart store id (optional)"
 ask SHOPPING_WEEKDAY "Shopping day, 0=Mon … 6=Sun" "" required
