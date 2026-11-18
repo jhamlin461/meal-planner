@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import date, timedelta
 
 import httpx
@@ -245,11 +247,11 @@ def test_review_create_suggest_and_errors(env):
     assert f'<option value="{egg}" selected' in html and 'name="amount_1" value="1"' in html
     html = c.post(f"/import/{pid}", data=review_form(action="suggest:0", product_0=flour)).text
     assert 'name="factor_0" value="125' in html and "about 125 g" in html
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, factor_0="abc")).text
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="abc")).text
     assert "could not convert" in html and store.get(pid) is not None
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, factor_0="inf")).text
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="inf")).text
     assert "finite" in html
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, factor_0="125", product_1=egg, prev_1=egg,
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg,
                                                      amount_1="1", op_inputs=["i0", ""])).text
     assert "i1 is not used by any op" in html and g.objects("recipes") == []
     assert 'name="amount_0" value="250' in html  # conversion was applied and kept
@@ -291,3 +293,67 @@ def test_grocy_down_shows_503(tmp_path, exc):
                      PendingStore(tmp_path / "pending"))
     r = TestClient(app).get("/recipes")
     assert r.status_code == 503 and "Can't reach Grocy — nothing was saved. Try again in a minute." in r.text
+
+
+def test_review_factor_is_not_applied_to_a_newly_picked_product(env):
+    g, ai, store, c, _ = env
+    flour, sugar = product(g, "Flour"), product(g, "Sugar")
+    ai.draft = soup_draft()
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    pid = store.all()[0].id
+    html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=flour, prev_0=flour,
+                                                     factor_0="125")).text
+    assert 'name="amount_0" value="250"' in html
+    # reviewer switches the row to Sugar; the hidden factor typed for Flour comes along with the form
+    html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=sugar, prev_0=flour,
+                                                     amount_0="250", factor_0="125")).text
+    assert not g.objects("quantity_unit_conversions", product_id=sugar)
+    assert 'name="amount_0" value=""' in html and 'name="factor_0" value=""' in html and "1 cup =" in html
+    egg_guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
+                             location="Pantry", best_before_days=30, g_per_unit=1)
+    ai.guess = egg_guess  # same for a product created from the row
+    c.post(f"/import/{pid}", data=review_form(action="create:0", new_name_0="Bread flour", product_0="",
+                                              prev_0=flour, factor_0="125"))
+    bread = next(p["id"] for p in g.objects("products") if p["name"] == "Bread flour")
+    assert not g.objects("quantity_unit_conversions", product_id=bread)
+
+
+def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowGrocy(FakeGrocy):
+        def create(self, entity, data):
+            if entity == "recipes":
+                started.set()
+                release.wait(5)
+            return super().create(entity, data)
+
+    g = SlowGrocy()
+    bootstrap(g)
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    store = PendingStore(tmp_path / "pending")
+    app = create_app(g, FakeAI(picks=Picks(items=[]), draft=soup_draft()),
+                     httpx.Client(transport=httpx.MockTransport(no_network)),
+                     Settings("", "", "", "KEY", None, 6, tmp_path, 3), store)
+    form = review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg, amount_1="1")
+    codes = {}
+    with TestClient(app) as c:  # one event loop shared by all requests, like uvicorn
+        c.post("/import", data={"urls": "https://example.com/soup"})
+        pid = store.all()[0].id
+
+        def save(k):
+            codes[k] = c.post(f"/import/{pid}", data=form, follow_redirects=False).status_code
+
+        first = threading.Thread(target=save, args=("first",))
+        first.start()
+        assert started.wait(5)
+        t0 = time.monotonic()
+        assert c.get("/pantry").status_code == 200 and time.monotonic() - t0 < 2  # loop not blocked by the save
+        second = threading.Thread(target=save, args=("second",))  # double-tapped Save
+        second.start()
+        time.sleep(0.3)
+        release.set()
+        first.join(5)
+        second.join(5)
+    assert codes == {"first": 303, "second": 303}
+    assert len(g.objects("recipes")) == 1 and store.get(pid) is None

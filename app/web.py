@@ -2,6 +2,7 @@
 import logging
 import math
 import mimetypes
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ValidationError
 
 from app.ai import AI, AIError
@@ -90,6 +92,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env.filters["num"] = _fmt
     env.globals["next_op_id"] = _next_op_id
     templates = Jinja2Templates(env=env)
+    save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
 
     def page(request: Request, name: str, status_code: int = 200, **ctx):
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
@@ -275,8 +278,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/recipes/{rid}/table")
     async def table_save(request: Request, rid: int):
-        r = recipe_or_404(rid)
         form = await request.form()
+        return await run_in_threadpool(save_table, request, rid, form)
+
+    def save_table(request: Request, rid: int, form):
+        r = recipe_or_404(rid)
         table = _table_from_form(form, table_for(rid))
         errors = [] if form.get("action") == "addop" else validate(table)
         if form.get("action") == "addop" or errors:
@@ -333,10 +339,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/import/{pid}")
     async def review_post(request: Request, pid: str):
         """One form for the whole review; `action` is save, create:<i>, suggest:<i> or addop (re-render)."""
+        form = await request.form()
+        return await run_in_threadpool(review_submit, request, pid, form)  # Grocy/Claude calls block for seconds
+
+    def review_submit(request: Request, pid: str, form):
         p = pending_or_404(pid)
         if p.status != "ready":
             return back(f"/import/{pid}")
-        form = await request.form()
         action = form.get("action") or "save"
         table = _table_from_form(form, p.draft.table)
         rows: list[dict] = []
@@ -350,6 +359,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 pid_ = row["product_id"]
                 if pid_ and pid_ != _int(f("prev")):  # product changed: amount must be in its stock unit
                     row["amount"] = stock_amount_for(grocy, pid_, ing.qty, ing.unit)
+                    row["factor"] = ""  # a factor typed for the old product must never be stored for this one
                 if pid_ and row["amount"] is None and ing.qty is not None:
                     if action == f"suggest:{i}":
                         prod = grocy.get_object("products", pid_)
@@ -367,14 +377,17 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if action == "save":
             draft = p.draft.model_copy(update={"table": table})
             source_url = p.source if p.source.startswith(("http://", "https://")) else None
-            try:
-                rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
-                                                 for i, r in enumerate(rows)], source_url, store.pdf_path(pid))
-            except ValueError as e:
-                errors.append(str(e))
-            else:
-                store.delete(pid)
-                return back(f"/recipes/{rid}")
+            with save_lock:  # a double-tapped Save must not create the recipe twice
+                if store.get(pid) is None:
+                    return back("/recipes")  # the other tap already saved it
+                try:
+                    rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
+                                                     for i, r in enumerate(rows)], source_url, store.pdf_path(pid))
+                except ValueError as e:
+                    errors.append(str(e))
+                else:
+                    store.delete(pid)
+                    return back(f"/recipes/{rid}")
         return review_page(request, p, table, rows, errors)
 
     @app.post("/import/{pid}/discard")
