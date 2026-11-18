@@ -9,6 +9,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.barcode import relink
 from app.grocy import Grocy
 from app.setup_grocy import bootstrap, ids
 
@@ -30,14 +31,23 @@ def i(grocy):
 
 @pytest.fixture
 def made(grocy):
-    """Register (entity, id) for cleanup; deleted in reverse order, errors ignored."""
+    """Register (entity, id) for cleanup. Deleted in reverse order, so register parents before children
+    (or insert(0, ...)). Failures are collected and fail the test, so leftovers are never silent."""
     rows: list[tuple[str, int]] = []
     yield rows
+    left = []
     for entity, id in reversed(rows):
         try:
+            if entity == "products":
+                try:
+                    grocy.set_amount(id, 0)  # best effort: clear stock so the delete is not blocked
+                except Exception:
+                    pass
             grocy.delete(entity, id)
-        except Exception:
-            pass
+        except Exception as e:
+            left.append(f"{entity}/{id}: {e}")
+    if left:
+        pytest.fail("test data left behind in Grocy (delete zz-test-* by hand): " + "; ".join(left))
 
 
 def _product(grocy, i, made, tag, **extra):
@@ -100,10 +110,12 @@ def test_barcodes_lookup_and_updates(grocy, i, made):  # (c) (d)
     grocy.update("product_barcodes", bid, {"product_id": pid, "barcode": code2})
     assert grocy.product_by_barcode(code) is None
     assert int(grocy.product_by_barcode(code2)["product"]["id"]) == pid
-    # relink (app.barcode.relink) itself does a partial PUT on products
-    parent = _product(grocy, i, made, "relink-parent")
-    grocy.update("products", pid, {"parent_product_id": parent})
-    assert int(grocy.get_object("products", pid)["parent_product_id"]) == parent
+    # the real relink path: creates/finds a generic and sets parent_product_id on the child
+    generic = f"zz-test-generic-{uuid.uuid4().hex[:8]}"
+    relink(grocy, pid, generic)
+    parent = int(grocy.get_object("products", pid)["parent_product_id"])
+    made.insert(0, ("products", parent))  # deleted last: pid still references it
+    assert grocy.get_object("products", parent)["name"] == generic
 
 
 def test_shopping_list_query_filters_by_list(grocy, i, made):  # (a)

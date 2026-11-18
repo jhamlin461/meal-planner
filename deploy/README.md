@@ -15,6 +15,7 @@ lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 ## 2. Install Docker and Tailscale (inside the LXC)
 
 ```
+apt update && apt install -y curl git ca-certificates
 curl -fsSL https://get.docker.com | sh
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
@@ -30,10 +31,11 @@ tailscale serve --bg 8000
 
 ```
 git clone <this repo> && cd <repo>/deploy
-cp .env.example .env        # fill in below
+cp .env.example .env        # fill in below (set TZ to your own time zone)
 docker compose up -d
 ```
 
+Find `<lxc-ip>` with `hostname -I` inside the LXC (use the LAN address).
 Open Grocy once at `http://<lxc-ip>:9283` (login `admin`/`admin`): change the password, then create an API key
 (user menu -> Manage API keys). This is the only time you use Grocy's own UI.
 
@@ -66,7 +68,9 @@ up files separately, include both directories.
 
 ## 6. Home Assistant
 
-1. Add the Grocy integration (Settings -> Devices & services): URL `http://<lxc-ip>`, port `9283`, the API key.
+1. Optional (the expiring notification needs only the REST sensor below): the Grocy integration is a HACS custom
+   component, not part of HA core. Install [HACS](https://hacs.xyz), add Grocy from it, then Settings -> Devices &
+   services: URL `http://<lxc-ip>`, port `9283`, the API key.
 2. Merge `ha/configuration.yaml` into HA's `configuration.yaml` (REST sensor `sensor.meal_planner_expiring`,
    polled every 30 minutes) and restart HA.
 3. Merge `ha/automation.yaml` into your automations. Replace `<phone1>`/`<phone2>` with your notify service
@@ -82,8 +86,12 @@ up files separately, include both directories.
 
 ## Live Grocy integration test
 
-Run from a dev checkout against the real Grocy (creates and deletes its own test data):
+The image has only the app (no tests or dev deps), so run it from the clone on the LXC with uv:
 
 ```
-GROCY_URL=http://<lxc-ip>:9283/api GROCY_API_KEY=... uv run pytest tests/integration -v
+curl -LsSf https://astral.sh/uv/install.sh | sh    # once; then open a new shell
+cd <repo>
+GROCY_URL=http://localhost:9283/api GROCY_API_KEY=... uv run pytest tests/integration -v
 ```
+
+It creates and deletes its own `zz-test-*` data and fails loudly if anything could not be cleaned up.

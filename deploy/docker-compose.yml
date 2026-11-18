@@ -1,6 +1,8 @@
 services:
   grocy:
     image: lscr.io/linuxserver/grocy:latest
+    environment:
+      TZ: ${TZ}
     volumes:
       - ./grocy:/config
     ports:
@@ -14,6 +16,7 @@ services:
     env_file: .env
     environment:
       GROCY_URL: http://grocy/api
+      TZ: ${TZ}
     volumes:
       - ./data:/data
     ports:

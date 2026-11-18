@@ -5,3 +5,4 @@ data/
 .env
 .superpowers/
 .pytest_cache/
+deploy/grocy/
