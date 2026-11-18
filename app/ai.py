@@ -108,11 +108,14 @@ class AI:
         self.client = client
 
     def _parse(self, model_cls, effort: str, system: str, content: list[dict]):
-        resp = self.client.beta.messages.parse(
-            model=MODEL, max_tokens=16000, betas=BETAS, fallbacks="default",
-            output_format=model_cls, output_config={"effort": effort},
-            system=system, messages=[{"role": "user", "content": content}],
-        )
+        try:
+            resp = self.client.beta.messages.parse(
+                model=MODEL, max_tokens=16000, betas=BETAS, fallbacks="default",
+                output_format=model_cls, output_config={"effort": effort},
+                system=system, messages=[{"role": "user", "content": content}],
+            )
+        except anthropic.APIError as e:  # network, rate limit, auth: callers show AIError, never a 500
+            raise AIError(f"Claude unavailable: {e}") from e
         if resp.stop_reason == "refusal" or resp.parsed_output is None:
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
             raise AIError("Claude declined or returned no result" + (f" ({cat})" if cat else ""))

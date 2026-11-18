@@ -50,3 +50,18 @@ def test_refusal_raises():
     client, _ = stub(None, stop_reason="refusal")
     with pytest.raises(AIError):
         AI(client).guess_conversion("flour", "cup", "g")
+
+
+def test_sdk_errors_become_aierror():
+    import anthropic
+    import httpx
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    errs = [anthropic.APIConnectionError(request=req),
+            anthropic.RateLimitError("slow down", response=httpx.Response(429, request=req), body=None)]
+    for err in errs:
+        def parse(**kw):
+            raise err
+        client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(parse=parse)))
+        with pytest.raises(AIError):
+            AI(client).guess_conversion("flour", "cup", "g")
