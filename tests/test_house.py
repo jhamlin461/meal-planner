@@ -32,3 +32,18 @@ def test_flags(tmp_path):
     assert s.flag("ha_down") == "1"
     s.set_flag("ha_down", None)
     assert s.flag("ha_down") is None
+
+
+def test_old_house_db_gains_sent_for(tmp_path):
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "h.db")
+    db.execute("CREATE TABLE reminders (key TEXT PRIMARY KEY, audience TEXT, remind_at TEXT, repeat_min INTEGER, "
+               "snooze_until TEXT, last_sent TEXT, sent_to TEXT, verb TEXT)")
+    db.execute("INSERT INTO reminders VALUES ('chore:1', 'home', '18:00', NULL, NULL, NULL, '[]', NULL)")
+    db.commit()
+    db.close()
+    s = HouseStore(tmp_path / "h.db")
+    assert s.reminder("chore:1") == Reminder("chore:1", "home", "18:00")
+    r = Reminder("chore:1", "home", "18:00", sent_for="2026-11-18T00:00:00")
+    s.save_reminder(r)
+    assert HouseStore(tmp_path / "h.db").reminder("chore:1") == r

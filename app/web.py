@@ -26,6 +26,7 @@ from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
 from app import home as hm
 from app.house import HouseStore, Person
+from app.reminders import start_loop
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
                           save_recipe, stock_amount_for)
 from app.qty import is_packaging
@@ -118,6 +119,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     house = house or HouseStore(settings.data_dir / "house.db")
     if ha is None and settings.ha_url:
         ha = HA(settings.ha_url, settings.ha_token)
+    if settings.ha_url:
+        start_loop(lambda: (grocy, house, ha, settings))
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters["num"] = _fmt

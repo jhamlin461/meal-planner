@@ -26,6 +26,7 @@ class Reminder:
     last_sent: datetime | None = None
     sent_to: list[str] = field(default_factory=list)
     verb: str | None = None
+    sent_for: str | None = None  # the due date (ISO) the sent notifications are about
 
 
 def _dt(s: str | None) -> datetime | None:
@@ -42,9 +43,11 @@ class HouseStore:
                 CREATE TABLE IF NOT EXISTS people (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, grocy_user_id INTEGER,
                     ha_person TEXT, notify_service TEXT);
                 CREATE TABLE IF NOT EXISTS reminders (key TEXT PRIMARY KEY, audience TEXT, remind_at TEXT, repeat_min INTEGER,
-                    snooze_until TEXT, last_sent TEXT, sent_to TEXT, verb TEXT);
+                    snooze_until TEXT, last_sent TEXT, sent_to TEXT, verb TEXT, sent_for TEXT);
                 CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value TEXT);
             """)
+            if "sent_for" not in [c[1] for c in self._db.execute("PRAGMA table_info(reminders)")]:
+                self._db.execute("ALTER TABLE reminders ADD COLUMN sent_for TEXT")  # house.db from before sent_for
 
     def _q(self, sql: str, *args) -> list[tuple]:
         with self._lock, self._db:
@@ -69,16 +72,18 @@ class HouseStore:
         self._q("DELETE FROM people WHERE id=?", id)
 
     def reminder(self, key: str) -> Reminder:
-        rows = self._q("SELECT audience, remind_at, repeat_min, snooze_until, last_sent, sent_to, verb FROM reminders WHERE key=?", key)
+        rows = self._q("SELECT audience, remind_at, repeat_min, snooze_until, last_sent, sent_to, verb, sent_for "
+                       "FROM reminders WHERE key=?", key)
         if not rows:
             return Reminder(key)
-        a, at, rep, snz, last, sent, verb = rows[0]
-        return Reminder(key, a, at, rep, _dt(snz), _dt(last), json.loads(sent or "[]"), verb)
+        a, at, rep, snz, last, sent, verb, sent_for = rows[0]
+        return Reminder(key, a, at, rep, _dt(snz), _dt(last), json.loads(sent or "[]"), verb, sent_for)
 
     def save_reminder(self, r: Reminder) -> None:
-        self._q("INSERT OR REPLACE INTO reminders VALUES (?,?,?,?,?,?,?,?)", r.key, r.audience, r.remind_at, r.repeat_min,
+        self._q("INSERT OR REPLACE INTO reminders (key, audience, remind_at, repeat_min, snooze_until, last_sent, sent_to, "
+                "verb, sent_for) VALUES (?,?,?,?,?,?,?,?,?)", r.key, r.audience, r.remind_at, r.repeat_min,
                 r.snooze_until and r.snooze_until.isoformat(), r.last_sent and r.last_sent.isoformat(),
-                json.dumps(r.sent_to), r.verb)
+                json.dumps(r.sent_to), r.verb, r.sent_for)
 
     def drop_reminder(self, key: str) -> None:
         self._q("DELETE FROM reminders WHERE key=?", key)
