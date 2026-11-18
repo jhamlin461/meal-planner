@@ -605,3 +605,12 @@ def test_cross_site_posts_are_refused(env):
     for h in ({}, {"Sec-Fetch-Site": "same-origin"}):  # curl/HA send no header; the app's own pages same-origin
         assert c.post("/shopping/extra", data={"name": "Milk"}, headers=h, follow_redirects=False).status_code == 303
     assert len(g.objects("shopping_list")) == 2
+
+
+def test_relink_refused_when_stock_is_in_another_unit(env):
+    g, _, _, c, _ = env
+    child = product(g, "Brand Pasta", parent_product_id=product(g, "Pasta"))
+    product(g, "Noodles", "piece")
+    g.add_stock(child, 500, None, None)
+    r = c.post("/api/relink", json={"product_id": child, "generic_name": "Noodles"})
+    assert r.status_code == 400 and "in stock in another unit" in r.json()["message"]

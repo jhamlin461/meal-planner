@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app.ai import AIError, RecipeDraft
-from app.barcode import _generics, _product_fields
+from app.barcode import _generics, _product_fields, generic_choices
 from app.cfe import ingredient_text, validate
 from app.nutrition import fill_missing_nutrition
 from app.qty import is_packaging, normalize_unit, to_stock_amount
@@ -302,7 +302,7 @@ def create_generic(grocy, ai, http, settings, name: str) -> int:
     hit = next((p for p in generics if p["name"].lower() == name.lower()), None)
     if hit:
         return int(hit["id"])
-    g = ai.guess_product({"name": name}, [p["name"] for p in generics], LOCATIONS)
+    g = ai.guess_product({"name": name}, generic_choices(grocy), LOCATIONS)
     fields, uf = _product_fields(grocy, g)
     pid = grocy.create("products", {"name": name, **fields})
     grocy.set_userfields("products", pid, uf)

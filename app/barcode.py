@@ -48,13 +48,38 @@ def _generics(grocy) -> list[dict]:
     return [p for p in grocy.objects("products") if not p.get("parent_product_id")]
 
 
+def generic_choices(grocy) -> list[dict]:
+    """Generics as Claude sees them: name plus stock unit, so a guess for an existing one uses its unit."""
+    names = {v: k for k, v in ids(grocy).unit.items()}
+    return [{"name": p["name"], "stock_unit": names.get(int(p.get("qu_id_stock") or 0), "")} for p in _generics(grocy)]
+
+
+UNIT_FIELDS = ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price")
+
+
+def _generic_named(grocy, name: str) -> dict | None:
+    return next((p for p in _generics(grocy) if p["name"].lower() == name.lower()), None)
+
+
+def _align_to_parent(grocy, parent: dict, fields: dict, uf: dict) -> dict:
+    """Give a child its generic's units (Grocy sums child stock into the parent unconverted). Updates `fields`;
+    returns the child's userfields, minus package_amount/g_per_unit when those were in another unit."""
+    unit = int(parent.get("qu_id_stock") or 0)
+    same = int(fields.get("qu_id_stock") or 0) == unit
+    fields.update(dict.fromkeys(UNIT_FIELDS, unit))
+    if same:
+        return uf
+    puf = grocy.userfields("products", int(parent["id"]))
+    return {"g_per_unit": puf["g_per_unit"]} if puf.get("g_per_unit") not in (None, "") else {}
+
+
 def _nutrition(info: dict) -> dict:
     return {k: info[k] for k in NUTRIENTS if info.get(k) is not None}
 
 
 def _find_or_create_generic(grocy, name: str, fields: dict, uf: dict, nutrition: dict) -> int:
     """fields: product columns to create the generic with; uf: userfields for a new generic."""
-    parent = next((p for p in _generics(grocy) if p["name"].lower() == name.lower()), None)
+    parent = _generic_named(grocy, name)
     if parent:
         pid = int(parent["id"])
         if nutrition and grocy.userfields("products", pid).get("kcal_100") in (None, ""):
@@ -79,6 +104,9 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
 
 def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
     fields, uf = _product_fields(grocy, g)
+    parent = _generic_named(grocy, g.generic_name)
+    if parent:
+        uf = _align_to_parent(grocy, parent, fields, uf)
     parent_id = _find_or_create_generic(grocy, g.generic_name, fields, uf, nutrition)
     if any(p["name"].lower() == name.lower() for p in grocy.objects("products")):
         name = f"{name} ({code})"
@@ -100,12 +128,12 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
         info = {**(info or {}), **{k: upc[k] for k in ("name", "brand")}} if upc else None
     if not info or not info.get("name"):
         return None
-    g = ai.guess_product(info, [p["name"] for p in _generics(grocy)], LOCATIONS)
+    g = ai.guess_product(info, generic_choices(grocy), LOCATIONS)
     return _create(grocy, g, info["name"], code, _nutrition(info))
 
 
 def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -> Resolved:
-    g = ai.guess_product({"barcode": code}, [p["name"] for p in _generics(grocy)], LOCATIONS, image=image)
+    g = ai.guess_product({"barcode": code}, generic_choices(grocy), LOCATIONS, image=image)
     return _create(grocy, g, f"{g.generic_name} (scanned)", code, {})
 
 
@@ -117,7 +145,17 @@ def relink(grocy, product_id: int, generic_name: str) -> None:
     keep = ("location_id", "qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price",
             "default_best_before_days")
     uf = grocy.userfields("products", product_id)
+    parent = _generic_named(grocy, generic_name)
+    upd: dict = {}
+    if parent and int(parent.get("qu_id_stock") or 0) != int(child.get("qu_id_stock") or 0):
+        if grocy.stock_amounts().get(product_id, 0.0) > 0:  # ponytail: no unit conversion of existing stock
+            raise ValueError(f"{child['name']} is in stock in another unit than {parent['name']}; "
+                             "use it up or set its amount to 0 first")
+        fields = dict(child)
+        new_uf = _align_to_parent(grocy, parent, fields, uf)
+        upd = {k: fields[k] for k in UNIT_FIELDS}
+        grocy.set_userfields("products", product_id, {"package_amount": "", "g_per_unit": "", **new_uf})
     parent_id = _find_or_create_generic(
         grocy, generic_name, {k: child[k] for k in keep if k in child},
         {k: uf[k] for k in ("package_amount", "g_per_unit") if k in uf}, {})
-    grocy.update("products", product_id, {"parent_product_id": parent_id})
+    grocy.update("products", product_id, {**upd, "parent_product_id": parent_id})

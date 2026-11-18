@@ -171,3 +171,78 @@ def test_relink_to_child_name_raises():
     r2 = resolve(g, FakeAI(guess=guess()), http(off=OFF), "555")
     with pytest.raises(ValueError, match="child"):
         relink(g, r2.product_id, "Great Value All Purpose Flour")
+
+
+def tortillas(g, **uf):
+    """An existing generic stocked in pieces, created the way the app creates products."""
+    from app.setup_grocy import ids
+    piece = ids(g).unit["piece"]
+    pid = g.create("products", {"name": "Tortillas", "qu_id_stock": piece, "qu_id_purchase": piece,
+                                "qu_id_consume": piece, "qu_id_price": piece})
+    g.set_userfields("products", pid, uf)
+    return pid, piece
+
+
+def test_child_of_existing_generic_takes_parent_units():
+    g = grocy()
+    parent, piece = tortillas(g, g_per_unit=40)
+    off = {"status": 1, "product": {"product_name": "Mission Tortillas"}}
+    r = resolve(g, FakeAI(guess=guess(generic_name="tortillas", stock_unit="g", package_amount=567)),
+                http(off=off), CODE)
+    child = g.get_object("products", r.product_id)
+    assert child["parent_product_id"] == parent
+    assert all(child[k] == piece for k in ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price"))
+    uf = g.userfields("products", r.product_id)
+    assert "package_amount" not in uf  # 567 was grams, not tortillas
+    assert float(uf["g_per_unit"]) == 40
+    g.add_stock(r.product_id, 10, None, None)
+    assert g.stock_amounts()[parent] == 10
+
+
+def test_child_in_parent_unit_keeps_package_amount():
+    g = grocy()
+    parent, piece = tortillas(g)
+    off = {"status": 1, "product": {"product_name": "Mission Tortillas"}}
+    r = resolve(g, FakeAI(guess=guess(generic_name="Tortillas", stock_unit="piece", package_amount=10,
+                                      g_per_unit=45)), http(off=off), CODE)
+    assert g.get_object("products", r.product_id)["qu_id_stock"] == piece
+    assert float(g.userfields("products", r.product_id)["package_amount"]) == 10
+
+
+def test_generics_sent_to_claude_with_units():
+    seen = []
+
+    class Spy(FakeAI):
+        def guess_product(self, info, generics, locations, image=None):
+            seen.append(generics)
+            return super().guess_product(info, generics, locations, image)
+
+    g = grocy()
+    tortillas(g)
+    resolve(g, Spy(guess=guess()), http(off=OFF), CODE)
+    resolve_from_photo(g, Spy(guess=guess()), http(), "77", b"img")
+    assert seen[0] == [{"name": "Tortillas", "stock_unit": "piece"}]
+    assert {"name": "Tortillas", "stock_unit": "piece"} in seen[1]
+
+
+def test_relink_to_generic_with_other_unit_aligns_units():
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)  # flour child in g, package 2268
+    _, piece = tortillas(g, g_per_unit=40)
+    relink(g, r.product_id, "Tortillas")
+    child = g.get_object("products", r.product_id)
+    assert all(child[k] == piece for k in ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price"))
+    uf = g.userfields("products", r.product_id)
+    assert not uf.get("package_amount") and float(uf["g_per_unit"]) == 40  # Grocy clears a userfield with ""
+
+
+def test_relink_with_stock_in_another_unit_is_refused():
+    import pytest
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)
+    old_parent = g.get_object("products", r.product_id)["parent_product_id"]
+    tortillas(g)
+    g.add_stock(r.product_id, 500, None, None)
+    with pytest.raises(ValueError, match="in stock"):
+        relink(g, r.product_id, "Tortillas")
+    assert g.get_object("products", r.product_id)["parent_product_id"] == old_parent

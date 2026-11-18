@@ -76,10 +76,11 @@ Table rules:
   estimated, note "est., from <blend name>". Ops must still cover those rows contiguously."""
 
 PRODUCT_PROMPT = """You fill in pantry product details for a grocery inventory.
-Use the given product info (barcode database data or a package photo). Prefer an existing generic name from
-`generics` when one fits (is_new_generic=false); otherwise propose a short new one (is_new_generic=true).
-location must be one of the given locations. stock_unit is g, ml or piece. package_amount is the package size
-in stock_unit, or null if unknown. best_before_days is a typical shelf life once bought. g_per_unit is grams per
+Use the given product info (barcode database data or a package photo). Prefer an existing generic from
+`generics` when one fits (is_new_generic=false, generic_name = its name exactly); otherwise propose a short new
+name (is_new_generic=true). location must be one of the given locations. stock_unit is g, ml or piece; when you
+pick an existing generic, stock_unit must be that generic's stock_unit. package_amount is the package size in
+stock_unit (e.g. count the tortillas when the generic is in piece), or null if unknown or not expressible in it. best_before_days is a typical shelf life once bought. g_per_unit is grams per
 stock unit (1 for g, about 1 for ml of water-like liquids, grams per piece for piece)."""
 
 CONVERSION_PROMPT = """Give the multiplier that converts an amount of the named cooking ingredient from
@@ -132,7 +133,7 @@ class AI:
         content.append({"type": "text", "text": text or "Structure the attached recipe."})
         return self._parse(RecipeDraft, "high", CFE_PROMPT, content)
 
-    def guess_product(self, info: dict, generics: list[str], locations: list[str],
+    def guess_product(self, info: dict, generics: list[dict], locations: list[str],
                       image: bytes | None = None) -> ProductGuess:
         content = [_image_block(image)] if image else []
         content.append({"type": "text", "text": json.dumps(
