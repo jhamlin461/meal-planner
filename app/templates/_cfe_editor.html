@@ -1,0 +1,16 @@
+{# Fields only; the including page owns the <form>. One line per op: id, label, inputs (comma-separated refs). #}
+<fieldset class="editor">
+<legend>Table steps</legend>
+<p class="muted">Rows: {% for ing in table.ingredients %}<b>i{{ loop.index0 }}</b> {{ ing.name }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+{% for o in table.ops %}<div class="row">
+  <input name="op_id" value="{{ o.id }}" size="3" aria-label="Step id">
+  <input name="op_label" value="{{ o.label }}" class="grow" placeholder="what to do" aria-label="Label">
+  <input name="op_inputs" value="{{ o.inputs|join(', ') }}" class="grow" placeholder="o1, i2" aria-label="Combines">
+</div>
+{% endfor %}<div class="row">
+  <input name="op_id" value="{{ next_op_id(table) }}" size="3" aria-label="New step id">
+  <input name="op_label" class="grow" placeholder="new step" aria-label="New step label">
+  <input name="op_inputs" class="grow" placeholder="o1, i2" aria-label="New step combines">
+</div>
+<p><button class="secondary" name="action" value="addop">Add op</button></p>
+</fieldset>

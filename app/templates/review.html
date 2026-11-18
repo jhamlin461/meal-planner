@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Review import{% endblock %}
+{% block head %}{% if p.status == "processing" %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block content %}
+{% if p.status != "ready" %}
+<h1>{{ p.source }}</h1>
+{% if p.status == "failed" %}<p class="error">Import failed: {{ p.error }}</p>{% else %}<p class="muted">Still reading this recipe…</p>{% endif %}
+<form method="post" action="/import/{{ p.id }}/discard"><button class="secondary">Discard</button></form>
+{% else %}
+<h1>{{ p.draft.title }}</h1>
+<p class="muted">{{ p.source }} · {{ p.draft.servings }} servings</p>
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+<form method="post">
+<button class="default" name="action" value="update" tabindex="-1" aria-hidden="true">Update</button>{# Enter key = Update, never Create #}
+<h2>Ingredients</h2>
+<p class="muted">Amounts are in the product's stock unit. Changed a product? Press Update to recalculate.</p>
+<ul class="rows">
+{% for row in rows %}{% set i = loop.index0 %}<li>
+  <div><b>i{{ i }}</b> {{ row.text }}</div>
+  <div class="row">
+    <select name="product_{{ i }}" class="grow" aria-label="Product for i{{ i }}">
+      <option value="">— pick a product —</option>
+      {% for g in generics %}<option value="{{ g.id }}"{% if g.id == row.product_id %} selected{% endif %}>{{ g.name }}</option>{% endfor %}
+    </select>
+    <input type="hidden" name="prev_{{ i }}" value="{{ row.prev or '' }}">
+    <label><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for i{{ i }}"> {{ row.stock_unit }}</label>
+  </div>
+  {% if not row.product_id %}<div class="row">
+    <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
+    <button class="secondary" name="action" value="create:{{ i }}">Create new product</button>
+  </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
+  {% if row.convert %}<div class="row">
+    <span>1 {{ row.unit }} =</span>
+    <input type="text" name="factor_{{ i }}" value="{{ row.factor }}" size="6" inputmode="decimal" aria-label="Conversion factor">
+    <span>{{ row.stock_unit }}</span>
+    <button class="secondary" name="action" value="suggest:{{ i }}">Suggest</button>
+  </div>{% else %}<input type="hidden" name="factor_{{ i }}" value="{{ row.factor }}">{% endif %}
+  {% if row.note %}<p class="muted">{{ row.note }}</p>{% endif %}
+  {% if row.error %}<p class="error">{{ row.error }}</p>{% endif %}
+</li>
+{% endfor %}</ul>
+<h2>Table</h2>
+{% if cfe %}<div class="scroll">{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}</div>
+{% else %}{% for e in table_errors %}<p class="error">{{ e }}</p>{% endfor %}{% endif %}
+{% include "_cfe_editor.html" %}
+<p class="row"><button name="action" value="save">Save recipe</button><button class="secondary" name="action" value="update">Update</button></p>
+</form>
+<form method="post" action="/import/{{ p.id }}/discard"><button class="secondary">Discard</button></form>
+{% endif %}
+{% endblock %}

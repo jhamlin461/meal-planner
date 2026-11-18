@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Scan{% endblock %}
+{% block content %}
+<h1>Scan</h1>
+<div class="row" role="radiogroup" aria-label="What to do">
+  <label class="choice"><input type="radio" name="scan-action" value="add" checked> Add</label>
+  <label class="choice"><input type="radio" name="scan-action" value="use"> Use</label>
+</div>
+<video id="scanner" playsinline muted></video>
+<p id="scan-status" class="muted">Point the camera at a barcode.</p>
+<div id="unknown" class="card" hidden>
+  <p>I don't know barcode <b id="unknown-code"></b>. Take a photo of the package and I'll work it out.</p>
+  <label class="button">Take photo<input id="photo" type="file" accept="image/*" capture="environment" hidden></label>
+</div>
+<dialog id="fix">
+  <form method="dialog">
+    <p>What is <b id="fix-name"></b>?</p>
+    <input name="generic" list="generics" required autocomplete="off" aria-label="Generic product">
+    <datalist id="generics">{% for g in generics %}<option value="{{ g }}">{% endfor %}</datalist>
+    <p class="row"><button value="ok">Save</button><button class="secondary" value="cancel" formnovalidate>Cancel</button></p>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}<script src="/static/vendor/zxing-browser.min.js"></script>{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Edit table · {{ r.name }}{% endblock %}
+{% block content %}
+<h1>{{ r.name }}: table</h1>
+{% for e in errors %}<p class="error">{{ e }}</p>{% endfor %}
+<form method="post">
+<button class="default" name="action" value="save" tabindex="-1" aria-hidden="true">Save</button>{# Enter key = Save #}
+{% include "_cfe_editor.html" %}
+<p class="row"><button name="action" value="save">Save table</button><a href="/recipes/{{ r.id }}">Cancel</a></p>
+</form>
+{% endblock %}

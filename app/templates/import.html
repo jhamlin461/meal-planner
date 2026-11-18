@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Import{% endblock %}
+{% block head %}{% if busy %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block content %}
+<h1>Import recipes</h1>
+<form method="post" enctype="multipart/form-data" class="card">
+  <p><label>PDFs<br><input type="file" name="files" accept="application/pdf" multiple></label></p>
+  <p><label>Web pages, one link per line<br><textarea name="urls" rows="4"></textarea></label></p>
+  <button>Import</button>
+</form>
+{% if pending %}
+<h2>Waiting for review</h2>
+<ul class="rows">
+{% for p in pending %}<li class="row">
+  <span class="grow">{% if p.status == "ready" %}<a href="/import/{{ p.id }}">{{ p.draft.title }}</a>{% else %}{{ p.source }}{% endif %}
+    <br><small class="{{ 'error' if p.status == 'failed' else 'muted' }}">{% if p.status == "failed" %}failed: {{ p.error }}{% elif p.status == "processing" %}reading…{% else %}{{ p.source }}{% endif %}</small></span>
+  <form method="post" action="/import/{{ p.id }}/discard"><button class="secondary">Discard</button></form>
+</li>
+{% endfor %}</ul>
+{% endif %}
+{% endblock %}

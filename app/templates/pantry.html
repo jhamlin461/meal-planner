@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Pantry{% endblock %}
+{% block content %}
+<h1>Pantry</h1>
+{% if soon %}
+<h2>Use soon</h2>
+<ul class="rows">
+{% for s in soon %}<li class="row"><span class="grow">{{ s.name }}</span><span class="{{ 'warn' if s.kind == 'use soon' else 'error' }}">{{ s.kind }} {{ (s.date or '')[:10] }}</span></li>
+{% endfor %}</ul>
+{% endif %}
+{% for loc, rows in groups.items() %}
+<h2>{{ loc }}</h2>
+<ul class="rows">
+{% for r in rows %}<li>
+  <div class="row"><b class="grow">{{ r.name }}</b><span>{{ r.amount|num }} {{ r.unit }}</span>{% if r.bb != never %}<span class="muted">best before {{ r.bb }}</span>{% endif %}</div>
+  <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">
+    <input type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|num }}" inputmode="decimal" required aria-label="Amount used"> {{ r.unit }}
+    <button>Use</button>
+  </form>
+  <details><summary>Edit amount · Move</summary>
+    <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">
+      <label>Total <input type="number" name="amount" step="any" min="0" value="{{ totals[r.pid]|num }}" inputmode="decimal" required></label> {{ r.unit }}
+      <button class="secondary">Set</button>
+    </form>
+    <form class="inline" method="post" action="/pantry/{{ r.pid }}/move">
+      <input type="hidden" name="from_location" value="{{ r.loc }}"><input type="hidden" name="amount" value="{{ r.amount|num }}">
+      <select name="to_location" aria-label="Move to">{% for name, id in locations.items() %}<option value="{{ id }}"{% if id == r.loc %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+      <button class="secondary">Move</button>
+    </form>
+  </details>
+</li>
+{% endfor %}</ul>
+{% else %}
+<p class="muted">Nothing in stock yet. <a href="/scan">Scan something</a>.</p>
+{% endfor %}
+{% endblock %}
