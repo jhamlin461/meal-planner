@@ -15,6 +15,11 @@ class Pick:
     reason: str
 
 
+def user_recipes(grocy) -> list[dict]:
+    """The household's recipes; Grocy keeps its internal meal-plan day/week/shadow recipes in the same table."""
+    return [r for r in grocy.objects("recipes") if (r.get("type") or "normal") == "normal"]
+
+
 def _check_monday(monday: date) -> None:
     if monday.weekday() != 0:
         raise ValueError(f"{monday} is not a Monday")
@@ -46,7 +51,7 @@ def build_context(grocy, monday: date) -> dict:
     positions: dict[int, list[dict]] = {}
     for pos in grocy.objects("recipes_pos"):
         positions.setdefault(int(pos["recipe_id"]), []).append(pos)
-    recipes_by_id = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}
+    recipes_by_id = {int(r["id"]): r["name"] for r in user_recipes(grocy)}
     recipes = []
     for rid, name in recipes_by_id.items():
         ps = positions.get(rid, [])
@@ -71,7 +76,7 @@ def build_context(grocy, monday: date) -> dict:
 def suggest(grocy, ai, monday: date) -> list[Pick]:
     """Ask the AI, keep only first suggestion per open slot with a real recipe."""
     open_slots = set(week_slots(grocy, monday))
-    valid = {int(r["id"]) for r in grocy.objects("recipes")}
+    valid = {int(r["id"]) for r in user_recipes(grocy)}
     out, seen = [], set()
     for s in ai.suggest_week(build_context(grocy, monday)).items:
         try:

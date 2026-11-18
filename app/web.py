@@ -30,7 +30,7 @@ from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids
 from app.shopping import rebuild_meal_plan_list, walmart_items
-from app.suggest import suggest
+from app.suggest import suggest, user_recipes
 from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
@@ -272,8 +272,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     # ---- recipes ------------------------------------------------------------------------------------------------
     @app.get("/recipes")
     def recipes(request: Request):
-        rs = sorted((r for r in grocy.objects("recipes") if (r.get("type") or "normal") == "normal"),
-                    key=lambda r: r["name"].lower())  # Grocy keeps internal meal-plan recipes in the same table
+        rs = sorted(user_recipes(grocy), key=lambda r: r["name"].lower())
         waiting = sum(p.status != "processing" for p in store.all())
         return page(request, "recipes.html", recipes=rs, waiting=waiting)
 
@@ -439,8 +438,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                   error: str | None = None):
         recipes_all = grocy.objects("recipes")
         rnames = {int(r["id"]): r["name"] for r in recipes_all}
-        choices = sorted(((r["id"], r["name"]) for r in recipes_all if (r.get("type") or "normal") == "normal"),
-                         key=lambda t: t[1].lower())
+        choices = sorted(((r["id"], r["name"]) for r in user_recipes(grocy)), key=lambda t: t[1].lower())
 
         def entry(r: dict) -> dict:
             is_recipe = r.get("type") == "recipe"

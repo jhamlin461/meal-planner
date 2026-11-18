@@ -65,3 +65,12 @@ def test_build_context(fake_grocy_with_week):
     assert len(ctx["open_slots"]) == 9 and ctx["open_slots"][0] == [MON.isoformat(), "Dinner"]
     g.add_stock(10, 50, None, None)
     assert build_context(g, MON)["recipes"][0]["fulfillment"] == 1.0
+
+
+def test_grocy_internal_meal_plan_recipes_are_never_suggested(fake_grocy_with_week):
+    g = _empty(fake_grocy_with_week)
+    shadow = g.create("recipes", {"name": "2026-11-16#1", "type": "mealplan-shadow", "base_servings": 1})
+    g.create("recipes", {"name": "2026-11-16", "type": "mealplan-day", "base_servings": 1})
+    assert [r["id"] for r in build_context(g, MON)["recipes"]] == [1]
+    week = WeekSuggestions(items=[Suggestion(day=MON.isoformat(), section="Dinner", recipe_id=shadow, reason="x")])
+    assert suggest(g, FakeAI(week=week), MON) == []
