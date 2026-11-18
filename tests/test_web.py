@@ -172,8 +172,9 @@ def test_base_has_pwa_bits_and_nav(env):
 def test_recipe_page_has_cfe_table_and_wakelock(env):
     g, _, _, c, _ = env
     html = c.get(f"/recipes/{brownie_recipe(g)}").text
+    assert 'class="cfe-wrap"' in html
     assert 'rowspan="9"' in html and "data-wakelock" in html and "Preheat oven" in html
-    assert "macros incomplete" in html and "unsalted butter" in html and 'href="/recipes/' in html
+    assert "these figures run low" in html and "unsalted butter" in html and 'href="/recipes/' in html
 
 
 def test_recipe_servings_scales(env):
@@ -189,7 +190,7 @@ def test_recipe_macros_per_serving(env):
     rid = g.create("recipes", {"name": "Dough", "base_servings": 2, "description": "<ol><li>Knead</li></ol>"})
     g.create("recipes_pos", {"recipe_id": rid, "product_id": flour, "amount": 200, "qu_id": ids(g).unit["g"]})
     html = c.get(f"/recipes/{rid}").text
-    assert "364 kcal" in html and "macros incomplete" not in html
+    assert "364 kcal" in html and "these figures run low" not in html
     # no cfe_table userfield: fallback list + steps + edit link
     assert "200 g Flour" in html and "<li>Knead</li>" in html and f'href="/recipes/{rid}/table"' in html
     assert 'class="cfe"' not in html
@@ -226,6 +227,15 @@ def test_add_to_plan(env):
     assert r.status_code == 303 and r.headers["location"] == "/plan"
     [entry] = g.objects("meal_plan", type="recipe")
     assert entry["recipe_id"] == rid and entry["recipe_servings"] == 2  # Friday dinner default
+
+
+def test_plan_marks_today_and_links_recipe(env):
+    import datetime
+    g, _, _, c, _ = env
+    rid = g.create("recipes", {"name": "Chili", "base_servings": 2})
+    c.post(f"/recipes/{rid}/plan", data={"day": datetime.date.today().isoformat(), "section": "Dinner", "servings": ""})
+    html = c.get("/plan").text
+    assert "is-today" in html and f'href="/recipes/{rid}"' in html
 
 
 def test_scan_known_add_increments_stock(env):

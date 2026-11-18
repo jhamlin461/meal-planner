@@ -7,7 +7,7 @@
   <button class="shop-item" aria-pressed="{{ 'true' if r.done else 'false' }}">
     <span class="tick">{{ icon("check") }}</span>
     <span class="grow breakable"><span class="shop-name">{{ r.name }}</span>
-    {%- if r.pid %}<span class="muted">{{ r.amount|num }} {{ r.unit }}{% if r.packs %}, {{ r.packs }} × {{ r.pkg|num }} {{ r.unit }} pack{% endif %}</span>{% endif %}</span>
+    {%- if r.pid %}<span class="muted">Buy {{ r.amount|num }}{% if r.unit != "piece" %} {{ r.unit }}{% endif %}{% if r.packs %}, {{ r.packs }} × {{ r.pkg|num }} {{ r.unit }} pack{% endif %}</span>{% endif %}</span>
   </button>
 </form></li>
 {% else %}<li class="empty">{{ empty }}</li>

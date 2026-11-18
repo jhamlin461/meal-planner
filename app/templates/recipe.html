@@ -27,7 +27,7 @@
   <div><dt>Carbs</dt><dd>{{ macros.carbs|round|int }} g</dd></div>
   <div><dt>Fat</dt><dd>{{ macros.fat|round|int }} g</dd></div>
 </dl>
-{% if macros.missing %}<p class="warn">No nutrition yet for {{ macros.missing|join(", ") }}, so these figures run low (macros incomplete).</p>{% endif %}
+{% if macros.missing %}<p class="warn">No nutrition yet for {{ macros.missing|join(", ") }}, so these figures run low.</p>{% endif %}
 {% endif %}
 <h2>Add to plan</h2>
 <form class="card" method="post" action="/recipes/{{ r.id }}/plan">
