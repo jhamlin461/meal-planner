@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 from datetime import date, timedelta
@@ -62,19 +63,61 @@ def test_root_renders_today_in_shell(env):
     assert 'href="/" aria-current="page"' in r.text
 
 
-def test_shell_has_four_destinations(env):
+def _tabs(html):
+    nav = html[html.index('class="rail"'):html.index("</nav>")]
+    return re.findall(r'<li><a href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav)
+
+
+def _strip(html):
+    sub = html[html.index('class="subnav"'):]
+    return re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', sub[:sub.index("</ul>")])
+
+
+def test_tabs_are_today_meals_chores_me(env):
     html = env[3].get("/pantry").text
-    for href, label in [("/", "Today"), ("/plan", "Kitchen"), ("/home", "Home"), ("/scan", "Scan")]:
-        assert f'href="{href}"' in html and f"<span>{label}</span>" in html, label
+    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/home", "Chores"), ("/me", "Me")]
     assert 'href="/plan" aria-current="page"' in html
     assert env[3].get("/home").status_code == 200
 
 
-def test_kitchen_subnav_lists_kitchen_pages(env):
-    html = env[3].get("/plan").text
-    sub = html[html.index('class="subnav"'):]
-    for href in ["/plan", "/pantry", "/recipes", "/shopping"]:
-        assert f'href="{href}"' in sub, href
+def test_meals_strip_has_scan(env):
+    html = env[3].get("/scan").text
+    assert [(h, t) for h, _, t in _strip(html)] == [("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"),
+                                                    ("/shopping", "Shopping"), ("/scan", "Scan")]
+    assert 'href="/plan" aria-current="page"' in html
+    assert [t for h, a, t in _strip(html) if "aria-current" in a] == ["Scan"]
+
+
+def test_chores_strip_has_supplies_and_scan(env):
+    c = env[3]
+    for url in ["/home", "/home/supplies", "/scan?from=chores"]:
+        html = c.get(url).text
+        assert [(h, t) for h, _, t in _strip(html)] == [("/home", "Chores"), ("/home/supplies", "Supplies"),
+                                                        ("/scan?from=chores", "Scan")], url
+        assert 'href="/home" aria-current="page"' in html, url
+    assert "Supplies you keep at home will show here." in c.get("/home/supplies").text
+    html = c.get("/scan?from=chores").text
+    assert [t for h, a, t in _strip(html) if "aria-current" in a] == ["Scan"]
+
+
+def test_me_page_theme_and_device(env):
+    c = env[3]
+    c.cookies.set("who", "kitchen")
+    html = c.get("/me").text
+    assert 'href="/me" aria-current="page"' in html and 'href="/who"' in html and 'href="/home/people"' in html
+    assert re.search(r'value="dark"\s+checked', html) and not re.search(r'value="light"\s+checked', html)
+    r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/me"},
+               follow_redirects=False)
+    assert r.headers["location"] == "/me"
+    html = c.get("/me").text
+    assert 'data-theme="light"' in html and re.search(r'value="light"\s+checked', html)
+    assert 'href="/me" aria-current="page"' in c.get("/who").text
+    assert 'href="/me" aria-current="page"' in c.get("/home/people").text
+
+
+def test_no_footer_theme_button(env):
+    for url in ["/", "/pantry", "/home"]:
+        assert "theme-switch" not in env[3].get(url).text, url
 
 
 def test_theme_cookie_switches_to_light(env):
@@ -843,8 +886,8 @@ def test_delete_person(hv):
     assert house.people() == []
 
 
-def test_section_override_and_tight_home_match(hv):
+def test_who_and_people_live_in_me(hv):
     c = hv[3]
-    who = c.get("/who").text
-    assert "aria-current" not in who  # who.html sets section "" -> no active destination
-    assert 'href="/home" aria-current="page"' in c.get("/home/people").text
+    assert 'href="/me" aria-current="page"' in c.get("/who").text
+    people = c.get("/home/people").text
+    assert 'href="/me" aria-current="page"' in people and 'href="/home" aria-current' not in people

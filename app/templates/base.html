@@ -1,7 +1,8 @@
 {% from "_icon.html" import icon %}
 {%- set path = request.url.path -%}
-{%- set section = section|default("today" if path == "/" else "home" if path == "/home" or path.startswith("/home/") else "scan" if path.startswith("/scan") else "kitchen") -%}
-{%- set subnav = subnav|default([("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else []) -%}
+{%- set chores_scan = path.startswith("/scan") and request.query_params.get("from") == "chores" -%}
+{%- set section = section|default("today" if path == "/" else "me" if path in ("/me", "/who", "/home/people") else "home" if path == "/home" or path.startswith("/home/") or chores_scan else "kitchen") -%}
+{%- set subnav = subnav|default([("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping"), ("/scan", "Scan")] if section == "kitchen" else [("/home", "Chores"), ("/home/supplies", "Supplies"), ("/scan?from=chores", "Scan")] if section == "home" else []) -%}
 {%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
@@ -21,11 +22,11 @@
 <body{% if subnav %} class="has-subnav"{% endif %}>
 <nav class="rail" aria-label="Main">
 <ul>
-{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Kitchen", "silverware-fork-knife"), ("home", "/home", "Home", "home-outline"), ("scan", "/scan", "Scan", "barcode-scan")] %}
+{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
 {%- if section == key and subnav %}
 <ul class="subnav" aria-label="{{ label }}">
-{% for s_href, s_label in subnav %}<li><a href="{{ s_href }}"{% if path.startswith(s_href) %} aria-current="page"{% endif %}>{{ s_label }}</a></li>{% endfor %}
+{% for s_href, s_label in subnav %}<li><a href="{{ s_href }}"{% if (path + ("?from=chores" if chores_scan else "")).startswith(s_href) and (s_href != "/home" or path == "/home") %} aria-current="page"{% endif %}>{{ s_label }}</a></li>{% endfor %}
 </ul>
 {%- endif %}</li>
 {% endfor %}
@@ -33,9 +34,6 @@
 </nav>
 <main{% block main_attrs %}{% endblock %}>
 {% block content %}{% endblock %}
-<form class="theme-switch" method="post" action="/settings/theme">
-<button class="btn" name="theme" value="{{ 'dark' if theme == 'light' else 'light' }}">Use {{ 'dark' if theme == 'light' else 'light' }} theme</button>
-</form>
 </main>
 <div id="toast" role="status" hidden></div>
 {% block scripts %}{% endblock %}

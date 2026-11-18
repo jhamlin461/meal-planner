@@ -422,6 +422,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         house.delete_person(pid)  # the Grocy user stays: it may own history there
         return back("/home/people")
 
+    @app.get("/me")
+    def me(request: Request):
+        return page(request, "me.html", who=current_who(request))
+
+    @app.get("/home/supplies")
+    def supplies(request: Request):
+        return page(request, "supplies.html")
+
     @app.post("/settings/theme")
     def set_theme(request: Request, theme: Literal["dark", "light"] = Form()):
         """Per-device theme; back to the page it was switched on (same-site paths only)."""

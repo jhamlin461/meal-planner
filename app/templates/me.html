@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Me{% endblock %}
+{% block content %}
+<h1>Me</h1>
+<div class="card">
+  <p>{% if who == 'kitchen' %}This device is the kitchen screen.{% elif who %}This device is {{ who.name }}'s.{% else %}This device isn't set to anyone.{% endif %} <a href="/who">Change</a></p>
+</div>
+<form class="card" method="post" action="/settings/theme">
+  <div class="row" role="radiogroup" aria-label="Theme">
+    <b class="grow">Theme</b>
+    <label class="choice"><input type="radio" name="theme" value="dark"{% if theme == 'dark' %} checked{% endif %}> Dark</label>
+    <label class="choice"><input type="radio" name="theme" value="light"{% if theme == 'light' %} checked{% endif %}> Light</label>
+  </div>
+  <div class="card-actions"><button class="btn btn-primary">Save theme</button></div>
+</form>
+<p><a href="/home/people">People</a></p>
+{% endblock %}

@@ -71,8 +71,6 @@ summary { min-height: 48px; display: flex; align-items: center; cursor: pointer;
 .grow { flex: 1 1 8em; min-width: 0; }
 .choice { padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; }
 form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-.theme-switch { margin-top: 40px; }
-.theme-switch .btn { box-shadow: none; color: var(--muted); font-weight: 400; padding: 0 2px; }
 
 /* Navigation: bottom tab bar on phones, left rail from 900px. */
 .rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--rail);
