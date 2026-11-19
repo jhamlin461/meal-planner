@@ -335,9 +335,11 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 /* Import review: the source (the PDF, or the website and its photo) above the review, folded away; on wide screens
    it sits beside the review, each pane scrolling on its own, with Save always in view. */
 .review-source { margin: 0 0 12px; }
-.source-pdf iframe { display: block; width: 100%; height: 70vh; border: 0; border-radius: 14px; background: var(--rail); }
+/* Phones and tablets get only the new-tab link: Android doesn't show a PDF in a frame and iOS shows one page. */
+.source-pdf iframe { display: none; width: 100%; height: 70vh; border: 0; border-radius: 14px; background: var(--rail); }
 .source-pdf p { margin: 8px 2px 12px; }
 @media (min-width: 900px) {
+  .source-pdf iframe { display: block; }
   .review-main .form-actions { position: sticky; bottom: 0; z-index: 1; margin-bottom: 0; padding: 12px 0;
     background: var(--bg); box-shadow: 0 -1px 0 var(--line); }
 }

@@ -1512,6 +1512,10 @@ def test_review_has_two_panes_and_serves_the_pdf_source(env):
     r = c.get(f"/import/{pdf.id}/source")
     assert r.status_code == 200 and r.content == b"%PDF-1 soup"
     assert r.headers["content-type"] == "application/pdf" and r.headers["content-disposition"].startswith("inline")
+    css = c.get("/static/style.css").text  # the frame only from 900 px; phones and tablets get the new-tab link
+    assert ".source-pdf iframe { display: none;" in css
+    assert ".source-pdf iframe { display: block; }" in css[css.index("@media (min-width: 900px)"):]
+    assert re.search(rf'<a href="/import/{pdf.id}/source" target="_blank"', html)
     assert c.get(f"/import/{url.id}/source").status_code == 404  # a website has no file to show
     assert c.get("/import/..%2Fpending%2Fx/source").status_code == 404
     html = c.get(f"/import/{url.id}").text  # no PDF, no photo: one column, the website one click away
