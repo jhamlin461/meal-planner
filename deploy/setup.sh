@@ -27,6 +27,15 @@ ask() {
   done
   put "$key" "$v"
 }
+# washer KEY "what": the one entity ha_setup found is used; none or several = ask (blank = no laundry reminders)
+washer() {
+  local found n
+  found=$(grep "^$1=" <<<"$ha_out" | cut -d= -f2- || true)
+  n=$(grep -c . <<<"$found" || true)
+  if [[ $n == 1 ]]; then put "$1" "$found"; echo "$2: $found"; return; fi
+  [[ $n == 0 ]] || echo "  Found several: $(tr '\n' ' ' <<<"$found")"
+  ask "$1" "$2 (blank = no laundry reminders)"
+}
 ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "${1%/}/api/"; }
 grocy_ok() { curl -fsS -o /dev/null -H "GROCY-API-KEY: $1" "$GROCY/api/system/info"; }
 # prints the HTTP status Claude gives this key (200 = good, 401 = wrong key, 000 = no internet)
@@ -87,10 +96,24 @@ EOF
   put GROCY_API_KEY "$key"
 fi
 
-docker compose up -d --force-recreate mealplanner   # pick up the new .env
-docker compose run --rm mealplanner python -m app.setup_grocy
 if command -v tailscale >/dev/null; then
   tailscale serve --bg 8000 >/dev/null   # HTTPS on the tailnet; idempotent
   url=$(tailscale serve status 2>/dev/null | grep -o 'https://[^ ]*' | head -n1)
 fi
+
+# From inside the app container (proving it reaches HA): find the washer, add the House sidebar dashboard.
+echo "Setting up Home Assistant…"
+rc=0
+ha_out=$(docker compose run --rm -T -e APP_URL="${url:-}" mealplanner python -m app.ha_setup) || rc=$?
+ha_out=${ha_out//$'\r'/}
+grep -v '^WASHER_' <<<"$ha_out" | sed 's/^/  /' || true
+if (( rc == 0 )); then
+  washer WASHER_DONE_EVENT "Washer 'finished' event entity"
+  washer WASHER_STATUS "Washer status sensor"
+else
+  echo "  Home Assistant setup didn't finish; fix that and re-run setup.sh."
+fi
+
+docker compose up -d --force-recreate mealplanner   # pick up the new .env
+docker compose run --rm mealplanner python -m app.setup_grocy
 echo "Done. Open the app at ${url:-the https://….ts.net address from 'tailscale serve status'}"
