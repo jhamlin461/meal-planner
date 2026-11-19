@@ -88,9 +88,13 @@ tests (`tests/test_inventory.py`, move Pantry/Supplies tests in `tests/test_web.
 - `inventory.rows(grocy, settings, today: date) -> Inventory` where `Inventory` has `soon: list[dict]` (food only,
   today's Pantry "Use soon" logic moved here), `groups: dict[str, list[dict]]` (place name → rows, places in
   `places()` order, empty places omitted), `totals: dict[int, float]`. A row dict: `pid, loc, name, amount, unit,
-  kind ("food" | "supply"), when, past` and for supplies `min`. Rules (spec "Calls made" 2): food = one row per
-  product per place with stock > 0; supply = one row per generic with its total (brands included), under the place
-  holding most of its stock, else its default place, shown even at 0.
+  kind ("food" | "supply"), when, past` and for supplies `min`, `total` (all places) and `low`. Rules (pre-flight
+  ruling, replaces spec "Calls made" 2 for supplies): food = one row per product per place with stock > 0; supply =
+  one row per generic per place where it or any of its brands has stock (the row's amount is that place's share;
+  Running low uses the generic's overall total), and a supply with no stock anywhere shows once under its default
+  place at 0.
+- Supply rows' More: Move to (transfers each of the generic's products' stock in that place) and Keep at least; no
+  Set total (Used one, scanning and Clear stock cover supplies). Food rows' More: Set total and Move to as today.
 - `GET /inventory?place=<id>`: chips "All" + each place that has rows (`aria-current` on the active one, plain
   links so no JS is needed); the Scan title action; Use soon; groups. Food rows: Used [amount] Use (posts to the
   existing consume route). Supply rows: "Used one", running-low wording as today. Every row: a `More` disclosure with
@@ -126,9 +130,12 @@ a dialog element is fine: a `<form>` with `onsubmit="return confirm(...)"` match
   chores with `product_id == pid` and `consume_product_on_execution == 1` (sorted, unique).
 - `inventory.clear_stock(grocy, pid)`: stock to 0 across places (Grocy inventory to 0); the product stays.
 - `inventory.remove_product(grocy, pid)`: ValueError("Fudgy brownies and Change the litter use this. Change them
-  first, or use Clear stock.") when `users_of` is not empty (one name: "Fudgy brownies uses this."); a generic with
-  brand products left is refused ("Remove its brands first: A, B."); otherwise zero its stock, delete its
-  `product_barcodes` and `shopping_list` rows, then the product. A brand never checks its generic's users.
+  first, or use Clear stock.") when `users_of` is not empty (one name: "Fudgy brownies uses this."); otherwise zero
+  its stock, delete its `product_barcodes` and `shopping_list` rows, then the product. A brand never checks its
+  generic's users. A generic (supply rows are generics) is removed together with its brands: the users check covers
+  the generic and every brand, and each brand is removed the same way first (pre-flight ruling: the person sees one
+  item, so they must be able to remove it).
+- `inventory.clear_stock` on a generic zeroes the generic and every brand.
 - `POST /inventory/{pid}/clear`, `POST /inventory/{pid}/remove` → back to `/inventory` with `msg` ("Cleared Greek
   yogurt." / "Removed Greek yogurt."), or the refusal shown as the message (`role="alert"`, not a 5xx).
 - In the More disclosure: Clear stock (with the spec's one-line explanation) and Remove item (confirm text: "Remove
