@@ -12,11 +12,19 @@ CHORE_COLUMNS = {"id", "name", "description", "period_type", "period_days", "per
                  "row_created_timestamp"}
 
 
+# Real Grocy's recipes_pos columns (migrations 0045, 0068 variable_amount, 0087 price_factor, 0249 round_up).
+RECIPES_POS_COLUMNS = {"id", "recipe_id", "product_id", "amount", "note", "qu_id", "only_check_single_unit_in_stock",
+                       "ingredient_group", "not_check_stock_fulfillment", "variable_amount", "price_factor",
+                       "round_up", "row_created_timestamp"}
+COLUMNS = {"chores": CHORE_COLUMNS, "recipes_pos": RECIPES_POS_COLUMNS}
+
+
 def _columns(entity, data):
     from app.grocy import GrocyError
-    bad = set(data) - CHORE_COLUMNS if entity == "chores" else set()
+    bad = set(data) - COLUMNS[entity] if entity in COLUMNS else set()
     if bad:
-        raise GrocyError(f"chores has no column {sorted(bad)}", 400, f"table chores has no column named {min(bad)}")
+        raise GrocyError(f"{entity} has no column {sorted(bad)}", 400,
+                         f"table {entity} has no column named {min(bad)}")
 
 
 class FakeGrocy:

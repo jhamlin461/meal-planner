@@ -36,6 +36,7 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
                           estimate_amount, estimate_key, make_table, page_text, process, propose_matches, put_photo,
                           save_recipe, start_worker, submit_batch, to_jpeg)
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
+from app.qty import parse_qty
 from app.nutrition import recipe_macros
 from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
                            rename_place, rows, why_not_remove)
@@ -259,9 +260,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         out = []
         for p in positions:  # one waiting for an estimate shows the recipe's own amount; 0 alone is to taste
             qty, unit = float(p["amount"]) or None, units.get(_int(p.get("qu_id")), "")
-            if p.get("variable_amount"):
-                q, _, unit = p["variable_amount"].partition(" ")
-                qty = float(q)
+            q, _, u = str(p.get("variable_amount") or "").partition(" ")
+            if qty is None and parse_qty(q) is not None:  # a marker edited in Grocy may not parse: shown as to taste
+                qty, unit = parse_qty(q), u
             out.append(Ingredient(qty=qty, unit=unit, name=products.get(int(p["product_id"]), {}).get(
                 "name", f"product {p['product_id']}")))
         return out
@@ -935,6 +936,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def manual_details(m: dict) -> dict:
         """The review row's new-product fields (free mode), checked like the scan screen's."""
+        if not m["stock_unit"]:  # no default: Create all must not count every new product in grams
+            raise ValueError("Choose what it's counted in.")
         if m["stock_unit"] not in ("g", "ml", "piece") or m["location"] not in places(grocy) \
                 or m["category"] not in ("food", "supply"):
             raise ValueError("Pick how it's counted, where it's kept and what kind it is.")
@@ -1043,7 +1046,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     store.delete(pid)  # first: the recipe is saved even if a conversion below fails
                     for ing, r in zip(table.ingredients, rows):  # the estimates used become the products' conversions
                         if (factor := p.estimates.get(estimate_key(r["product_id"], ing.unit))) is not None:
-                            add_conversion(grocy, r["product_id"], ing.unit, factor)
+                            try:  # the recipe stands; a refused one is simply not kept
+                                add_conversion(grocy, r["product_id"], ing.unit, factor)
+                            except Exception:
+                                log.warning("could not store the estimate for product %s", r["product_id"],
+                                            exc_info=True)
                     return next_review("/recipes")
         return review_page(request, p, table, rows, errors)
 
@@ -1229,8 +1236,8 @@ def main_app() -> FastAPI:
     house = HouseStore(s.data_dir / "house.db")
     ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
     http, store = httpx.Client(timeout=20), PendingStore(s.data_dir / "pending")
-    start_worker(store, ai, http)  # collects batch reads (and, in free mode, reads queued imports after the 1st)
     grocy, ha = Grocy(s.grocy_url, s.grocy_api_key), HA(s.ha_url, s.ha_token) if s.ha_url else None
+    start_worker(store, ai, http, grocy)  # batch reads, queued imports after the 1st, amounts saved without one
     if ha is not None:
         ha_live.start(grocy, house, ha, s)  # phone taps and the washer, over HA's WebSocket
     return create_app(grocy, ai, http, s, store, house=house, ha=ha)

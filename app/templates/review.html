@@ -6,7 +6,7 @@
 {% block content %}
 {% if p.status != "ready" %}
 {% if p.status == "failed" %}<p class="card error" role="alert">Couldn't import this recipe: {{ p.error }}</p>{% elif p.status == "waiting" %}<p class="muted" role="status">Waiting for next month's AI budget — it will be read on {{ resume }}.</p>{% else %}<p class="muted" role="status">Still reading this recipe…</p>{% endif %}
-<form method="post" action="/import/{{ p.id }}/discard" onsubmit="return confirm('Discard this import?')"><input type="hidden" name="then" value="next"><button class="btn">Discard</button></form>
+<form method="post" action="/import/{{ p.id }}/discard" onsubmit="return confirm('Discard this import?')"><button class="btn">Discard</button></form>
 {% else %}
 {# Wide screens: the source on the left, the review on the right, each scrolling on its own (CSS). #}
 <div class="review-panes{{ ' two' if pdf or photo }}">
@@ -42,7 +42,7 @@
     <label class="field"><span>Counts as</span><input name="generic_{{ i }}" value="{{ m.generic or row.new_name }}" list="generic-names" autocomplete="off"></label>
     <p class="hint">Pick one you already have, or type a new one.</p>
     <div class="fields pairs">
-      <label class="field"><span>Counted in</span><select name="stock_unit_{{ i }}">{% for v, t in [("g", "Grams"), ("ml", "Millilitres"), ("piece", "Pieces")] %}<option value="{{ v }}"{% if m.stock_unit == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Counted in</span><select name="stock_unit_{{ i }}"><option value=""{% if not m.stock_unit %} selected{% endif %}>Choose…</option>{% for v, t in [("g", "Grams"), ("ml", "Millilitres"), ("piece", "Pieces")] %}<option value="{{ v }}"{% if m.stock_unit == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
       <label class="field"><span>Package size</span><input name="package_{{ i }}" value="{{ m.package }}" type="number" min="0" step="any" inputmode="decimal"></label>
       <label class="field"><span>Kept in</span><select name="location_{{ i }}">{% for l in locations %}<option{% if l == (m.location or default_location) %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
       <label class="field"><span>Kind</span><select name="category_{{ i }}">{% for v, t in [("food", "Food"), ("supply", "Household supply")] %}<option value="{{ v }}"{% if m.category == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>

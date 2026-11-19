@@ -517,3 +517,68 @@ def test_process_keeps_photo_and_save_puts_it_in_grocy(tmp_path):
     assert g.recipe_picture(name, 400)[0] == store.photo_path(p.id).read_bytes()
     store.delete(p.id)
     assert not (tmp_path / "pending" / f"{p.id}.jpg").exists()
+
+
+def saved_without_amounts(g):
+    """A recipe saved in free mode: flour waits for an estimate, salt is to taste, sauce is a packet."""
+    flour, salt, sauce = product(g, "Flour", "g"), product(g, "Salt", "g"), product(g, "Sauce", "g")
+    d = make_draft([(2, "cup", "flour"), (None, "", "salt"), (1, "packet", "sauce")])
+    rid = save_recipe(g, d, [IngredientMatch(0, flour, None), IngredientMatch(1, salt, None),
+                             IngredientMatch(2, sauce, None)], None, None)
+    return rid, flour, sauce
+
+
+def positions(g, rid):
+    return [(p["amount"], p.get("variable_amount") or "")
+            for p in sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])]
+
+
+def test_fill_estimates_once_claude_is_back():
+    from app.ai import ConversionGuess
+    from app.importer import fill_estimates
+    g = grocy()
+    rid, flour, sauce = saved_without_amounts(g)
+    assert positions(g, rid) == [(0, "2 cup"), (0, ""), (0, "1 packet")]
+    tried = {}
+    fill_estimates(g, FakeAI(mode="free"), tried, now=0)
+    assert positions(g, rid) == [(0, "2 cup"), (0, ""), (0, "1 packet")]  # free mode: nothing asked
+    calls = []
+    ai = FakeAI()
+    ai.guess_conversion = lambda *a: calls.append(a) or ConversionGuess(factor=125, explanation="")
+    fill_estimates(g, ai, tried, now=60)
+    assert positions(g, rid) == [(250, ""), (0, ""), (0, "1 packet")]  # salt to taste and the packet stay as they are
+    assert calls == [("Flour", "cup", "g")]
+    [conv] = g.objects("quantity_unit_conversions", product_id=flour)
+    assert (conv["from_qu_id"], conv["factor"]) == (ids(g).unit["cup"], 125)
+    assert not g.objects("quantity_unit_conversions", product_id=sauce)
+
+
+def test_fill_estimates_waits_a_day_after_a_failure():
+    from app.ai import ConversionGuess
+    from app.importer import FILL_RETRY, fill_estimates
+    g = grocy()
+    rid, _, _ = saved_without_amounts(g)
+    calls = []
+
+    def guess(*a):
+        calls.append(a)
+        if len(calls) == 1:
+            raise AIError("Claude didn't answer")
+        return ConversionGuess(factor=125, explanation="")
+    ai = FakeAI()
+    ai.guess_conversion = guess
+    tried = {}
+    fill_estimates(g, ai, tried, now=0)
+    fill_estimates(g, ai, tried, now=60)  # the next tick: not asked again
+    assert len(calls) == 1 and positions(g, rid)[0] == (0, "2 cup")
+    fill_estimates(g, ai, tried, now=FILL_RETRY + 1)
+    assert len(calls) == 2 and positions(g, rid)[0] == (250, "")
+
+
+def test_tick_fills_estimates(tmp_path):
+    from app.ai import ConversionGuess
+    from app.importer import tick
+    g = grocy()
+    rid, _, _ = saved_without_amounts(g)
+    tick(PendingStore(tmp_path), FakeAI(conversion=ConversionGuess(factor=125, explanation="")), None, g, {})
+    assert positions(g, rid)[0] == (250, "")

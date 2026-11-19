@@ -1724,3 +1724,60 @@ def test_save_and_discard_go_to_next_waiting(env):
         == "/recipes"
     gone = ready_import(store, soup_draft())
     assert c.post(f"/import/{gone}/discard", follow_redirects=False).headers["location"] == "/import"  # Import list
+    failed = store.new("https://example.com/broken")
+    store.save(failed.model_copy(update={"status": "failed", "error": "no recipe"}))
+    html = c.get(f"/import/{failed.id}").text
+    assert "Discard" in html and 'name="then"' not in html  # a failed import's Discard goes back to the list
+
+
+def test_recipe_page_reads_amount_markers_safely(env):
+    g, ai, store, c, _ = env
+    flour, salt, egg = product(g, "Flour"), product(g, "Salt"), product(g, "Egg", "piece")
+    t = CfeTable(pre=[], ops=[], ingredients=[Ingredient(qty=1, unit="cup", name="flour"),
+                                              Ingredient(qty=1, unit="pinch", name="salt"),
+                                              Ingredient(qty=2, unit="", name="egg")])
+    rid = save_recipe(g, RecipeDraft(title="Bread", servings=2, steps=["Mix"], table=t),
+                      [IngredientMatch(0, flour, None), IngredientMatch(1, salt, None), IngredientMatch(2, egg, 2)],
+                      None, None, need_table=False)
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    for p, mark in zip(pos, ("1/2 cup", "some", "3 cup")):  # hand-edited in Grocy; the egg has a real amount
+        g.update("recipes_pos", p["id"], {"variable_amount": mark})
+    r = c.get(f"/recipes/{rid}")
+    assert r.status_code == 200 and "1/2 cup Flour" in r.text and "2 Egg" in r.text
+    assert "3 cup" not in r.text and "0 g Salt" not in r.text and "some" not in r.text
+    assert c.get(f"/recipes/{rid}/table").status_code == 200
+
+
+def test_free_create_needs_what_it_is_counted_in(env):
+    g, ai, store, c, _ = env
+    pid = ready_import(store, soup_draft())
+    ai.mode_ = "free"
+    html = c.get(f"/import/{pid}").text
+    assert re.search(r'<select name="stock_unit_0"><option value="" selected>Choose…</option>', html)
+    form = {"new_name_0": "Flour", "generic_0": "Flour", "stock_unit_0": "g", "location_0": "Pantry",
+            "category_0": "food", "new_name_1": "Dragon egg", "generic_1": "Dragon egg", "stock_unit_1": "",
+            "location_1": "Pantry", "category_1": "food", "op_id": ["o1"], "op_label": ["mix"],
+            "op_in_0": ["i0", "i1"], "action": "create_all"}
+    html = c.post(f"/import/{pid}", data=form).text
+    assert [p["name"] for p in g.objects("products")] == ["Flour"]  # the egg wasn't guessed into grams
+    rows = html.split('<li class="review-row')
+    assert "Choose what it&#39;s counted in." in rows[2] and "Choose what it" not in rows[1]
+    html = c.post(f"/import/{pid}", data={**form, "action": "create:1"}).text
+    assert "Choose what it&#39;s counted in." in html and len(g.objects("products")) == 1
+
+
+def test_a_refused_conversion_still_saves_the_recipe(env):
+    g, ai, store, c, _ = env
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    real = g.create
+
+    def create(entity, data):
+        if entity == "quantity_unit_conversions":
+            raise GrocyError("POST -> 400", 400, "refused")
+        return real(entity, data)
+    g.create = create
+    pid = ready_import(store, soup_draft())
+    r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg), follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/recipes" and len(g.objects("recipes")) == 1
+    assert store.get(pid) is None and not g.objects("quantity_unit_conversions", product_id=flour)

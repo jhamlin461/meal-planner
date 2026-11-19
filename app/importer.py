@@ -453,9 +453,14 @@ def submit_batch(store: PendingStore, ai, pending: list[Pending]) -> bool:
     return True
 
 
-def tick(store: PendingStore, ai, http) -> None:
+def tick(store: PendingStore, ai, http, grocy=None, tried: dict[str, float] | None = None) -> None:
     """Background, every minute: collect finished batch reads into their pending imports, and once AI is back
-    (the 1st), read the imports that waited for it."""
+    (the 1st), read the imports that waited for it and fill in the amounts saved without one (given `grocy`)."""
+    if grocy is not None:
+        try:  # its own failure never stalls the imports
+            fill_estimates(grocy, ai, {} if tried is None else tried)
+        except Exception:
+            log.exception("could not fill in estimated amounts")
     batches: dict[str, list[str]] = {bid: [] for bid in ai.open_batches()}  # unmetered, even with no imports left
     waiting: list[Pending] = []
     for p in store.all():
@@ -493,12 +498,14 @@ def _collect(store: PendingStore, ai, bid: str, pids: list[str]) -> None:
         store.save(p)
 
 
-def start_worker(store: PendingStore, ai, http, interval: int = 60) -> threading.Thread:
+def start_worker(store: PendingStore, ai, http, grocy=None, interval: int = 60) -> threading.Thread:
     """Daemon thread running tick() every `interval` seconds; failures are logged and it goes on."""
+    tried: dict[str, float] = {}  # failed estimates, kept for this run of the app
+
     def run():
         while True:
             try:
-                tick(store, ai, http)
+                tick(store, ai, http, grocy, tried)
             except Exception:
                 log.exception("import tick failed")
             time.sleep(interval)
@@ -636,6 +643,39 @@ def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> Non
     else:
         grocy.create("quantity_unit_conversions",
                      {"from_qu_id": qu, "to_qu_id": to, "factor": factor, "product_id": product_id})
+
+
+FILL_RETRY = 24 * 3600  # seconds before an estimate Claude couldn't give is asked again
+
+
+def fill_estimates(grocy, ai, tried: dict[str, float], now: float | None = None) -> None:
+    """Positions saved without a stock amount (amount 0, `variable_amount` "<qty> <unit>": see needs_estimate) get
+    one once Claude is available: the amount is written, the marker cleared and the estimate stored as the product's
+    conversion. `tried` remembers failures ("{product_id}:{unit}" -> when) so one isn't paid for again for a day."""
+    if ai.mode() == "free":
+        return
+    now = time.monotonic() if now is None else now
+    cache = Pending(id="0" * 32, status="ready", source="")  # one ask per product and unit in this run
+    for pos in grocy.objects("recipes_pos"):
+        q, _, unit = str(pos.get("variable_amount") or "").partition(" ")
+        qty = parse_qty(q)
+        if float(pos.get("amount") or 0) or qty is None or is_packaging(unit):
+            continue  # has an amount, to taste, or not ours; packets get a measured amount from Task 2's import
+        pid = int(pos["product_id"])
+        key = estimate_key(pid, unit)
+        if key in tried and now - tried[key] < FILL_RETRY:
+            continue
+        try:
+            amount = estimate_amount(grocy, ai, cache, pid, qty, unit)
+            if amount is None:
+                tried[key] = now
+                continue
+            if key in cache.estimates:
+                add_conversion(grocy, pid, unit, cache.estimates.pop(key))  # the next row of it is then known
+            grocy.update("recipes_pos", int(pos["id"]), {"amount": amount, "variable_amount": ""})
+        except Exception:
+            log.warning("could not fill in the amount of recipe position %s", pos.get("id"), exc_info=True)
+            tried[key] = now
 
 
 def needs_estimate(ing: Ingredient) -> dict:
