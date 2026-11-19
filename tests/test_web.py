@@ -1389,7 +1389,7 @@ def test_photo_upload_validates_and_serves(env):
     name = g.get_object("recipes", rid)["picture_file_name"]
     r = c.get(f"/recipes/{rid}/photo?w=5000")
     assert r.status_code == 200 and r.content[:2] == b"\xff\xd8" and "max-age=86400" in r.headers["cache-control"]
-    assert r.headers["content-type"] == "image/jpeg"
+    assert r.headers["content-type"] == "image/jpeg" and r.headers["x-content-type-options"] == "nosniff"
     html = c.get(f"/recipes/{rid}").text
     assert "Change photo" in html and name in c.get("/recipes").text  # the name busts caches when it changes
     assert c.get("/recipes/999/photo").status_code == 404

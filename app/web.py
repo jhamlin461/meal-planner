@@ -771,7 +771,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             got = None
         if got is None:
             raise HTTPException(404, "No photo")
-        return Response(got[0], media_type=got[1], headers={"Cache-Control": "max-age=86400"})
+        return Response(got[0], media_type=got[1], headers={"Cache-Control": "max-age=86400",
+                                                                "X-Content-Type-Options": "nosniff"})
 
     @app.post("/recipes/{rid}/photo")
     def recipe_photo_post(request: Request, rid: int, photo: UploadFile = File()):
