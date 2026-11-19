@@ -884,9 +884,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         p = pending_or_404(pid)
         if p.status != "ready":
             return page(request, "review.html", p=p, resume=_resume_day())
+        known = dict(p.ai_picks)
+        matches = propose_matches(grocy, ai, p.draft, p.ai_picks)
+        if p.ai_picks != known:
+            store.save(p)  # Claude's picks kept: reloading this page costs nothing
         rows = [{"product_id": m.product_id, "amount": m.stock_amount, "prev": m.product_id, "factor": "",
                  "new_name": ing.name, "error": None, "note": None}
-                for m, ing in zip(propose_matches(grocy, ai, p.draft), p.draft.table.ingredients)]
+                for m, ing in zip(matches, p.draft.table.ingredients)]
         return review_page(request, p, p.draft.table, rows, [])
 
     @app.get("/import/{pid}/photo")

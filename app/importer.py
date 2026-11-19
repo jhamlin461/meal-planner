@@ -277,6 +277,7 @@ class Pending(BaseModel):
     error: str | None = None
     batch_id: str | None = None
     tableless: bool = False  # read without Claude from the page's JSON-LD: may be saved without a table
+    ai_picks: dict[str, int | None] = {}  # Claude's product per ingredient name, so a reload doesn't ask again
 
 
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -541,8 +542,10 @@ def _stock_amount(product: dict, qty: float | None, unit: str, convs: list[dict]
     return to_stock_amount(qty, _unit(unit), stock, pairs)
 
 
-def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
-    """Exact-ish name matches against generic products first, Claude for the rest; one match per ingredient."""
+def propose_matches(grocy, ai, draft: RecipeDraft, asked: dict[str, int | None] | None = None) -> list[IngredientMatch]:
+    """Exact-ish name matches against generic products first, Claude for the rest; one match per ingredient.
+    `asked` remembers Claude's answers by ingredient name (filled in here): a name in it isn't asked again."""
+    asked = {} if asked is None else asked
     generics = {int(p["id"]): p for p in _generics(grocy)}
     by_name = {p["name"].lower(): pid for pid, p in generics.items()}
     ings = draft.table.ingredients
@@ -552,6 +555,9 @@ def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
         hit = get_close_matches(ing.name.lower(), list(by_name), n=1, cutoff=0.85)
         if hit:
             picks[i] = by_name[hit[0]]
+        elif ing.name in asked:
+            if asked[ing.name] in generics:  # still there
+                picks[i] = asked[ing.name]
         else:
             rest.append(i)
     if rest and generics:
@@ -561,6 +567,7 @@ def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
             for pk in res.items:
                 if 0 <= pk.index < len(rest) and pk.product_id in generics:  # Claude can invent ids
                     picks.setdefault(rest[pk.index], pk.product_id)
+            asked.update((ings[i].name, picks.get(i)) for i in rest)
         except AIPaused:
             for i in rest:
                 if (pid := plain_match(ings[i].name, generics)) is not None:

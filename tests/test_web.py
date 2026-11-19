@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.ai import ConversionGuess, Picks, ProductGuess, RecipeDraft
+from app.ai import ConversionGuess, IngredientPick, Picks, ProductGuess, RecipeDraft
 from app.cfe import CfeTable, Ingredient, Op
 from app.config import Settings
 from app.grocy import GrocyError
@@ -1521,6 +1521,25 @@ def test_review_has_two_panes_and_serves_the_pdf_source(env):
     html = c.get(f"/import/{url.id}").text  # no PDF, no photo: one column, the website one click away
     assert 'class="review-panes"' in html and "<iframe" not in html
     assert re.search(r'<a class="btn"[^>]*href="https://example.com/soup"[^>]*target="_blank"', html)
+
+
+def test_review_asks_claude_for_matches_once(env):
+    g, ai, store, c, _ = env
+    egg = product(g, "Egg", "piece")  # "dragon egg" is no close name match: Claude picks it
+    ai.picks = Picks(items=[IngredientPick(index=1, product_id=egg)])
+    asked = []
+    real = ai.match_ingredients
+    ai.match_ingredients = lambda names, products: asked.append(names) or real(names, products)
+    p = store.new("https://example.com/soup")
+    store.save(p.model_copy(update={"status": "ready", "draft": soup_draft()}))
+    first, again = c.get(f"/import/{p.id}").text, c.get(f"/import/{p.id}").text
+    assert asked == [["flour", "dragon egg"]]  # a reload costs nothing
+    assert again == first and re.search(rf'<option value="{egg}" selected', again)
+    d = soup_draft()  # re-read with another ingredient: only the new name goes to Claude
+    d.table.ingredients.append(Ingredient(qty=1, unit="", name="unicorn dust"))
+    store.save(store.get(p.id).model_copy(update={"draft": d}))
+    c.get(f"/import/{p.id}")
+    assert asked[1:] == [["unicorn dust"]]
 
 
 def test_import_page_has_a_drop_zone_for_pdfs(env):
