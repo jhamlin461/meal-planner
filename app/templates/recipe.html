@@ -6,6 +6,7 @@
 {%- if r.picture_file_name %}<button class="recipe-thumb" type="button" popovertarget="photo-full" aria-label="Show the photo larger"><img src="/recipes/{{ r.id }}/photo?w=200&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" width="64" height="64"></button>{% endif -%}
 <h1 class="breakable">{{ r.name }}</h1></div>{% endblock %}
 {% block content %}
+{% if error %}<p class="card error" role="alert">{{ error }}</p>{% endif %}
 {% if r.picture_file_name %}<div id="photo-full" popover class="photo-full">
   <img src="/recipes/{{ r.id }}/photo?w=1600&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" loading="lazy">
   <button class="btn" type="button" popovertarget="photo-full" popovertargetaction="hide">Close</button>

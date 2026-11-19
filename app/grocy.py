@@ -72,14 +72,17 @@ class Grocy:
     def put_recipe_picture(self, filename: str, data: bytes) -> None:
         self._req("PUT", self._picture(filename), content=data, headers={"Content-Type": "application/octet-stream"})
 
-    def recipe_picture(self, filename: str, width: int) -> bytes | None:
-        """The picture scaled to fit `width`, or None when Grocy has no such file."""
+    def recipe_picture(self, filename: str, width: int) -> tuple[bytes, str] | None:
+        """(bytes, content type) of the picture scaled to fit `width`, or None when Grocy has no such file."""
         r = self._http.get(self._picture(filename), params={"force_serve_as": "picture", "best_fit_width": width})
         if r.status_code == 404:
             return None
         if not r.is_success:
             raise GrocyError(f"GET recipe picture -> {r.status_code}")
-        return r.content
+        return r.content, r.headers.get("content-type", "image/jpeg")
+
+    def delete_recipe_picture(self, filename: str) -> None:
+        self._req("DELETE", self._picture(filename))
 
     def product_by_barcode(self, code: str) -> dict | None:
         return self._req("GET", f"/stock/products/by-barcode/{code}", ok_400=True)

@@ -469,6 +469,6 @@ def test_process_keeps_photo_and_save_puts_it_in_grocy(tmp_path):
                       photo=store.photo_path(p.id))
     name = g.get_object("recipes", rid)["picture_file_name"]
     assert re.fullmatch(rf"recipe-{rid}-[0-9a-f]+\.jpg", name)
-    assert g.recipe_picture(name, 400) == store.photo_path(p.id).read_bytes()
+    assert g.recipe_picture(name, 400)[0] == store.photo_path(p.id).read_bytes()
     store.delete(p.id)
     assert not (tmp_path / "pending" / f"{p.id}.jpg").exists()

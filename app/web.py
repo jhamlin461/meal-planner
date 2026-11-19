@@ -701,6 +701,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/recipes/{rid}")
     def recipe(request: Request, rid: int, servings: int | None = None):
+        return recipe_page(request, rid, servings)
+
+    def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
+                    status_code: int = 200):
         r = recipe_or_404(rid)
         base = float(r.get("base_servings") or 2)
         servings = max(1, servings or round(base))
@@ -712,30 +716,36 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 for pid in {int(p["product_id"]) for p in positions} if pid in products}
         cfe = _cfe(load_table(uf), scale)
         fallback = [] if cfe else [ingredient_text(i, scale) for i in position_ingredients(positions, products)]
-        return page(request, "recipe.html", r=r, servings=servings, cfe=cfe, fallback=fallback,
+        return page(request, "recipe.html", status_code, r=r, servings=servings, cfe=cfe, fallback=fallback,
+                    error=error,
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat())
 
     @app.get("/recipes/{rid}/photo")
     def recipe_photo(rid: int, w: int = 800):
         name = recipe_or_404(rid).get("picture_file_name")
-        data = grocy.recipe_picture(name, min(max(w, 200), 1600)) if name else None
-        if data is None:
+        try:
+            got = grocy.recipe_picture(name, min(max(w, 200), 1600)) if name else None
+        except GrocyError as e:  # a missing or unreadable file: the page shows no photo rather than Grocy's error
+            log.warning("recipe %s picture: %s", rid, e)
+            got = None
+        if got is None:
             raise HTTPException(404, "No photo")
-        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+        return Response(got[0], media_type=got[1], headers={"Cache-Control": "max-age=86400"})
 
     @app.post("/recipes/{rid}/photo")
-    def recipe_photo_post(rid: int, photo: UploadFile = File()):
+    def recipe_photo_post(request: Request, rid: int, photo: UploadFile = File()):
         recipe_or_404(rid)
+        not_photo = lambda: recipe_page(request, rid, error="That file isn't a photo.", status_code=400)  # noqa: E731
         if not (photo.content_type or "").startswith("image/"):
-            raise HTTPException(400, "That file isn't a photo")
+            return not_photo()
         data = photo.file.read(UPLOAD_MAX + 1)
         if len(data) > UPLOAD_MAX:
-            raise HTTPException(413, "That photo is over 10 MB")
+            return recipe_page(request, rid, error="That photo is bigger than 10 MB.", status_code=413)
         try:
             jpeg = to_jpeg(data)
         except Exception:
-            raise HTTPException(400, "That file isn't a photo")
+            return not_photo()
         put_photo(grocy, rid, jpeg)
         return back(f"/recipes/{rid}")
 

@@ -25,7 +25,10 @@ class FakeGrocy:
         self.pictures[filename] = data
 
     def recipe_picture(self, filename, width):
-        return self.pictures.get(filename)
+        return (self.pictures[filename], "image/jpeg") if filename in self.pictures else None
+
+    def delete_recipe_picture(self, filename):
+        self.pictures.pop(filename, None)
 
     def users(self):
         return [dict(u) for u in self.user_rows]

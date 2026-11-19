@@ -400,13 +400,20 @@ def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> Non
 
 
 def put_photo(grocy, rid: int, jpeg: bytes) -> None:
-    """Store a JPEG as the recipe's Grocy picture, under a fresh name each time so cached copies never go stale."""
+    """Store a JPEG as the recipe's Grocy picture, under a fresh name each time so cached copies never go stale;
+    the picture it replaces is then deleted (best effort: a leftover file harms nothing)."""
     while True:
         name = f"recipe-{rid}-{secrets.token_hex(4)}.jpg"
         if "/" not in base64.b64encode(name.encode()).decode():  # Grocy's URLs carry the name in base64
             break
+    old = (grocy.get_object("recipes", rid) or {}).get("picture_file_name")
     grocy.put_recipe_picture(name, jpeg)
-    grocy.update("recipes", rid, {"picture_file_name": name})  # ponytail: a replaced picture's file stays in Grocy
+    grocy.update("recipes", rid, {"picture_file_name": name})
+    if old:
+        try:
+            grocy.delete_recipe_picture(old)
+        except Exception:
+            log.warning("could not delete old picture %s", old, exc_info=True)
 
 
 def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], source_url: str | None,

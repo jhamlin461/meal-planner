@@ -1375,12 +1375,14 @@ def test_photo_upload_validates_and_serves(env):
     rid = brownie_recipe(g)
     assert c.get(f"/recipes/{rid}/photo").status_code == 404  # no picture yet
     assert "Add a photo" in c.get(f"/recipes/{rid}").text
+    alert = lambda html: re.findall(r'<p class="card error" role="alert">([^<]*)</p>', html)  # noqa: E731
     r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.txt", b"hello", "text/plain")})
-    assert r.status_code == 400
+    assert r.status_code == 400 and alert(r.text) == ["That file isn&#39;t a photo."] and 'class="cfe-wrap"' in r.text
     r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", b"not really", "image/png")})
-    assert r.status_code == 400  # says image, isn't one
+    assert r.status_code == 400 and alert(r.text) == ["That file isn&#39;t a photo."]  # says image, isn't one
     r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.jpg", b"x" * (10 * 1024 * 1024 + 1), "image/jpeg")})
-    assert r.status_code == 413
+    assert r.status_code == 413 and alert(r.text) == ["That photo is bigger than 10 MB."]
+    assert alert(c.get(f"/recipes/{rid}").text) == []
     assert g.get_object("recipes", rid).get("picture_file_name") is None
     r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", _png(), "image/png")}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == f"/recipes/{rid}"
@@ -1391,6 +1393,22 @@ def test_photo_upload_validates_and_serves(env):
     html = c.get(f"/recipes/{rid}").text
     assert "Change photo" in html and name in c.get("/recipes").text  # the name busts caches when it changes
     assert c.get("/recipes/999/photo").status_code == 404
+    c.post(f"/recipes/{rid}/photo", files={"photo": ("b.png", _png(400, 300), "image/png")})  # replace it
+    new = g.get_object("recipes", rid)["picture_file_name"]
+    assert new != name and list(g.pictures) == [new]  # the old file is gone from Grocy
+
+
+def test_photo_route_passes_grocy_through(env):
+    g, _, _, c, _ = env
+    rid = g.create("recipes", {"name": "Chili", "base_servings": 2, "picture_file_name": "chili.webp"})
+    g.recipe_picture = lambda name, w: (b"RIFF", "image/webp")
+    r = c.get(f"/recipes/{rid}/photo")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
+
+    def broken(name, w):
+        raise GrocyError("GET recipe picture -> 500")
+    g.recipe_picture = broken
+    assert c.get(f"/recipes/{rid}/photo").status_code == 404
 
 
 def test_recipes_list_shows_photo_cards(env):
