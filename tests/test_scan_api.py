@@ -134,15 +134,16 @@ def test_undo_reverses_add(env):
     pid = milk(g)
     g.add_stock(pid, 10, None, None)
     tid = confirm(c, pid, action="add", packs=2).json()["transaction_id"]
-    assert c.post("/api/scan/undo", json={"transaction_id": tid}).json() == {"status": "ok"}
+    assert c.post("/api/scan/undo", json={"transaction_id": tid, "action": "add"}).json() == {"status": "ok"}
     assert g.stock_amounts()[pid] == 10
-    assert c.post("/api/scan/undo", json={"transaction_id": tid}).json()["status"] == "error"  # only once
+    assert c.post("/api/scan/undo", json={"transaction_id": tid, "action": "add"}).json()["status"] == "error"  # only once
     tid = confirm(c, pid, action="use").json()["transaction_id"]  # a use is put back
     assert g.stock_amounts().get(pid, 0) == 0
-    assert c.post("/api/scan/undo", json={"transaction_id": tid}).json() == {"status": "ok"}
+    assert c.post("/api/scan/undo", json={"transaction_id": tid, "action": "use"}).json() == {"status": "ok"}
     assert g.stock_amounts()[pid] == 10
     assert g.userfields("products", pid)["package_amount"] == 946  # only the booking is undone
-    assert c.post("/api/scan/undo", json={"transaction_id": "../objects/products"}).status_code == 422
+    assert c.post("/api/scan/undo", json={"transaction_id": "../objects/products", "action": "add"}).status_code == 422
+    assert c.post("/api/scan/undo", json={"transaction_id": tid, "action": "eat"}).status_code == 422
 
 
 def test_undo_after_use_reports_already_used(env):
@@ -150,9 +151,13 @@ def test_undo_after_use_reports_already_used(env):
     pid = milk(g)
     tid = confirm(c, pid, action="add").json()["transaction_id"]
     confirm(c, pid, action="use", amount=100)
-    r = c.post("/api/scan/undo", json={"transaction_id": tid}).json()
+    r = c.post("/api/scan/undo", json={"transaction_id": tid, "action": "add"}).json()
     assert r == {"status": "error", "message": "Can't undo: already used."}
     assert g.stock_amounts()[pid] == 846
+    uid = confirm(c, pid, action="use", amount=100).json()["transaction_id"]
+    g.bookings[uid] = ("undone", [])  # Grocy now refuses it
+    r = c.post("/api/scan/undo", json={"transaction_id": uid, "action": "use"}).json()
+    assert r == {"status": "error", "message": "Can't undo that one."}
 
 
 def test_lookup_new_supply_flags_need_min(env):

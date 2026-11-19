@@ -141,9 +141,17 @@ def rows(grocy, settings, today: date) -> Inventory:
     return Inventory(soon, groups, totals)
 
 
+def _brands(grocy, pid: int) -> list[dict]:
+    return [p for p in grocy.objects("products") if _int(p.get("parent_product_id")) == pid]
+
+
 def _family(grocy, pid: int) -> list[int]:
-    """The brands of a generic, then the product itself (brands go first when removing)."""
-    return [int(p["id"]) for p in grocy.objects("products") if _int(p.get("parent_product_id")) == pid] + [pid]
+    """What Clear stock and Remove act on. A supply generic hides its brands, so they go with it (brands first);
+    a food generic's brands are rows of their own, so food is just the product."""
+    group, p = supplies_group(grocy), grocy.get_object("products", pid)
+    if group is None or str(p.get("product_group_id")) != str(group):
+        return [pid]
+    return [int(b["id"]) for b in _brands(grocy, pid)] + [pid]
 
 
 def users_of(grocy, pid: int) -> list[str]:
@@ -161,14 +169,21 @@ def _zero(grocy, pid: int) -> None:
 
 
 def clear_stock(grocy, pid: int) -> None:
-    """Stock to 0 in every place, for a generic its brands' too; the product stays."""
+    """Stock to 0 in every place, for a supply generic its brands' too; the product stays."""
     for k in _family(grocy, pid):
         _zero(grocy, k)
 
 
 def why_not_remove(grocy, pid: int) -> str:
-    """The reason a product can't be removed (a recipe or chore uses it, or one of its brands), or ""."""
-    used = list(dict.fromkeys(n for k in _family(grocy, pid) for n in users_of(grocy, k)))
+    """The reason a product can't be removed (a food generic still has brands, or a recipe or chore uses it or,
+    for a supply, one of its brands), or ""."""
+    family = _family(grocy, pid)
+    brands = [b["name"] for b in _brands(grocy, pid)] if family == [pid] else []  # food generics only
+    if brands:
+        if len(brands) == 1:
+            return f"{brands[0]} counts as this. Remove it first."
+        return f"{', '.join(brands[:-1])} and {brands[-1]} count as this. Remove them first."
+    used = list(dict.fromkeys(n for k in family for n in users_of(grocy, k)))
     if not used:
         return ""
     if len(used) == 1:
@@ -189,7 +204,9 @@ def remove_product(grocy, pid: int) -> None:
         try:
             grocy.delete("products", k)
         except GrocyError as e:
-            first = f" Removed {', '.join(done[:-1])} and {done[-1]} first." if len(done) > 1 else                 f" Removed {done[0]} first." if done else ""
+            first = ""
+            if done:
+                first = f" Removed {', '.join(done[:-1])} and {done[-1]} first." if len(done) > 1 else f" Removed {done[0]} first."
             raise ValueError(f"Grocy wouldn't remove {name}: {e.reason or e}.{first}") from e
         done.append(name)
         for entity in ("product_barcodes", "shopping_list"):

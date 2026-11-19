@@ -157,6 +157,7 @@ def test_scan_page_has_sheet_stepper_trip_and_close(env):
     assert re.search(r'<input id="packs" name="packs" type="number" min="1" step="1"', found)
     assert 'name="place"' in found and 'name="amount"' in found and "Keep at least" in found
     assert 'id="found-change"' in found and ">Change<" in found and ">Cancel<" in found
+    assert 'id="found-left"' in found and "${qty(left, d.unit)} left" in env[3].get("/static/app.js").text
     assert 'id="found-error" role="alert"' in found
     unknown = _section(sheet, 'data-state="unknown"', "</section>")
     assert "Take a photo of the package" in unknown and "Fill in the details" in unknown
@@ -1611,4 +1612,5 @@ def test_black_theme_css_covers_every_surface_and_inks_on_action(env):
         assert sel in outline, sel
     for sel in (".rail-settings[aria-current]", ".settings-btn[aria-current]", ".rail > ul > li > a[aria-current]"):
         assert f"{sel}" in css[css.index("The current tab"):], sel
+    assert ") a.settings-btn[aria-current][aria-current] { border-radius: 24px; }" in css  # outranks the :is() rule
     assert "color: #fff" not in css  # ink on an action fill comes from --on-action

@@ -525,7 +525,7 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 /* The current tab, rail item and Settings button are marked with an action-coloured outline, since a fill is invisible. */
 :is([data-theme="black"], [data-theme="auto"]) :is(.rail > ul > li > a[aria-current], .rail-settings[aria-current],
     .settings-btn[aria-current]) { outline: var(--edge) solid var(--action); outline-offset: -2px; border-radius: 10px; }
-:is([data-theme="black"], [data-theme="auto"]) .settings-btn[aria-current] { border-radius: 24px; }
+:is([data-theme="black"], [data-theme="auto"]) a.settings-btn[aria-current][aria-current] { border-radius: 24px; }  /* doubled to outrank the :is() rule above */
 .rail { border-top: var(--edge) solid var(--line); }
 @media (min-width: 900px) { .rail { border-top: 0; border-right: var(--edge) solid var(--line); } }
 .settings-theme .segmented { flex-basis: 26em; }

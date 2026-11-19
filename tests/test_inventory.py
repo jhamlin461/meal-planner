@@ -407,3 +407,52 @@ def test_remove_grocy_refusal_keeps_barcodes_and_list_rows(env):
     assert {x["product_id"] for x in g.objects("product_barcodes")} == {b, bags}
     assert {x["product_id"] for x in g.objects("shopping_list")} == {b, bags}
     assert g.get_object("products", b) and g.get_object("products", bags) and not g.get_object("products", a)
+
+
+def test_food_generic_clear_and_remove_leave_its_brands(env):
+    g, c = env
+    milk = food(g, "Milk", "Fridge", 1000, unit="ml")
+    kirk = food(g, "Kirkland milk", "Fridge", 2000, unit="ml")
+    g.update("products", kirk, {"parent_product_id": milk})
+    g.create("product_barcodes", {"product_id": kirk, "barcode": "k1"})
+    c.post(f"/inventory/{milk}/clear")
+    own = {pid: sum(float(e["amount"]) for e in g.stock_entries() if int(e["product_id"]) == pid) for pid in (milk, kirk)}
+    assert own == {milk: 0, kirk: 2000}  # stock_amounts() rolls brands up into the generic
+    page = c.get(f"/inventory/{milk}/remove").text
+    assert "Kirkland milk counts as this. Remove it first." in page and f'action="/inventory/{milk}/remove"' not in page
+    r = c.post(f"/inventory/{milk}/remove", follow_redirects=True)
+    assert "Kirkland milk counts as this. Remove it first." in r.text and 'role="alert"' in r.text
+    assert g.get_object("products", milk) and g.get_object("products", kirk) and g.objects("product_barcodes")
+    two = food(g, "Oat milk", "Fridge", 5, unit="ml")
+    g.update("products", two, {"parent_product_id": milk})
+    assert "Kirkland milk and Oat milk count as this. Remove them first." in c.get(f"/inventory/{milk}/remove").text
+    c.post(f"/inventory/{kirk}/remove")
+    c.post(f"/inventory/{two}/remove")
+    c.post(f"/inventory/{milk}/remove")
+    assert g.get_object("products", milk) is None
+
+
+def test_places_page_hides_remove_with_one_place_left(env):
+    g, c = env
+    assert c.get("/inventory/places").text.count('/remove"') == len(places(g))
+    keep = add_place(g, "Basement")
+    for name, pid in list(places(g).items()):
+        if pid != keep:
+            remove_place(g, pid, keep)
+    html = c.get("/inventory/places").text
+    assert "/remove" not in html and "Keep at least one place." in html and "Basement" in html
+
+
+def test_move_to_a_place_that_is_gone_goes_back_with_an_error(env):
+    g, c = env
+    p = places(g)
+    jam = food(g, "Jam", "Pantry", 3)
+    bags = supply(g, "Trash bags", "Garage", 2)
+    for url, pid, extra in ((f"/pantry/{jam}/move", jam, {"amount": 1, "from_location": p["Pantry"]}),
+                            (f"/home/supplies/{bags}/move", bags, {"from_location": p["Garage"]})):
+        r = c.post(url, data={"to_location": 9999, **extra}, follow_redirects=False)
+        assert r.headers["location"] == "/inventory?err=That+place+no+longer+exists.", url
+    assert g.stock_amounts()[jam] == 3 and g.stock_amounts()[bags] == 2
+    r = c.post(f"/pantry/{jam}/move", data={"to_location": p["Fridge"], "amount": 1, "from_location": p["Pantry"]},
+               follow_redirects=False)
+    assert r.headers["location"] == "/inventory"

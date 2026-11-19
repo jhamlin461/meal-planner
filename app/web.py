@@ -535,6 +535,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             rebuild_running_low(grocy)
         return inventory_back(place, f"Used one {p['name']}." if use > 0 else f"No {p['name']} left to use.")
 
+    GONE = "That place no longer exists."
+
     @app.post("/home/supplies/{pid}/min")
     def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False), place: int | None = Form(None)):
         set_min(pid, amount)  # 0 = never goes on Running low
@@ -544,6 +546,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def supply_move(pid: int, from_location: int = Form(), to_location: int = Form(), place: int | None = Form(None)):
         """A supply row is its generic in one place: move its own and its brands' stock from there."""
         product_or_404(pid)
+        if to_location not in places(grocy).values():
+            return inventory_back(place, err=GONE)
         if from_location != to_location:
             move_family(grocy, pid, from_location, to_location)
         return inventory_back(place)
@@ -584,6 +588,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/pantry/{pid}/move")
     def pantry_move(pid: int, from_location: int = Form(), to_location: int = Form(), amount: float = Form(gt=0),
                     place: int | None = Form(None)):
+        if to_location not in places(grocy).values():
+            return inventory_back(place, err=GONE)
         if from_location != to_location:
             grocy.transfer(pid, amount, from_location, to_location)
         return inventory_back(place)
@@ -734,6 +740,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     class UndoIn(BaseModel):
         transaction_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")  # goes into Grocy's URL path
+        action: Literal["add", "use"]  # the trip line's, to word a refusal
 
     @app.post("/api/scan/undo")
     def api_scan_undo(body: UndoIn):
@@ -743,7 +750,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         except GrocyError as e:
             if e.status != 400:
                 raise
-            return {"status": "error", "message": "Can't undo: already used."}
+            return {"status": "error", "message": "Can't undo: already used." if body.action == "add" else "Can't undo that one."}
         return {"status": "ok"}
 
     @app.post("/api/scan/photo")

@@ -76,7 +76,7 @@ if (video) {
       undo.addEventListener("click", async () => {
         undo.disabled = true;
         try {
-          const r = await post("/api/scan/undo", {transaction_id: t.id});
+          const r = await post("/api/scan/undo", {transaction_id: t.id, action: t.action});
           if (r.status !== "ok") throw new Error(r.message);
           trip = trip.filter((x) => x !== t);
           saveTrip();
@@ -95,7 +95,7 @@ if (video) {
   drawTrip();
 
   function cameraError(e) {
-    status.textContent = `Camera unavailable: ${e.message}`;
+    status.textContent = `Camera unavailable: ${e?.message || "the camera didn't start"}`;
     $("elsewhere").hidden = false;
   }
 
@@ -175,6 +175,8 @@ if (video) {
     const keep = d.need_min && !use;
     $("h-found").textContent = d.product;
     $("found-generic").textContent = `Counts as ${d.generic}`;
+    const left = +Number(d.in_stock || 0).toFixed(2);
+    $("found-left").textContent = `${qty(left, d.unit)} left`;
     $("found-photo").hidden = !d.photo;
     if (d.photo) $("found-photo").src = d.photo;
     f.place.replaceChildren(...d.places.map((p) => new Option(p, p, p === d.place, p === d.place)));

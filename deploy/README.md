@@ -88,7 +88,7 @@ The app talks to Home Assistant itself, with the token `setup.sh` asks for: noth
      when it finds none or several it asks (`none` = no laundry reminders);
    - adds **House** (`mdi:home-heart`) to HA's sidebar: a Webpage dashboard showing the app's HTTPS URL (updated,
      not duplicated, when it already exists). If only this step fails, the washer settings are still saved.
-4. In the app, open Me -> People and add each person (their Grocy user, HA person and phone).
+4. In the app, open Settings -> People and add each person (their Grocy user, HA person and phone).
 5. Test scanning inside the HA app. If the camera is blocked there, Scan's **Open scanner in browser** link opens
    it in the browser.
 
@@ -132,7 +132,7 @@ line in `configuration.yaml`). In this order:
   `docker compose exec mealplanner python -c "import os, httpx; print(httpx.get(os.environ['HA_URL'] + '/api/', headers={'Authorization': 'Bearer ' + os.environ['HA_TOKEN']}).status_code)"`
 - [ ] Reminder round trip: add a task for whoever is home due today with Remind at a minute or two from now, wait
   for it on both phones, tap Done on one, and check it clears on the other within a minute.
-- [ ] On each device, open the House sidebar in the HA app, pick who you are (Me -> This device), close and reopen
+- [ ] On each device, open the House sidebar in the HA app, pick who you are (Settings -> This device), close and reopen
   the HA app, and check the sidebar still knows who you are (the `who` cookie survives in the HA webview).
 
 ## Live Grocy integration test

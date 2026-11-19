@@ -6,9 +6,9 @@
 <ul class="rows">
 {% for name, id in places.items() %}<li class="row">
   <form method="post" action="/inventory/places/{{ id }}/rename" class="grow"><label class="field"><span>Name</span><input name="name" value="{{ name }}" required></label> <button class="btn">Rename</button></form>
-  <form method="post" action="/inventory/places/{{ id }}/remove" onsubmit="return confirm('Remove this place?')">
+  {% if places | length > 1 %}<form method="post" action="/inventory/places/{{ id }}/remove" onsubmit="return confirm('Remove this place?')">
     <label class="field"><span>Move products to</span><select name="move_to">{% for n, i in places.items() if i != id %}<option value="{{ i }}">{{ n }}</option>{% endfor %}</select></label>
-    <button class="btn">Remove {{ name }}</button></form></li>
+    <button class="btn">Remove {{ name }}</button></form>{% else %}<p class="muted">Keep at least one place.</p>{% endif %}</li>
 {% endfor %}</ul>
 <h2>Add a place</h2>
 <form method="post" action="/inventory/places" class="card">
