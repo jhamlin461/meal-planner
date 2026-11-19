@@ -45,7 +45,7 @@ from app.nutrition import recipe_macros
 from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
                            rename_place, rows, why_not_remove)
 from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
-from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
+from app.shopping import rebuild_lists, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import expiring, summary, today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, refine, search_url
@@ -592,11 +592,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             raise ValueError(f"{p['name']} is now in {msr.label(m)}. Type the amount again.")
         return m
 
+    def rebuild() -> None:
+        rebuild_lists(grocy, date.today(), settings.shopping_weekday)
+
     def set_min(pid: int, amount: float) -> None:
         gid = generic_of(product_or_404(pid))["id"]
         grocy.update("products", gid, {"min_stock_amount": amount, "cumulate_min_stock_amount_of_sub_products": 1})
         with plan_lock:
-            rebuild_running_low(grocy)
+            rebuild()
 
     def inventory_back(place: int | None, msg: str = "", err: str = "") -> RedirectResponse:
         q = urlencode({k: v for k, v in (("place", place), ("msg", msg), ("err", err)) if v})
@@ -615,7 +618,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             use = min(msr.of(grocy, None, p).factor, grocy.stock_amounts().get(pid, 0.0))
             if use > 0:
                 grocy.consume(pid, use)
-            rebuild_running_low(grocy)
+            rebuild()
         return inventory_back(place, f"Used one {p['name']}." if use > 0 else f"No {p['name']} left to use.")
 
     GONE = "That place no longer exists."
@@ -737,7 +740,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         p = product_or_404(pid)
         with plan_lock:
             clear_stock(grocy, pid)
-            rebuild_running_low(grocy)
+            rebuild()
         return inventory_back(place, f"Cleared {p['name']}.")
 
     @app.get("/inventory/{pid}/remove")
@@ -752,7 +755,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         try:
             with plan_lock:
                 remove_product(grocy, pid)
-                rebuild_running_low(grocy)
+                rebuild()
         except ValueError as e:
             return inventory_back(place, err=str(e))
         return inventory_back(place, f"Removed {p['name']}.")
@@ -1325,8 +1328,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def shopping(request: Request, bad: int = 0):
         i = ids(grocy)
         with plan_lock:
-            rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
-            rebuild_running_low(grocy)
+            rebuild()
         products = {int(p["id"]): p for p in grocy.objects("products")}
         units = unit_names()
 
@@ -1336,18 +1338,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             amount = float(row.get("amount") or 0)
             pkg = _num(grocy.userfields("products", pid).get("package_amount")) if p else None
             return {"id": int(row["id"]), "pid": pid if p else None, "name": p["name"] if p else row.get("note") or "(item)",
-                    "amount": amount, "unit": units.get(_int(p.get("qu_id_stock")), "") if p else "",
+                    "amount": amount, "m": msr.of(grocy, None, p, units.get(_int(p.get("qu_id_stock")), "")) if p else None,
                     "done": bool(int(float(row.get("done") or 0))),
                     "packs": packages_needed(amount, pkg) if pkg else None, "pkg": pkg}
 
         lists = {n: [view(r) for r in grocy.objects("shopping_list", shopping_list_id=i.list[n])]
                  for n in ("Meal plan", "Running low", "Extras")}
-        todo: dict[int, float] = {}  # ticked = already got it, so it stays out of the Walmart hand-off
-        # a food product with both a minimum and a plan shortfall counts twice here and in Bought (only matters
-        # if food gets minimums)
-        for r in lists["Meal plan"] + lists["Running low"]:
-            if r["pid"] and not r["done"]:
-                todo[r["pid"]] = todo.get(r["pid"], 0.0) + r["amount"]
+        # ticked = already got it, so it stays out of the Walmart hand-off; a product is on one list only
+        todo = {r["pid"]: r["amount"] for r in lists["Meal plan"] + lists["Running low"] if r["pid"] and not r["done"]}
         cart, rest = walmart_items(grocy, todo)
         return page(request, "shopping.html", lists=lists, bad=bad,
                     cart_link=cart_url(cart, settings.walmart_store_id) if cart else None,
@@ -1388,8 +1386,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                             grocy.add_stock(pid, amount, date.today() + timedelta(days=days) if days > 0 else None,
                                             _int(p.get("location_id")))
                     grocy.delete("shopping_list", int(row["id"]))  # after add_stock: a failure never loses a purchase
-            rebuild_meal_plan_list(grocy, date.today(), settings.shopping_weekday)
-            rebuild_running_low(grocy)
+            rebuild()
             return back("/shopping")
 
     @app.post("/products/{pid}/walmart")

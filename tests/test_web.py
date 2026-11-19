@@ -81,16 +81,16 @@ def _switcher(html, label):
 
 def test_tabs_have_no_me(env):
     html = env[3].get("/recipes").text
-    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores")]
+    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/shopping", "Shopping"),
+                           ("/home", "Chores")]
     assert 'href="/me"' not in html
     assert 'href="/plan" aria-current="page"' in html
     assert 'href="/home" aria-current="page"' in env[3].get("/home").text
 
 
-def test_meals_switcher_has_three_pages(env):
+def test_meals_switcher_has_two_pages(env):
     html = env[3].get("/recipes").text
-    assert [(h, t) for h, _, t in _switcher(html, "Meals pages")] == [("/plan", "Plan"), ("/recipes", "Recipes"),
-                                                                     ("/shopping", "Shopping")]
+    assert [(h, t) for h, _, t in _switcher(html, "Meals pages")] == [("/plan", "Plan"), ("/recipes", "Recipes")]
     assert [t for h, a, t in _switcher(html, "Meals pages") if 'aria-current="page"' in a] == ["Recipes"]
     assert 'href="/plan" aria-current="page"' in html and "subnav" not in html and "has-subnav" not in html
 
@@ -852,7 +852,7 @@ def test_shopping_shows_walmart_link_with_store(env, tmp_path):
     c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid, "servings": "4"})
     html = c.get("/shopping").text
     assert "addToCart?items=10535106&amp;storeId=5435" in html
-    assert "Flour" in html and "1 × 2268 g pack" in html
+    assert "Flour" in html and "1 pack of 2268 g" in html
     [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
     c.post(f"/shopping/{row['id']}/toggle")  # ticked = already got it, so out of the hand-off
     assert "addToCart" not in c.get("/shopping").text
@@ -1308,9 +1308,11 @@ def test_kitchen_pages_use_shell(env):
     g, _, _, c, _ = env
     rid = brownie_recipe(g)
     c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
-    for url in ("/plan", "/shopping", "/recipes", f"/recipes/{rid}"):
+    for url in ("/plan", "/recipes", f"/recipes/{rid}"):
         html = c.get(url).text
         assert 'data-section="kitchen"' in html and "style=" not in html, url
+    html = c.get("/shopping").text
+    assert 'data-section="shopping"' in html and "style=" not in html
 
 
 def test_shopping_has_three_sections(env):
@@ -2147,3 +2149,34 @@ def test_link_g_per_unit_follows_package_source(env):
     owned = _rice(g, "Eggs 2", unit="piece", package_amount=6, package_source="owner", g_per_unit=50)
     _link(c, owned)
     assert float(g.userfields("products", owned)["g_per_unit"]) == 50  # owner package keeps its grams
+
+
+def test_food_keep_at_least_puts_it_on_running_low(env):
+    g, _, _, c, _ = env
+    milk = product(g, "Milk", unit="ml")
+    g.add_stock(milk, 500, None, ids(g).location["Pantry"])
+    html = c.get("/inventory").text
+    assert f'action="/home/supplies/{milk}/min"' in html and "Keep at least" in html
+    assert "Milk" not in c.get("/shopping").text
+    c.post(f"/home/supplies/{milk}/min", data={"amount": 800, "measure": "ml"})  # stock units: no measure yet
+    assert g.get_object("products", milk)["min_stock_amount"] == 800
+    [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Running low"])
+    assert (row["product_id"], row["amount"]) == (milk, 300)
+    assert "Milk" in c.get("/shopping").text
+
+
+def test_product_on_both_lists_shown_once_with_combined_amount(env):
+    g, _, _, c, _ = env
+    pid, rid = flour_recipe(g, stock=100)  # plan: 300 g, stock 100 g
+    c.post(f"/home/supplies/{pid}/min", data={"amount": 150, "measure": "g"})
+    c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
+    html = c.get("/shopping").text
+    assert html.count('shop-name">Flour') == 1
+    rows = [r for n in ("Meal plan", "Running low") for r in g.objects("shopping_list", shopping_list_id=ids(g).list[n])]
+    assert [(r["product_id"], r["amount"]) for r in rows] == [(pid, 350)]  # 300 to cook + 150 to keep - 100 in stock
+    assert "Open Walmart cart" not in html and html.count("walmart.com/search?q=Flour") == 1
+
+
+def test_combined_need():
+    from app.shopping import combined_need
+    assert combined_need({1: 300, 2: 50}, {1: 150, 3: 2}, {1: 100, 2: 100, 3: 1}, {1: 150, 3: 3}) == {1: 350, 3: 2}

@@ -14,6 +14,16 @@
       </span>
     </form>
 {%- endmacro %}
+{% macro keep_at_least(r) %}
+    <form class="inline" method="post" action="/home/supplies/{{ r.pid }}/min">{{ keep() }}<input type="hidden" name="measure" value="{{ r.km.word }}">
+      <label for="min-{{ r.pid }}-{{ r.loc }}">Keep at least</label>
+      <span class="inline-group">
+        <input id="min-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" value="{{ r.min|in_measure(r.km) }}" inputmode="decimal" required>
+        {%- if r.km.word %}<span>{{ label(r.km, r.min / r.km.factor) }}</span>{% endif %}
+        <button class="btn">Save</button>
+      </span>
+    </form>
+{%- endmacro %}
 {% macro move(r, action) %}
     <form class="inline" method="post" action="{{ action }}">{{ keep() }}
       <input type="hidden" name="from_location" value="{{ r.loc }}">{% if r.kind == "food" %}<input type="hidden" name="amount" value="{{ r.amount|exact }}">{% endif %}
@@ -77,6 +87,7 @@
       </span>
     </form>
     {{ move(r, "/pantry/%s/move" % r.pid) }}
+    {{ keep_at_least(r) }}
     {{ measure_in(r) }}
     {{ wipe(r) }}
   </details>
@@ -87,14 +98,7 @@
   <form method="post" action="/home/supplies/{{ r.pid }}/used">{{ keep() }}<button class="btn"{% if r.total <= 0 %} disabled{% endif %}>Used one</button></form>
   <details class="stock-more"><summary>More</summary>
     {% if r.amount > 0 %}{{ move(r, "/home/supplies/%s/move" % r.pid) }}{% endif %}
-    <form class="inline" method="post" action="/home/supplies/{{ r.pid }}/min">{{ typed(r) }}
-      <label for="min-{{ r.pid }}-{{ r.loc }}">Keep at least</label>
-      <span class="inline-group">
-        <input id="min-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" value="{{ r.min|in_measure(r.m) }}" inputmode="decimal" required>
-        {%- if r.m.word %}<span>{{ label(r.m, r.min / r.m.factor) }}</span>{% endif %}
-        <button class="btn">Save</button>
-      </span>
-    </form>
+    {{ keep_at_least(r) }}
     {{ measure_in(r) }}
     {{ wipe(r) }}
   </details>

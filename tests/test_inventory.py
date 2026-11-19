@@ -263,12 +263,12 @@ def test_nav_tabs(env):
     html = c.get("/inventory").text
     nav = html[html.index('class="rail"'):html.index("</nav>")]
     assert re.findall(r'<li><a href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav) == [
-        ("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores")]
+        ("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/shopping", "Shopping"), ("/home", "Chores")]
     assert 'href="/inventory" aria-current="page"' in nav
     plan = c.get("/plan").text
     meals = plan[plan.index('aria-label="Meals pages"'):]
     assert re.findall(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', meals[:meals.index("</nav>")]) == [
-        ("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")]
+        ("/plan", "Plan"), ("/recipes", "Recipes")]
     for url in ("/inventory", "/home", "/plan", "/scan", "/scan?from=chores", "/inventory/places"):
         html = c.get(url).text
         assert 'href="/pantry"' not in html and 'href="/home/supplies"' not in html and ">Supplies<" not in html, url
@@ -456,3 +456,14 @@ def test_move_to_a_place_that_is_gone_goes_back_with_an_error(env):
     r = c.post(f"/pantry/{jam}/move", data={"to_location": p["Fridge"], "amount": 1, "from_location": p["Pantry"]},
                follow_redirects=False)
     assert r.headers["location"] == "/inventory"
+
+
+def test_tabs_have_shopping(env):
+    _, c = env
+    for url in ("/shopping", "/inventory"):
+        html = c.get(url).text
+        nav = html[html.index('class="rail"'):html.index("</nav>")]
+        assert 'href="/shopping"' in nav
+        assert ('href="/shopping" aria-current="page"' in nav) == (url == "/shopping")
+    assert 'class="segmented pages"' not in c.get("/shopping").text  # Shopping is its own section, not a Meals page
+    assert "Shopping" not in c.get("/plan").text.split('aria-label="Meals pages"')[1].split("</nav>")[0]

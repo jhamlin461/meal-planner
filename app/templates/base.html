@@ -1,7 +1,7 @@
 {% from "_icon.html" import icon %}
 {%- set path = request.url.path -%}
-{%- set section = section|default("today" if path == "/" else "settings" if path in ("/settings", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
-{%- set pages = [("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [] -%}
+{%- set section = section|default("today" if path == "/" else "settings" if path in ("/settings", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "shopping" if path == "/shopping" or path.startswith("/shopping/") else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
+{%- set pages = [("/plan", "Plan"), ("/recipes", "Recipes")] if section == "kitchen" else [] -%}
 {%- macro current(href) %}{% if path == href or path.startswith(href + "/") %} aria-current="page"{% endif %}{% endmacro -%}
 {%- set full = path == "/scan" -%}{# the scanner is full screen: no tabs, rail or title row #}
 {%- set theme = request.cookies.get("theme") if request.cookies.get("theme") in ("black", "light", "auto") else "dark" -%}
@@ -28,7 +28,7 @@
 <body data-section="{{ section }}">
 {% if not full %}<nav class="rail" aria-label="Main">
 <ul>
-{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("home", "/home", "Chores", "broom")]  %}
+{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("shopping", "/shopping", "Shopping", "cart-outline"), ("home", "/home", "Chores", "broom")]  %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
 {%- if section == key and pages %}
 <ul class="rail-sub" aria-label="{{ label }}">

@@ -29,18 +29,22 @@ def week_needs(entries: list[dict], positions: dict[int, list[dict]],
     return needs
 
 
-def shortfall(needs: dict[int, float], stock: dict[int, float], staples: set[int]) -> dict[int, float]:
+def combined_need(meal_plan: dict[int, float], running_low: dict[int, float], stock, mins: dict[int, float]
+                  ) -> dict[int, float]:
+    """Per product, enough to cook the plan and still keep the minimum: max(0, need + min - stock). `meal_plan` is what
+    the plan needs (not what is short); `running_low` names products below their minimum. `stock`: product -> amount
+    to count (Task 7's meal kits pass free stock here)."""
     out = {}
-    for pid, need in needs.items():
-        have = stock.get(pid, 0)
-        if pid in staples and have > 0:
-            continue
-        if need - have > 1e-6:  # tolerate float noise (0.1*3 vs 0.3)
-            out[pid] = need - have
+    for pid in meal_plan.keys() | running_low.keys():
+        short = meal_plan.get(pid, 0.0) + mins.get(pid, 0.0) - stock.get(pid, 0.0)
+        if short > 1e-6:  # tolerate float noise (0.1*3 vs 0.3)
+            out[pid] = short
     return out
 
 
-def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[int, float]:
+def rebuild_lists(grocy, today: date, shopping_weekday: int) -> dict[int, float]:
+    """Meal plan and Running low lists from one number per product (combined_need), so a product both planned and below
+    its keep-at-least is on one list only (Meal plan), for both."""
     start, end = shopping_window(today, shopping_weekday)
     entries = [e for e in grocy.objects("meal_plan")
                if e.get("day") and start <= date.fromisoformat(str(e["day"])[:10]) <= end]
@@ -49,17 +53,16 @@ def rebuild_meal_plan_list(grocy, today: date, shopping_weekday: int) -> dict[in
     for p in grocy.objects("recipes_pos"):
         positions.setdefault(int(p["recipe_id"]), []).append(p)
     needs = week_needs(entries, positions, base)
-    staples = {pid for pid in needs if str(grocy.userfields("products", pid).get("staple")) == "1"}
-    short = shortfall(needs, grocy.stock_amounts(), staples)
-    _sync_list(grocy, "Meal plan", short)
-    return short
-
-
-def rebuild_running_low(grocy) -> dict[int, float]:
-    """Products below their keep-at-least (Grocy min stock), by how much, into the Running low list."""
+    stock = grocy.stock_amounts()
+    staples = {pid for pid in needs if stock.get(pid, 0) > 0 and str(grocy.userfields("products", pid).get("staple")) == "1"}
+    needs = {pid: n for pid, n in needs.items() if pid not in staples}
     low = {int(r["id"]): float(r["amount_missing"]) for r in grocy.volatile(1).get("missing_products") or []}
-    _sync_list(grocy, "Running low", low)
-    return low
+    mins = {int(p["id"]): float(p["min_stock_amount"]) for p in grocy.objects("products")
+            if float(p.get("min_stock_amount") or 0) > 0}
+    need = combined_need(needs, low, stock, mins)
+    _sync_list(grocy, "Meal plan", {pid: a for pid, a in need.items() if pid in needs})
+    _sync_list(grocy, "Running low", {pid: a for pid, a in need.items() if pid not in needs})
+    return need
 
 
 def _sync_list(grocy, name: str, wanted: dict[int, float]) -> None:

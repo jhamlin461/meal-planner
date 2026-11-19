@@ -130,17 +130,19 @@ def rows(grocy, settings, today: date) -> Inventory:
     out += [row(pid, _int(p.get("location_id")) or 0, "supply") for pid, p in products.items()
             if not is_food(pid) and not p.get("parent_product_id") and pid not in have]
     for r in out:
+        r["min"] = float(products.get(generic(r["pid"]), {}).get("min_stock_amount") or 0)  # kept on the generic
         if r["kind"] == "food":
             r["when"], r["past"] = _when(r["bb"], "Best before", today) if r["bb"] != NEVER else ("", False)
         else:
             r["total"] = family.get(r["pid"], 0.0)
-            r["min"] = float(products.get(r["pid"], {}).get("min_stock_amount") or 0)
             r["low"] = r["total"] < r["min"]
     measures: dict[int, measure.Measure] = {}
     for r in out:  # stored measures only: Claude is asked after the page is sent (see web's inventory)
-        if r["pid"] not in measures:
-            measures[r["pid"]] = measure.of(grocy, None, products.get(r["pid"], {"id": r["pid"]}), r["unit"])
-        r["m"] = measures[r["pid"]]
+        for key, pid in (("m", r["pid"]), ("km", generic(r["pid"]))):  # km: the generic's, where Keep at least is typed
+            if pid not in measures:
+                measures[pid] = measure.of(grocy, None, products.get(pid, {"id": pid}),
+                                            units.get(_int(products.get(pid, {}).get("qu_id_stock")), ""))
+            r[key] = measures[pid]
     order = {n: k for k, n in enumerate(places(grocy))}
     groups: dict[str, list[dict]] = {}
     for r in sorted(out, key=lambda r: (order.get(locs.get(r["loc"]), len(order)), r["bb"], r["name"].lower())):
