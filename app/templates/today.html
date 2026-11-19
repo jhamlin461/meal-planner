@@ -2,10 +2,10 @@
 {% from "_icon.html" import icon %}
 {% block title %}Today{% endblock %}
 {% block main_attrs %} class="wide"{% endblock %}
-{% block content %}
 {% set n = now_items|length %}
-<p class="today-date">{{ date }}</p>
-<h1 class="headline">{% if n == 0 %}Nothing needs you{% elif n == 1 %}1 thing needs you{% else %}{{ n }} things need you{% endif %}<small>{{ note }}</small></h1>
+{% block heading %}<div><p class="today-date">{{ date }}</p>
+<h1 class="headline">{% if n == 0 %}Nothing needs you{% elif n == 1 %}1 thing needs you{% else %}{{ n }} things need you{% endif %}<small>{{ note }}</small></h1></div>{% endblock %}
+{% block content %}
 <div class="split">
 <div class="split-now"{% if not (n or msg or ha_error) %} hidden{% endif %}>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}

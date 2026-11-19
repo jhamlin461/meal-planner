@@ -79,10 +79,10 @@ def _switcher(html, label):
     return re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', nav[:nav.index("</nav>")])
 
 
-def test_tabs_are_today_meals_inventory_chores_me(env):
+def test_tabs_have_no_me(env):
     html = env[3].get("/recipes").text
-    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores"),
-                           ("/me", "Me")]
+    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores")]
+    assert 'href="/me"' not in html
     assert 'href="/plan" aria-current="page"' in html
     assert 'href="/home" aria-current="page"' in env[3].get("/home").text
 
@@ -98,14 +98,14 @@ def test_meals_switcher_has_three_pages(env):
 def test_scan_button_only_on_inventory_pages(env):
     c = env[3]
     row = re.compile(r'<div class="title-row"><h1[^>]*>.*?</h1>\s*<a class="button title-action" href="([^"]+)">'
-                     r'.*?barcode-scan.*?Scan</a></div>', re.S)
+                     r'.*?barcode-scan.*?Scan</a>\s*<a class="settings-btn" href="/settings" aria-label="Settings".*?</a></div>', re.S)
     html = c.get("/inventory").text
     assert row.findall(html) == ["/scan"] and html.count("<h1") == 1
     for url in ["/plan", "/recipes", "/shopping", "/import", "/home", "/home/chores/new", "/scan", "/scan?from=chores"]:
         html = c.get(url).text
         assert "title-action" not in html and html.count("<h1") == 1, url
     c.cookies.set("who", "kitchen")
-    for url in ["/", "/me"]:
+    for url in ["/", "/settings"]:
         html = c.get(url).text
         assert "title-action" not in html and html.count("<h1") == 1, url
     for url in ["/plan", "/home", "/static/style.css", "/static/app.js"]:
@@ -145,20 +145,58 @@ def test_switcher_matches_whole_path_segments():
     assert current("/plans") == [] and current("/shoppinglist") == []
 
 
-def test_me_page_theme_and_device(env):
+def test_me_redirects_to_settings(env):
+    r = env[3].get("/me", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/settings"
+
+
+def test_settings_page_rows(env):
     c = env[3]
     c.cookies.set("who", "kitchen")
-    html = c.get("/me").text
-    assert 'href="/me" aria-current="page"' in html and 'href="/who"' in html and 'href="/home/people"' in html
-    assert "kitchen screen" in html.lower() and 'class="rows"' in html and "Save theme" not in html
-    assert re.search(r'value="dark"[^>]*aria-pressed="true"', html) and re.search(r'value="light"[^>]*aria-pressed="false"', html)
-    r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/me"},
-               follow_redirects=False)
-    assert r.headers["location"] == "/me"
-    html = c.get("/me").text
-    assert 'data-theme="light"' in html and re.search(r'value="light"[^>]*aria-pressed="true"', html)
-    assert 'href="/me" aria-current="page"' in c.get("/who").text
-    assert 'href="/me" aria-current="page"' in c.get("/home/people").text
+    html = c.get("/settings").text
+    assert 'href="/settings" aria-label="Settings" aria-current="page"' in html and "aria-current" not in _tabs_ul(html)
+    assert 'href="/who"' in html and 'href="/home/people"' in html and "AI this month" in html
+    assert "kitchen screen" in html.lower() and 'class="rows"' in html
+    assert re.findall(r'name="theme" value="(\w+)"[^>]*>([^<]+)<', html) == [
+        ("dark", "Midnight"), ("black", "Black"), ("light", "Light"), ("auto", "Match phone")]
+    assert re.search(r'value="dark"[^>]*aria-pressed="true"', html)
+    assert 'aria-current="page"' not in _tabs_ul(c.get("/who").text) and 'href="/settings" aria-label="Settings" aria-current' in c.get("/who").text
+    assert 'href="/settings" aria-label="Settings" aria-current' in c.get("/home/people").text
+
+
+def _tabs_ul(html):
+    return html[html.index('class="rail"'):html.index('<a class="rail-settings"')]
+
+
+def test_settings_button_on_every_section(env):
+    for url in ("/", "/plan", "/inventory", "/home"):
+        html = env[3].get(url, cookies={"who": "kitchen"}).text
+        assert 'href="/settings" aria-label="Settings"' in html and 'class="rail-settings" href="/settings"' in html, url
+
+
+def test_theme_values(env):
+    c = env[3]
+    assert 'data-theme="dark"' in c.get("/settings").text
+    for value in ("dark", "black", "light", "auto"):
+        r = c.post("/settings/theme", data={"theme": value}, headers={"referer": "http://testserver/settings"},
+                   follow_redirects=False)
+        assert r.headers["location"] == "/settings" and f"theme={value}" in r.headers["set-cookie"]
+        html = c.get("/settings").text
+        assert f'data-theme="{value}"' in html and re.search(rf'value="{value}"[^>]*aria-pressed="true"', html)
+    assert c.post("/settings/theme", data={"theme": "bogus"}).status_code == 422
+    c.cookies.clear()
+    c.cookies.set("theme", "bogus")
+    assert 'data-theme="dark"' in c.get("/settings").text
+
+
+def test_black_theme_meta_color(env):
+    c = env[3]
+    meta = lambda html: re.findall(r'<meta name="theme-color" content="([^"]+)"([^>]*)>', html)
+    assert meta(c.get("/", cookies={"theme": "black", "who": "kitchen"}).text) == [("#000000", "")]
+    assert meta(c.get("/", cookies={"theme": "light", "who": "kitchen"}).text) == [("#E2E5EA", "")]
+    assert meta(c.get("/", cookies={"who": "kitchen"}).text) == [("#2E333A", "")]
+    assert meta(c.get("/", cookies={"theme": "auto", "who": "kitchen"}).text) == [
+        ("#E2E5EA", ' media="(prefers-color-scheme: light)"'), ("#000000", ' media="(prefers-color-scheme: dark)"')]
 
 
 def test_chores_page_sections(env):
@@ -207,7 +245,7 @@ def test_pages_render(env):
     assert c.get("/recipes/999").status_code == 404 and c.get("/import/" + "0" * 32).status_code == 404
 
 
-def test_base_has_pwa_bits_and_nav(env):
+def test_base_has_pwa_bits_and_tabs_ul(env):
     html = env[3].get("/plan").text
     for bit in ['name="viewport"', 'rel="manifest"', 'apple-touch-icon', 'apple-mobile-web-app-capable" content="yes"',
                 'href="/plan"', 'href="/inventory"', 'href="/recipes"', 'href="/shopping"']:
@@ -1149,11 +1187,11 @@ def test_delete_person(hv):
     assert house.people() == []
 
 
-def test_who_and_people_live_in_me(hv):
+def test_who_and_people_live_in_settings(hv):
     c = hv[3]
-    assert 'href="/me" aria-current="page"' in c.get("/who").text
+    assert 'href="/settings" aria-label="Settings" aria-current="page"' in c.get("/who").text
     people = c.get("/home/people").text
-    assert 'href="/me" aria-current="page"' in people and 'href="/home" aria-current' not in people
+    assert 'aria-label="Settings" aria-current="page"' in people and 'href="/home" aria-current' not in people
 
 
 # ---- household supplies -----------------------------------------------------------------------------------------
@@ -1569,5 +1607,5 @@ def test_wide_pages_split_into_columns(env):
     assert html.index('class="servings"') < html.index("</h1>") + 200 < html.index('class="cfe-wrap"')  # in the title row
     for url in ("/shopping", "/"):
         assert '<div class="split">' in c.get(url, cookies={"who": "kitchen"}).text, url
-    for url in ("/home", "/inventory", "/me"):
+    for url in ("/home", "/inventory", "/settings"):
         assert '<main class="roomy">' in c.get(url, cookies={"who": "kitchen"}).text, url

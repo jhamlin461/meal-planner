@@ -158,7 +158,7 @@ def web(tmp_path):
 def test_me_page_shows_this_months_ai_spend_and_mode(web, dollars, words):
     c, house, _ = web
     spend(house, dollars, datetime.now())
-    html = c.get("/me").text
+    html = c.get("/settings").text
     assert "AI this month" in html and f"${dollars:.2f} of $100" in html and words in html
     assert "·" not in html
 

@@ -1,16 +1,17 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
-{% block title %}Me{% endblock %}
+{% block title %}Settings{% endblock %}
 {% block main_attrs %} class="roomy"{% endblock %}
+{% block heading %}<h1>Settings</h1>{% endblock %}
 {% block content %}
-<h1>Me</h1>
 <ul class="rows">
   <li class="row"><span class="grow"><b>This device</b><br><span class="muted">{% if who == 'kitchen' %}Kitchen screen{% elif who %}{{ who.name }}'s phone{% else %}Not set{% endif %}</span></span>
     <a class="btn" href="/who">Change</a></li>
-  <li><form class="row" method="post" action="/settings/theme"><b class="grow">Theme</b>
+  <li><form class="row settings-theme" method="post" action="/settings/theme"><b class="grow">Theme</b>
     <span class="segmented" role="group" aria-label="Theme">
-      <button class="btn" name="theme" value="dark" aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}">Dark</button>
-      <button class="btn" name="theme" value="light" aria-pressed="{{ 'true' if theme == 'light' else 'false' }}">Light</button>
+      {% for value, text in [("dark", "Midnight"), ("black", "Black"), ("light", "Light"), ("auto", "Match phone")] %}
+      <button class="btn" name="theme" value="{{ value }}" aria-pressed="{{ 'true' if theme == value else 'false' }}">{{ text }}</button>
+      {% endfor %}
     </span></form></li>
   <li class="row"><span class="grow"><b>AI this month</b><br>${{ "%.2f"|format(ai_spent) }} of ${{ ai_budget|num }}<br>
     <span class="muted">{{ {"full": "Full, the best settings until $%s is used this month"|format(ai_economy_at|num), "economy": "Economy — cheaper settings until the 1st",

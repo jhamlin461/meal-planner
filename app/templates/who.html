@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Whose device is this?{% endblock %}
+{% block heading %}<h1>Whose device is this?</h1>{% endblock %}
 {% block content %}
-<h1>Whose device is this?</h1>
 <p class="muted">Reminders for you will come to this device's owner.</p>
 <form method="post" action="/who">
 {% for p in people %}<div class="card"><div class="card-actions"><button class="btn{% if who and who != 'kitchen' and who.id == p.id %} btn-primary{% endif %}" name="who" value="{{ p.id }}">{{ p.name }}</button></div></div>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Remove {{ p.name }}{% endblock %}
+{% block heading %}<h1>Remove item</h1>{% endblock %}
 {% block content %}
-<h1>Remove item</h1>
 {% set back = "/inventory" ~ ("?place=%s" % place if place else "") %}
 {% if refusal %}
 <p class="card error" role="alert">{{ refusal }}</p>

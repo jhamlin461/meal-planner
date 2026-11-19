@@ -1,9 +1,9 @@
 {% from "_icon.html" import icon %}
 {%- set path = request.url.path -%}
-{%- set section = section|default("today" if path == "/" else "me" if path in ("/me", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
+{%- set section = section|default("today" if path == "/" else "settings" if path in ("/settings", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
 {%- set pages = [("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [] -%}
 {%- macro current(href) %}{% if path == href or path.startswith(href + "/") %} aria-current="page"{% endif %}{% endmacro -%}
-{%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
+{%- set theme = request.cookies.get("theme") if request.cookies.get("theme") in ("black", "light", "auto") else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
 <head>
@@ -11,7 +11,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="{{ '#E2E5EA' if theme == 'light' else '#2E333A' }}">
+{% if theme == "auto" -%}
+<meta name="theme-color" content="#E2E5EA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+{%- else -%}
+<meta name="theme-color" content="{{ {'light': '#E2E5EA', 'black': '#000000'}.get(theme, '#2E333A') }}">
+{%- endif %}
 <title>{% block title %}House{% endblock %}</title>
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
@@ -22,7 +27,7 @@
 <body data-section="{{ section }}">
 <nav class="rail" aria-label="Main">
 <ul>
-{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}
+{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("home", "/home", "Chores", "broom")]  %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
 {%- if section == key and pages %}
 <ul class="rail-sub" aria-label="{{ label }}">
@@ -31,15 +36,16 @@
 {%- endif %}</li>
 {% endfor %}
 </ul>
+<a class="rail-settings" href="/settings"{% if section == "settings" %} aria-current="page"{% endif %}>{{ icon("cog-outline") }}<span>Settings</span></a>
 </nav>
 <main{% block main_attrs %}{% endblock %}>
 {% if pages %}<nav class="segmented pages" aria-label="Meals pages">
 {%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
 </nav>{% endif %}
-{% if pages or path == "/inventory" %}<div class="title-row">{% block heading %}{% endblock %}
+<div class="title-row">{% block heading %}{% endblock %}
 {%- if path == "/inventory" %}
-<a class="button title-action" href="/scan">{{ icon("barcode-scan") }}Scan</a>{% endif %}</div>
-{%- else %}{{ self.heading() }}{% endif %}
+<a class="button title-action" href="/scan">{{ icon("barcode-scan") }}Scan</a>{% endif %}
+<a class="settings-btn" href="/settings" aria-label="Settings"{% if section == "settings" %} aria-current="page"{% endif %}>{{ icon("cog-outline") }}</a></div>
 {% block content %}{% endblock %}
 </main>
 <div id="toast" role="status" hidden></div>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}People{% endblock %}
+{% block heading %}<h1>People</h1>{% endblock %}
 {% block content %}
-<h1>People</h1>
 <p class="muted">{% if who == 'kitchen' %}This device is the kitchen screen.{% elif who %}This device is {{ who.name }}.{% else %}This device isn't set to anyone. {% endif %}<a href="/who">Change</a></p>
 {% if people %}<ul class="rows">
 {% for p in people %}<li class="row"><b class="grow">{{ p.name }}</b><span class="muted breakable">{{ p.notify_service or 'no phone' }}</span>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Manage places{% endblock %}
+{% block heading %}<h1>Manage places</h1>{% endblock %}
 {% block content %}
-<h1>Manage places</h1>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <ul class="rows">
 {% for name, id in places.items() %}<li class="row">

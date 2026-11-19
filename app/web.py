@@ -490,8 +490,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return back("/home/people")
 
     @app.get("/me")
-    def me(request: Request):
-        return page(request, "me.html", who=current_who(request), ai_spent=house.ai_spent(month()),
+    def me():
+        return back("/settings")
+
+    @app.get("/settings")
+    def settings_page(request: Request):
+        return page(request, "settings.html", who=current_who(request), ai_spent=house.ai_spent(month()),
                     ai_budget=settings.ai_monthly_budget, ai_economy_at=settings.ai_economy_at, ai_mode=ai_mode())
 
     # ---- household supplies (Grocy product group; keep-at-least is the generic's min stock amount, counting the stock
@@ -553,7 +557,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return {"status": "ok"}
 
     @app.post("/settings/theme")
-    def set_theme(request: Request, theme: Literal["dark", "light"] = Form()):
+    def set_theme(request: Request, theme: Literal["dark", "black", "light", "auto"] = Form()):
         """Per-device theme; back to the page it was switched on (same-site paths only)."""
         ref = urlsplit(request.headers.get("referer", ""))
         ok = ref.path.startswith("/") and not ref.path.startswith(("//", "/\\"))

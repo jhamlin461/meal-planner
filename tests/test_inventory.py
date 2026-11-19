@@ -263,7 +263,7 @@ def test_nav_tabs(env):
     html = c.get("/inventory").text
     nav = html[html.index('class="rail"'):html.index("</nav>")]
     assert re.findall(r'<li><a href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav) == [
-        ("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores"), ("/me", "Me")]
+        ("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores")]
     assert 'href="/inventory" aria-current="page"' in nav
     plan = c.get("/plan").text
     meals = plan[plan.index('aria-label="Meals pages"'):]

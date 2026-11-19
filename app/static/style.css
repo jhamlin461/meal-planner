@@ -4,10 +4,19 @@
 /* Midnight is the default; light is a per-device choice (cookie -> html[data-theme]). */
 :root { --bg: #383C45; --surface: #434954; --rail: #2E333A; --action: #5294E2; --now: #E45E65; --soon: #F4B400;
   --text: #FFFFFF; --muted: rgba(255,255,255,.68); --line: rgba(255,255,255,.09); --field: rgba(0,0,0,.18);
-  --rail-w: 232px; color-scheme: dark; }
+  --rail-w: 232px; --edge: 0px; color-scheme: dark; }
 [data-theme="light"] { --bg: #EEF0F3; --surface: #FFFFFF; --rail: #E2E5EA; --action: #2F6FBF; --now: #C4373F;
   --soon: #9A6400; --text: #1E2228; --muted: rgba(30,34,40,.68); --line: rgba(30,34,40,.12); --field: #FFFFFF;
   color-scheme: light; }
+/* Black is for AMOLED screens: pure black so pixels are off, with outlines (not lighter fills) separating things.
+   Match phone is Black on a dark phone and Light on a light one, with no script. */
+[data-theme="black"], [data-theme="auto"] { --bg: #000; --surface: #000; --rail: #000; --line: rgba(255,255,255,.28);
+  --field: #000; --edge: 1px; --muted: rgba(255,255,255,.72); color-scheme: dark; }
+@media (prefers-color-scheme: light) {
+  [data-theme="auto"] { --bg: #EEF0F3; --surface: #FFFFFF; --rail: #E2E5EA; --action: #2F6FBF; --now: #C4373F;
+    --soon: #9A6400; --text: #1E2228; --muted: rgba(30,34,40,.68); --line: rgba(30,34,40,.12); --field: #FFFFFF;
+    --edge: 0px; color-scheme: light; }
+}
 
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.45 "Roboto Flex", Roboto, system-ui, sans-serif; background: var(--bg); color: var(--text);
@@ -92,7 +101,7 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 .rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--rail);
   padding-bottom: env(safe-area-inset-bottom); }
 .rail ul { list-style: none; margin: 0; padding: 0; }
-.rail > ul { display: grid; grid-template-columns: repeat(5, 1fr); }
+.rail > ul { display: grid; grid-template-columns: repeat(4, 1fr); }
 .rail > ul > li > a { min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 2px; color: var(--muted); text-decoration: none; font-size: .75rem; }
 .rail a[aria-current] { color: var(--action); }
@@ -102,13 +111,23 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 .title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
   margin: 0 0 16px; }
 .title-row h1 { margin: 0; flex: 0 1 auto; min-width: 0; }
-.title-action { flex: none; border-radius: 24px; padding: 6px 20px 6px 16px; }
+.title-action { flex: none; border-radius: 24px; padding: 6px 20px 6px 16px; margin-left: auto; }
+/* Settings sits at the right end of every title row, after any action. */
+.settings-btn { flex: none; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+  border-radius: 24px; color: var(--muted); margin-left: auto; }
+.title-action + .settings-btn { margin-left: 0; }
+.settings-btn[aria-current] { color: var(--action); background: var(--surface); }
+.rail-settings { display: none; }
 @media (min-width: 900px) {
   body { padding-left: var(--rail-w); }
   main { padding: 32px 24px 48px; }
   .pages { display: none; }
   .rail { top: 0; right: auto; width: var(--rail-w); padding: 20px 12px; overflow-y: auto; }
+  .rail { display: flex; flex-direction: column; }
   .rail > ul { display: block; }
+  .rail-settings { display: flex; align-items: center; gap: 14px; min-height: 48px; padding: 0 12px; margin-top: auto;
+    border-radius: 10px; color: var(--text); text-decoration: none; }
+  .rail-settings[aria-current] { background: var(--surface); }
   .rail > ul > li > a { flex-direction: row; justify-content: flex-start; gap: 14px; min-height: 48px; padding: 0 12px;
     border-radius: 10px; font-size: 1rem; color: var(--text); }
   .rail > ul > li > a[aria-current] { background: var(--surface); }
@@ -433,3 +452,12 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
   .week-grid .plan-day, .week-grid .plan-day.is-today + .plan-day { padding-inline: 8px; }
   .week-grid .plan-add select { padding-inline: 6px 2px; }
 }
+
+/* Black: outlines carry the separation the fills give the other themes. */
+:is([data-theme="black"], [data-theme="auto"]) :is(.card, dialog, #toast, .segmented, .plan-day.is-today, .photo-full) {
+  outline: var(--edge) solid var(--line); outline-offset: -1px; }
+.rail { border-top: var(--edge) solid var(--line); }
+@media (min-width: 900px) { .rail { border-top: 0; border-right: var(--edge) solid var(--line); } }
+.settings-theme .segmented { flex-basis: 26em; }
+.settings-theme .segmented > * { white-space: normal; padding: 0 6px; line-height: 1.15; }
+@media (max-width: 599px) { .settings-theme { flex-direction: column; align-items: stretch; } .settings-theme .grow { flex: none; } .settings-theme .segmented { flex-basis: auto; } }
