@@ -659,3 +659,32 @@ def test_check_failure_keeps_table(tmp_path):
         process(store, ai, httpx.Client(), p.id, None, b"%PDF-c")
         got = store.get(p.id)
         assert got.status == "ready" and got.draft.table == two_step() and got.doubts == []
+
+
+def test_check_flags_renamed_rows():
+    from app.ai import TableCheck
+    from app.importer import apply_check
+    t = two_step()
+    fixed = t.model_copy(deep=True)
+    fixed.ingredients[1].name = "chicken thighs"
+    table, doubts = apply_check(t, TableCheck(table=fixed, doubts=[]))
+    assert table == fixed  # taken, but never silently
+    assert [(d.ref, d.reason) for d in doubts] == [("i1", "Renamed from chicken; compare with the card.")]
+
+
+def test_check_renumbers_claudes_step_ids_like_the_form(tmp_path):
+    from app.ai import Doubt, TableCheck
+    t = CfeTable(pre=[], ingredients=two_step().ingredients,
+                 ops=[Op(id="sear", label="Sear", inputs=["i0", "i1"]), Op(id="fry", label="Fry", inputs=["sear", "i2"])])
+    store = PendingStore(tmp_path)
+    p = store.new("chicken.pdf", pdf=b"%PDF-c")
+    ai = FakeAI(draft=RecipeDraft(title="Chicken", servings=2, steps=["Sear"], table=t),
+                check=TableCheck(table=t, doubts=[Doubt(ref="fry", reason="No time."), Doubt(ref="sear", reason="Hot?")]))
+    process(store, ai, httpx.Client(), p.id, None, b"%PDF-c")
+    got = store.get(p.id)
+    assert [(o.id, o.inputs) for o in got.draft.table.ops] == [("o1", ["i0", "i1"]), ("o2", ["o1", "i2"])]
+    assert [d["ref"] for d in got.doubts] == ["o2", "o1"]
+    ai.check = AIError("down")  # unchecked tables are renumbered too
+    q = store.new("chicken.pdf", pdf=b"%PDF-c")
+    process(store, ai, httpx.Client(), q.id, None, b"%PDF-c")
+    assert [o.id for o in store.get(q.id).draft.table.ops] == ["o1", "o2"]

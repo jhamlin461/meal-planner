@@ -163,7 +163,8 @@ CHECK_PROMPT = """You check a Cooking-for-Engineers table against the recipe it 
 the table alone, so it must match the card exactly. The user message gives the recipe, then the table and the servings
 it is for (null: the card's own).
 Compare, against the recipe: every amount and unit, every packet count (the column for those servings), every
-temperature and time in the step labels, and which ingredients each step combines. Correct anything wrong in place.
+ingredient note, every temperature and time in the step labels and in each step's `where` (an oven temperature may
+sit there), and which ingredients each step combines. Correct anything wrong in place.
 Return the corrected table with the same ingredient rows and the same steps (same ids) in the same order: never add,
 remove or reorder a row or a step, and keep the table valid under the rules below.
 Add a doubt for anything you are not sure of, anything the recipe has that the table lacks, and anything in the

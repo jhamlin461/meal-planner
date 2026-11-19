@@ -183,6 +183,12 @@ td.doubt::after { content: ""; position: absolute; inset: 3px; border: 2px dashe
 .doubts ol { margin: 0; padding: 0; list-style: none; counter-reset: doubt; }
 .doubts li { counter-increment: doubt; display: flex; gap: 10px; padding: 3px 0; }
 .doubts li::before { content: counter(doubt); flex: none; align-self: start; margin-top: .25em; }
+/* A doubted ingredient's amount, fixable where it is picked: three short fields in the same dashed due-soon frame. */
+.amount-edit { margin: 8px 0 4px; padding: 6px 12px 12px; min-width: 0; border: 2px dashed var(--soon); }
+.amount-edit legend { padding: 0 6px; font-size: .875rem; font-weight: 600; }
+.amount-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.amount-fields .field { margin: 0; font-size: .875rem; }
+.amount-row { margin: 0 0 16px; }
 td.cfe-filler { background: var(--surface); }
 td.cfe-op { background: var(--rail); font-weight: 650; font-stretch: 90%; text-align: center; min-width: 6em; }
 td.cfe-pre { background: transparent; color: var(--muted); font-style: italic; padding: 8px 12px; }

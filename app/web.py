@@ -1,6 +1,7 @@
 """Web UI: inventory, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
 import hashlib
 import itertools
+import json
 import logging
 import math
 import mimetypes
@@ -33,8 +34,9 @@ from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
 from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic,
-                          estimate_amount, estimate_key, make_table, page_text, process, propose_matches, put_photo,
-                          save_recipe, start_worker, submit_batch, to_jpeg)
+                          estimate_amount, estimate_key, make_table, needs_estimate, page_text, process,
+                          propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
+                          to_jpeg)
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.qty import parse_qty
 from app.nutrition import recipe_macros
@@ -88,9 +90,6 @@ def _servings(s: str) -> int | None:
     return n
 
 
-MADE_FROM_TEXT = "Made from the saved recipe text — the original page couldn't be reached."
-
-
 def _monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
@@ -100,7 +99,9 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     op_in_<row> (ingredient ids or earlier steps' op_ids). Blank rows are dropped, action remove:<row> drops that step and the
     ticks pointing at it, and steps are renumbered o1, o2, ... in row order. A tick that names no ingredient and no
     earlier step (unknown, later, itself) is kept as-is so validate() rejects it. `packets` (one per ingredient row,
-    blank or not a number above 0 for none) sets each ingredient's packets; a form without them keeps the old ones."""
+    blank or not a number above 0 for none) sets each ingredient's packets; a form without them keeps the old ones.
+    A doubted row's amount fields (qty_<n>, unit_<n>, packets_<n>) set that row's amount; each is taken only when it
+    differs from the value it was shown with, so an untouched field never rounds an amount."""
     wheres = form.getlist("op_where")
     rows = [(i.strip(), lab.strip(), [r.strip() for r in form.getlist(f"op_in_{k}") if r.strip()],
              wheres[k].strip() if k < len(wheres) else "")
@@ -124,9 +125,36 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     if len(packets) == len(old.ingredients):
         old = old.model_copy(update={"ingredients": [g.model_copy(update={"packets": _num(n)})
                                                      for g, n in zip(old.ingredients, packets)]})
+    ings = []
+    for n, g in enumerate(old.ingredients):
+        q, u, k = (form.get(f"{f}_{n}") for f in ("qty", "unit", "packets"))
+        up = {}
+        if q is not None and q.strip() != _shown(g.qty):
+            x = parse_qty(q)
+            if not q.strip() or (x is not None and math.isfinite(x) and x > 0):  # blank: to taste; junk: unchanged
+                up["qty"] = x
+        if u is not None:
+            up["unit"] = u.strip()
+        if k is not None and k.strip() != _shown(g.packets):
+            up["packets"] = _num(k)
+        ings.append(g.model_copy(update=up))
+    old = old.model_copy(update={"ingredients": ings})
     return old.model_copy(update={"ops": [Op(id=new[n], label=lab, where=where,
                                              inputs=[new[r] if isinstance(r, int) else r for r in refs])
                                           for n, ((_, lab, _, where), refs) in enumerate(zip(rows, picked))]})
+
+
+def _shown(x: float | None) -> str:
+    """How an amount field shows a number (the template's '%g')."""
+    return "" if x is None else f"{x:g}"
+
+
+def _recipe_doubts(uf: dict) -> list[dict]:
+    """The check's doubts kept on a saved recipe (its `doubts` userfield) until the table editor saves."""
+    try:
+        return json.loads(uf.get("doubts") or "[]")
+    except ValueError:
+        return []
 
 
 def _standing(doubts: list[dict], old: CfeTable, new: CfeTable) -> list[dict]:
@@ -827,11 +855,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/recipes/{rid}")
     def recipe(request: Request, rid: int, servings: int | None = None, made: str = ""):
-        note = MADE_FROM_TEXT if made == "text" else None
+        note = "Made from the saved recipe text — the original page couldn't be reached." if made == "text" else None
         return recipe_page(request, rid, servings, note=note)
 
     def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
-                    status_code: int = 200, note: str | None = None, doubts: list[dict] = ()):
+                    status_code: int = 200, note: str | None = None):
         r = recipe_or_404(rid)
         base = float(r.get("base_servings") or 2)
         servings = max(1, servings or round(base))
@@ -848,7 +876,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat(),
-                    ai_free=ai_mode() == "free", note=note, **_doubt_ctx(doubts))
+                    ai_free=ai_mode() == "free", note=note, **_doubt_ctx(_recipe_doubts(uf)))
 
     @app.post("/recipes/{rid}/make-table")
     def make_table_post(request: Request, rid: int):  # plain def: Claude takes a while, FastAPI threadpools it
@@ -871,10 +899,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return recipe_page(request, rid, error="The table can be made after the 1st.", status_code=409)
         except (AIError, ValueError) as e:
             return recipe_page(request, rid, error=f"Couldn't make the table: {e}", status_code=502)
-        grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
-        if doubts:  # shown once, with the new table: there is no review to keep them on
-            return recipe_page(request, rid, note=MADE_FROM_TEXT if fell_back else None,
-                               doubts=[d.model_dump() for d in doubts])
+        grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json(),
+                                              "doubts": json.dumps([d.model_dump() for d in doubts]) if doubts else ""})
         return back(f"/recipes/{rid}" + ("?made=text" if fell_back else ""))
 
     @app.get("/recipes/{rid}/photo")
@@ -925,7 +951,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/recipes/{rid}/table")
     def table_edit(request: Request, rid: int):
-        return page(request, "table.html", r=recipe_or_404(rid), table=table_for(rid), errors=[])
+        return page(request, "table.html", r=recipe_or_404(rid), table=table_for(rid), errors=[],
+                    **_doubt_ctx(_recipe_doubts(grocy.userfields("recipes", rid))))
 
     @app.post("/recipes/{rid}/table")
     async def table_save(request: Request, rid: int):
@@ -934,14 +961,30 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def save_table(request: Request, rid: int, form):
         r = recipe_or_404(rid)
-        table = _table_from_form(form, table_for(rid))
+        old = table_for(rid)
+        table = _table_from_form(form, old)
         action = str(form.get("action") or "")
         editing = action == "addop" or action.startswith("remove:")  # re-render only
         errors = [] if editing else _named(validate(table), table)
         if editing or errors:
-            return page(request, "table.html", r=r, table=table, errors=errors)
-        grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
+            doubts = _standing(_recipe_doubts(grocy.userfields("recipes", rid)), old, table)
+            return page(request, "table.html", r=r, table=table, errors=errors, **_doubt_ctx(doubts))
+        grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json(), "doubts": ""})  # all looked at
+        follow_amounts(rid, old, table)
         return back(f"/recipes/{rid}")
+
+    def follow_amounts(rid: int, old: CfeTable, new: CfeTable) -> None:
+        """Rows whose amount the editor changed: their positions take it, in the stock unit through a known
+        conversion, else saved without one for the estimate to fill in (importer.fill_estimates)."""
+        positions = sorted(grocy.objects("recipes_pos", recipe_id=rid), key=lambda p: int(p["id"]))
+        if len(positions) != len(new.ingredients):
+            return  # not made from this table (edited in Grocy): left alone
+        for pos, a, b in zip(positions, old.ingredients, new.ingredients):
+            if (a.qty, a.unit) != (b.qty, b.unit):
+                amount = stock_amount_for(grocy, int(pos["product_id"]), b.qty, b.unit)
+                grocy.update("recipes_pos", int(pos["id"]), {
+                    "amount": amount or 0, "note": line_text(b, 1),
+                    "variable_amount": "" if amount is not None else needs_estimate(b).get("variable_amount", "")})
 
     # ---- import -------------------------------------------------------------------------------------------------
     @app.get("/import")
@@ -1056,11 +1099,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             rows.append(row)
         errors: list[str] = []
         if action == "save":
-            cleared, p.doubts = p.doubts, []  # Save clears every doubt: the reviewer has looked
             known = dict(p.estimates)
             amounts = [estimate_amount(grocy, ai, p, r["product_id"], ing.qty, ing.unit) if r["product_id"] else None
                        for ing, r in zip(table.ingredients, rows)]  # Claude's guesses, never shown or typed
-            if p.estimates != known or cleared:
+            if p.estimates != known:
                 store.save(p)  # kept: a failed Save doesn't ask again
             draft = p.draft.model_copy(update={"table": table})
             source_url = p.source if p.source.startswith(("http://", "https://")) else None
@@ -1070,7 +1112,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 try:
                     save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], a)
                                                for i, (r, a) in enumerate(zip(rows, amounts))], source_url,
-                                store.pdf_path(pid), photo=store.photo_path(pid), need_table=not p.tableless)
+                                store.pdf_path(pid), photo=store.photo_path(pid), need_table=not p.tableless,
+                                doubts=_standing(p.doubts, p.draft.table, table))
                 except ValueError as e:
                     errors.append(str(e))
                 else:

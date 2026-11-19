@@ -1,0 +1,10 @@
+{# The accuracy check's marks and the amount fields of a doubted ingredient row (web._doubt_ctx, _table_from_form). #}
+{% macro doubt_marks(nums) %}{% for n in nums or [] %}<sup class="doubt-mark"><span class="sr-only">Check this, note </span>{{ n }}</sup>{% endfor %}{% endmacro %}
+{% macro amount_fields(i, g) %}<fieldset class="amount-edit">
+<legend>The amount on the card</legend>
+<div class="amount-fields">
+<label class="field"><span>Amount</span><input name="qty_{{ i }}" value="{{ '%g'|format(g.qty) if g.qty is not none else '' }}" inputmode="decimal" autocomplete="off" aria-label="Amount of {{ g.name }}"></label>
+<label class="field"><span>Unit</span><input name="unit_{{ i }}" value="{{ g.unit }}" autocomplete="off" aria-label="Unit of {{ g.name }}"></label>
+<label class="field"><span>Packets</span><input name="packets_{{ i }}" value="{{ '%g'|format(g.packets) if g.packets else '' }}" type="number" min="0" step="any" inputmode="decimal" aria-label="Packets of {{ g.name }}"></label>
+</div>
+</fieldset>{% endmacro %}

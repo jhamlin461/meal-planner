@@ -796,13 +796,14 @@ def test_batch_and_make_table_run_check(tmp_path, web):
     for p in store.all():
         assert p.status == "ready" and p.draft.table == fixed
         assert p.doubts == [{"ref": "o1", "reason": "The card gives no time."}]
-    assert ai.checked["pdf"] in {store.pdf_path(p.id).read_bytes() for p in store.all()}
+    assert sorted(x["pdf"] for x in ai.checks) == sorted(store.pdf_path(p.id).read_bytes() for p in store.all())
 
     # Make the table: the corrections are saved and the doubts shown with the new table
     c, house, g = web
     rid = saved_recipe(g)
     c.app_ai.draft, c.app_ai.check = DRAFT.model_copy(update={"table": TABLE}), check
-    r = c.post(f"/recipes/{rid}/make-table", follow_redirects=False)
-    assert r.status_code == 200 and CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]) == fixed
-    assert 'role="note"' in r.text and "The card gives no time." in r.text and 'class="cfe-op doubt"' in r.text
+    r = c.post(f"/recipes/{rid}/make-table", follow_redirects=False)  # kept on the recipe: a reload costs nothing
+    assert r.status_code == 303 and CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]) == fixed
+    html = c.get(f"/recipes/{rid}").text
+    assert 'role="note"' in html and "The card gives no time." in html and 'class="cfe-op doubt"' in html
     assert "Bake it." in c.app_ai.checked["text"]

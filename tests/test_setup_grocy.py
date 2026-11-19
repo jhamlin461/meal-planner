@@ -15,7 +15,7 @@ def test_bootstrap_creates_everything():
     assert len(g.objects("locations")) == 10
     assert len(g.objects("meal_plan_sections")) == 2
     assert len(g.objects("shopping_lists")) == 3
-    assert len(g.objects("userfields")) == 11
+    assert len(g.objects("userfields")) == 12
     i = ids(g)
     assert set(i.unit) == set(UNITS) and set(i.list) == {"Meal plan", "Extras", "Running low"}
     kg_g = [c for c in convs if c["from_qu_id"] == i.unit["kg"] and c["to_qu_id"] == i.unit["g"]]

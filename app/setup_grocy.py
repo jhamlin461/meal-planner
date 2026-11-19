@@ -14,6 +14,7 @@ SUPPLIES = "Household supplies"  # product group
 TEXT, MULTI, NUM, CHECK = "text-single-line", "text-multi-line", "number-decimal", "checkbox"
 USERFIELDS = (
     [("recipes", "cfe_table", MULTI), ("recipes", "source_url", TEXT), ("recipes", "source_pdf", TEXT),
+     ("recipes", "doubts", MULTI),
      ("products", "walmart_item_id", TEXT), ("products", "staple", CHECK)]
     + [("products", n, NUM) for n in ("package_amount", "g_per_unit", "kcal_100", "protein_100", "carbs_100", "fat_100")]
 )

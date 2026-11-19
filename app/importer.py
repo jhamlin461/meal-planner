@@ -2,6 +2,7 @@
 import base64
 import io
 import ipaddress
+import itertools
 import json
 import logging
 import math
@@ -387,17 +388,36 @@ def apply_check(table: CfeTable, check: TableCheck) -> tuple[CfeTable, list[Doub
             or validate(new)):
         return table, [Doubt(ref="", reason=MISFIT), *(Doubt(ref="", reason=d.reason) for d in check.doubts)]
     refs = {"", *(f"i{n}" for n in range(len(names))), *(o.id for o in new.ops)}
-    return new, [d for d in check.doubts if d.ref in refs]
+    renamed = [Doubt(ref=f"i{n}", reason=f"Renamed from {old}; compare with the card.")
+               for n, (g, old) in enumerate(zip(new.ingredients, names)) if g.name != old]
+    return new, [d for d in check.doubts if d.ref in refs] + renamed
+
+
+def renumber(table: CfeTable, doubts: list[Doubt]) -> tuple[CfeTable, list[Doubt]]:
+    """Claude's step ids made o1, o2, ... in order, as the table editor numbers them (web._table_from_form), so a
+    doubt about a step still names it after the review form posts the steps back. Inputs that name no step (an
+    invalid table) are left as they are, and no new id takes their name."""
+    ids = {o.id for o in table.ops}
+    stray = {r for o in table.ops for r in o.inputs if r not in ids}
+    fresh = (f"o{n}" for n in itertools.count(1) if f"o{n}" not in stray)
+    new = {o.id: next(fresh) for o in table.ops}
+    ops = [o.model_copy(update={"id": new[o.id], "inputs": [new.get(r, r) for r in o.inputs]}) for o in table.ops]
+    return (table.model_copy(update={"ops": ops}),
+            [d.model_copy(update={"ref": new.get(d.ref, d.ref)}) for d in doubts])
 
 
 def check(ai, table: CfeTable, servings: int | None, **source) -> tuple[CfeTable, list[Doubt]]:
-    """The accuracy check of a table Claude just made, against the same source (text=, pdf=). Claude failing or
-    paused leaves the table unchecked, with no doubts."""
+    """The accuracy check of a table Claude just made, against the same source (text=, pdf=), with its steps
+    renumbered. Claude failing or paused leaves the table unchecked, with no doubts."""
     try:
-        return apply_check(table, ai.check_table(table, servings, **source))
-    except AIError:  # AIPaused too
+        got = apply_check(table, ai.check_table(table, servings, **source))
+    except AIPaused:
+        log.info("AI is paused; the table is kept unchecked")
+        got = table, []
+    except AIError:
         log.warning("could not check the table; keeping it unchecked", exc_info=True)
-        return table, []
+        got = table, []
+    return renumber(*got)
 
 
 def _structure(ai, http, url: str | None,
@@ -748,11 +768,13 @@ def put_photo(grocy, rid: int, jpeg: bytes) -> None:
 
 
 def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], source_url: str | None,
-                pdf_path: Path | None, photo: Path | None = None, need_table: bool = True) -> int:
+                pdf_path: Path | None, photo: Path | None = None, need_table: bool = True,
+                doubts: list[dict] = ()) -> int:
     """Create the reviewed recipe in Grocy. pdf_path is a PendingStore PDF (DATA_DIR/pending/<id>.pdf);
     it is copied to its sibling DATA_DIR/sources/<recipe_id>.pdf and source_pdf = "sources/<recipe_id>.pdf".
     photo (a PendingStore JPEG) becomes the recipe's picture; if that fails the recipe is still saved.
-    need_table=False (a free-mode import) saves a draft with no steps in its table as a recipe without a table."""
+    need_table=False (a free-mode import) saves a draft with no steps in its table as a recipe without a table.
+    `doubts` (the check's, still open) are kept on the recipe until its table editor saves."""
     ings = draft.table.ingredients
     by_index = {m.index: m for m in matches}
     bad = [i for i in range(len(ings)) if i not in by_index or by_index[i].product_id is None]
@@ -783,7 +805,7 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
                 "note": line_text(ing, 1),
                 **(needs_estimate(ing) if m.stock_amount is None else {})}))
         uf = {"cfe_table": draft.table.model_dump_json() if draft.table.ops else "", "source_url": source_url or "",
-              "source_pdf": ""}
+              "source_pdf": "", "doubts": json.dumps(list(doubts)) if doubts else ""}
         if pdf_path:
             dest = Path(pdf_path).parent.parent / "sources" / f"{rid}.pdf"
             dest.parent.mkdir(exist_ok=True)

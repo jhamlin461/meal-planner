@@ -302,6 +302,7 @@ class FakeAI:
                  check=None):
         self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
         self.check = check  # check_table's answer (a TableCheck, or an exception it raises); None: the table back
+        self.checks: list[dict] = []  # every check_table call's arguments; `checked` is the last
         self.error = error
         self.mode_ = mode  # the budget mode app.ai.AI.mode() would report
 
@@ -323,6 +324,7 @@ class FakeAI:
     def check_table(self, table, servings, text=None, pdf=None, image=None):
         from app.ai import TableCheck
         self.checked = {"table": table, "servings": servings, "text": text, "pdf": pdf}
+        self.checks.append(self.checked)
         if isinstance(self.check, Exception):
             raise self.check
         return self._ret(self.check or TableCheck(table=table, doubts=[]))

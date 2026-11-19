@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_packets.html" import packets %}
+{% from "_doubt_fields.html" import doubt_marks, amount_fields %}
 {% block title %}Review import{% endblock %}
 {% block main_attrs %}{% if p.status == "ready" and (pdf or photo) %} class="review"{% endif %}{% endblock %}
 {% block head %}{% if p.status == "processing" %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
@@ -30,8 +31,8 @@
 <p class="muted">Pick the product each ingredient comes from. Cooking the recipe takes what it uses out of your stock.</p>
 {% if missing %}<p><button class="btn wide" name="action" value="create_all">Create {{ missing }} missing product{{ "s" if missing > 1 }}</button></p>{% endif %}
 <ul class="rows review-rows">
-{% for row in rows %}{% set i = loop.index0 %}<li class="review-row">
-  <p class="review-text breakable">{{ row.text }}{{ packets(row.packets) }}</p>
+{% for row in rows %}{% set i = loop.index0 %}{% set doubted = marks.get("i" ~ i) %}<li class="review-row">
+  <p class="review-text breakable">{{ row.text }}{{ packets(row.packets) }}{{ doubt_marks(doubted) }}</p>
   <div class="row">
     <select name="product_{{ i }}" class="grow" aria-label="Product for {{ row.text }}">
       <option value="">Pick a product</option>
@@ -53,6 +54,7 @@
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
   </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
+  {% if doubted %}{{ amount_fields(i, table.ingredients[i]) }}{% endif %}
   {% if row.error %}<p class="error">{{ row.error }}</p>{% endif %}
 </li>
 {% endfor %}</ul>

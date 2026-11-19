@@ -501,7 +501,7 @@ def test_review_shows_no_internal_ids(env):
         assert "o1, i2" not in html and "Combines" in html and "Remove step" in html
         assert "Each step combines ingredients and earlier steps. Tap what goes into it." in html
     assert re.search(r'value="i1"[^>]*>\s*<span>egg</span>', pages[0])
-    assert re.search(r'value="r1"[^>]*>\s*<span>whisk</span>', pages[0])  # earlier step chip, by its label
+    assert re.search(r'value="o1"[^>]*>\s*<span>whisk</span>', pages[0])  # earlier step chip (renumbered), by label
 
 
 def test_combines_chips_round_trip(env):
@@ -1867,5 +1867,66 @@ def test_editing_a_row_clears_its_doubt(env):
     html = c.post(f"/import/{pid}", data=review_form(action="update", packets=["", "2"])).text  # egg's packets
     assert doubt_notes(html) == ["No time on the card.", "The card lists salt; no row has it."]
     assert store.get(pid).doubts == DOUBTS  # an edit isn't kept until Save, so neither is its clearing
-    html = c.post(f"/import/{pid}", data=review_form()).text  # Save (refused: no products picked)
-    assert doubt_notes(html) is None and "doubt" not in html and store.get(pid).doubts == []
+    html = c.post(f"/import/{pid}", data=review_form()).text  # a refused Save (no products picked) keeps them all
+    assert len(doubt_notes(html)) == 3 and store.get(pid).doubts == DOUBTS
+
+
+def test_step_doubts_survive_an_update_with_no_edits(env):
+    from app.ai import Doubt, TableCheck
+    g, ai, store, c, _ = env
+    t = CfeTable(pre=[], ingredients=soup_draft().table.ingredients,
+                 ops=[Op(id="whisk", label="whisk", inputs=["i0"]), Op(id="fold", label="fold in", inputs=["whisk", "i1"])])
+    ai.draft = RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
+    ai.check = TableCheck(table=t, doubts=[Doubt(ref="fold", reason="No time on the card."),
+                                           Doubt(ref="whisk", reason="Whisk how long?")])
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    p = store.all()[0]
+    html = c.post(f"/import/{p.id}", data={**chips(p.draft.table), "action": "update"}).text
+    assert doubt_notes(html) == ["No time on the card.", "Whisk how long?"]
+    assert ("cfe-op doubt", "fold in Check this, note 1") in table_cells(html)
+
+
+def test_a_doubted_row_gets_amount_fields_and_correcting_it_clears_the_doubt(env):
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    html = c.get(f"/import/{pid}").text
+    for f in ("qty", "unit", "packets"):  # the doubted egg row only; flour stays products-only
+        assert f'name="{f}_1"' in html and f'name="{f}_0"' not in html
+    html = c.post(f"/import/{pid}", data=review_form(action="update", qty_1="1", unit_1="", packets_1="")).text
+    assert len(doubt_notes(html)) == 3  # the fields as shown: nothing changed
+    html = c.post(f"/import/{pid}", data=review_form(action="update", qty_1="2", unit_1="", packets_1="")).text
+    assert doubt_notes(html) == ["No time on the card.", "The card lists salt; no row has it."]
+    assert ("cfe-ingredient", "2 dragon egg") in table_cells(html) and 'name="qty_1"' not in html
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, qty_1="2", unit_1="", packets_1=""),
+               follow_redirects=False)
+    assert r.status_code == 303
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    assert [(p["product_id"], p["amount"]) for p in pos] == [(flour, 250), (egg, 2)]
+
+
+def test_open_doubts_go_onto_the_recipe_until_the_table_editor_saves(env):
+    import json
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, op_label=["mix 2 min", ""]))
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    assert json.loads(g.userfields("recipes", rid)["doubts"]) == [DOUBTS[0], DOUBTS[2]]  # the step's was edited
+    html = c.get(f"/recipes/{rid}").text
+    assert doubt_notes(html) == ["The card says 2 dragon eggs.", "The card lists salt; no row has it."]
+    assert ("cfe-ingredient doubt", "1 dragon egg Check this, note 1") in table_cells(html)
+    html = c.get(f"/recipes/{rid}/table").text  # the editor offers the doubted row's amount
+    assert doubt_notes(html) == ["The card says 2 dragon eggs.", "The card lists salt; no row has it."]
+    assert 'name="qty_1"' in html and 'name="qty_0"' not in html
+    t = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    r = c.post(f"/recipes/{rid}/table", data={**chips(t), "action": "save", "qty_1": "2", "unit_1": "",
+                                              "packets_1": ""}, follow_redirects=False)
+    assert r.status_code == 303 and g.userfields("recipes", rid)["doubts"] == ""
+    assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients[1].qty == 2
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    assert pos[1]["amount"] == 2 and pos[1]["note"] == "2 dragon egg"  # the stock amount follows the new qty
+    assert doubt_notes(c.get(f"/recipes/{rid}").text) is None
