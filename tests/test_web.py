@@ -2099,6 +2099,51 @@ def test_link_saved_when_read_fails(env):
     ai.error = AIError("down")
     assert _link(c, pid).status_code == 200
     ai.error, ai.mode_ = None, "free"
+    reads = len(ai.walmart_reads)
     assert _link(c, pid).status_code == 200
+    assert len(ai.walmart_reads) == reads
     uf = g.userfields("products", pid)
     assert uf["walmart_item_id"] == "10450114" and float(uf["package_amount"]) == 500 and uf["package_source"] == "estimate"
+
+
+def test_link_saved_when_grocy_fails_after_the_link(env):
+    from app.ai import WalmartRead
+    from app.grocy import GrocyError
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(package_amount=907)
+    pid = _rice(g, package_amount=500)
+    real = g.set_userfields
+
+    def flaky(entity, id, data):
+        if "walmart_item_id" not in data:
+            raise GrocyError("down")
+        real(entity, id, data)
+    g.set_userfields = flaky
+    r = _link(c, pid)
+    assert r.status_code == 200 and g.userfields("products", pid)["walmart_item_id"] == "10450114"
+    assert float(g.userfields("products", pid)["package_amount"]) == 500
+
+
+def test_link_never_stamps_link_over_a_fixed_kitchen_measure(env):
+    from app.ai import WalmartRead
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(measure_factor=190)
+    pid = _rice(g, "Milk", unit="ml", measure="cups", measure_factor=236.6, measure_source="estimate")  # cups in ml: the constant wins
+    _link(c, pid)
+    uf = g.userfields("products", pid)
+    assert (float(uf["measure_factor"]), uf["measure_source"]) == (236.6, "estimate")
+    ai.walmart = WalmartRead(measure_factor=236.6)  # unchanged value: nothing to stamp either
+    _link(c, pid)
+    assert g.userfields("products", pid)["measure_source"] == "estimate"
+
+
+def test_link_g_per_unit_follows_package_source(env):
+    from app.ai import WalmartRead
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(package_amount=12, grams_per_piece=55)
+    eggs = _rice(g, "Eggs", unit="piece", package_amount=6, package_source="estimate", g_per_unit=50)
+    _link(c, eggs)
+    assert float(g.userfields("products", eggs)["g_per_unit"]) == 55  # estimate package: replaceable
+    owned = _rice(g, "Eggs 2", unit="piece", package_amount=6, package_source="owner", g_per_unit=50)
+    _link(c, owned)
+    assert float(g.userfields("products", owned)["g_per_unit"]) == 50  # owner package keeps its grams

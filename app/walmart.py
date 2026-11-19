@@ -1,7 +1,14 @@
 import html
+import logging
 import math
 import re
 from urllib.parse import unquote, urlencode, urlparse
+
+import httpx
+
+from app.grocy import GrocyError
+
+log = logging.getLogger(__name__)
 
 
 _ID_RE = re.compile(r"\d+")
@@ -49,13 +56,26 @@ def page_title(http, item_id: str) -> str | None:
     """The item page's <title>, or None on any failure or bot challenge. Sends nothing about the household."""
     from app.importer import UA  # lazy: importer's users import this module
     try:
-        r = http.get(f"https://www.walmart.com/ip/{item_id}", headers={"User-Agent": UA}, timeout=5,
-                     follow_redirects=True)
-        m = re.search(r"<title[^>]*>(.*?)</title>", r.text, re.S | re.I) if r.status_code == 200 else None
+        with http.stream("GET", f"https://www.walmart.com/ip/{item_id}", headers={"User-Agent": UA}, timeout=5,
+                         follow_redirects=False) as r:  # a redirect is a wall too: never leave walmart.com
+            body = b""
+            if r.status_code == 200:
+                for chunk in r.iter_bytes():
+                    body += chunk
+                    if len(body) > 200_000:  # the title is at the top
+                        break
+        m = re.search(r"<title[^>]*>(.*?)</title>", body[:200_000].decode("utf-8", "replace"), re.S | re.I)
     except Exception:  # never raises: the slug alone is enough
         return None
     t = html.unescape(m.group(1)).strip() if m else ""
     return None if not t or re.search(r"robot or human|captcha|access denied|verify", t, re.I) else t
+
+
+def _num(x) -> float | None:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
 
 
 def refine(grocy, ai, http, pid: int, link: str, item_id: str) -> None:
@@ -79,9 +99,11 @@ def refine(grocy, ai, http, pid: int, link: str, item_id: str) -> None:
                 not uf.get("g_per_unit") or uf.get("package_source") != "owner"):
             new["g_per_unit"] = r.grams_per_piece
         m = fixed(uf.get("measure"), r.measure_factor, stock) if uf.get("measure") else None
-        if m and uf.get("measure_source") != "owner":
+        # fixed() keeps a kitchen measure's own constant: that is not the link's value, so no "link" stamp
+        if m and uf.get("measure_source") != "owner" and m.factor == float(r.measure_factor) and m.factor != _num(
+                uf.get("measure_factor")):
             new |= {"measure_factor": m.factor, "measure_source": "link"}
         if new:
             grocy.set_userfields("products", pid, new)
-    except AIError:
-        pass
+    except (AIError, GrocyError, httpx.HTTPError):
+        log.warning("could not refine product %s from its Walmart link", pid, exc_info=True)
