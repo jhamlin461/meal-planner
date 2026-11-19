@@ -47,7 +47,7 @@
     <div class="fields pairs">
       <label class="field"><span>Counted in</span><select name="stock_unit_{{ i }}">{% for v, t in [("g", "Grams"), ("ml", "Millilitres"), ("piece", "Pieces")] %}<option value="{{ v }}"{% if m.stock_unit == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
       <label class="field"><span>Package size</span><input name="package_{{ i }}" value="{{ m.package }}" type="number" min="0" step="any" inputmode="decimal"></label>
-      <label class="field"><span>Kept in</span><select name="location_{{ i }}">{% for l in locations %}<option{% if l == (m.location or "Pantry") %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Kept in</span><select name="location_{{ i }}">{% for l in locations %}<option{% if l == (m.location or default_location) %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
       <label class="field"><span>Kind</span><select name="category_{{ i }}">{% for v, t in [("food", "Food"), ("supply", "Household supply")] %}<option value="{{ v }}"{% if m.category == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
     </div>
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>

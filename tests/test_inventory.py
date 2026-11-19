@@ -115,3 +115,17 @@ def test_review_manual_product_accepts_new_place(tmp_path):
     c.post(f"/import/{p.id}", data=form)
     tom = next(x for x in g.objects("products") if x["name"] == "Crushed tomatoes")
     assert tom["location_id"] == places(g)["Basement"]
+
+
+def test_remove_place_needs_a_real_target_and_keeps_one():
+    g = FakeGrocy()
+    bootstrap(g)
+    bid = add_place(g, "Basement")
+    for bad in (bid, 9999):
+        with pytest.raises(ValueError, match="Pick another place to move products to."):
+            remove_place(g, bid, bad)
+    for name, pid in list(places(g).items())[:-1]:
+        remove_place(g, pid, bid)
+    with pytest.raises(ValueError, match="Keep at least one place."):
+        remove_place(g, bid, bid)
+    assert list(places(g)) == ["Basement"]

@@ -32,6 +32,11 @@ def rename_place(grocy, id: int, name: str) -> None:
 
 
 def remove_place(grocy, id: int, move_to: int) -> None:
+    have = places(grocy)
+    if len(have) <= 1:
+        raise ValueError("Keep at least one place.")
+    if move_to == id or move_to not in have.values():
+        raise ValueError("Pick another place to move products to.")
     if any(int(e["location_id"]) == id and float(e["amount"]) > 0 for e in grocy.stock_entries()):
         label = next((n for n, i in places(grocy).items() if i == id), "that place")
         raise ValueError(f"Move or use up what's in {label} first.")

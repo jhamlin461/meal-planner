@@ -25,7 +25,7 @@
   <div class="fields pairs">
     <label class="field"><span>Counted in</span><select name="stock_unit"><option value="g">Grams</option><option value="ml">Millilitres</option><option value="piece">Pieces</option></select></label>
     <label class="field"><span>Package size</span><input name="package_amount" type="number" min="0" step="any" inputmode="decimal"></label>
-    <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == "Pantry" %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == default_location %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
     <label class="field"><span>Kind</span><select name="category"><option value="food">Food</option><option value="supply">Household supply</option></select></label>
   </div>
   <div class="card-actions"><button class="btn" type="button" id="manual-cancel">Cancel</button><button class="btn btn-primary">Save product</button></div>

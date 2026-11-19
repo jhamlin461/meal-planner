@@ -38,7 +38,7 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
-from app.inventory import add_place, places, remove_place, rename_place
+from app.inventory import add_place, default_place, places, remove_place, rename_place
 from app.setup_grocy import SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
@@ -645,7 +645,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     # ---- scanning -----------------------------------------------------------------------------------------------
     @app.get("/scan")
     def scan(request: Request):
-        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=list(places(grocy)))
+        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=list(places(grocy)),
+                    default_location=default_place(grocy))
 
     def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
         """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
@@ -710,9 +711,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/api/scan/manual")
     def api_scan_manual(code: str = Form(), action: Literal["add", "use"] = Form("add"), name: str = Form(""),
                         generic: str = Form(""), stock_unit: Literal["g", "ml", "piece"] = Form("g"),
-                        package_amount: str = Form(""), location: str = Form("Pantry"),
+                        package_amount: str = Form(""), location: str = Form(""),
                         category: Literal["food", "supply"] = Form("food")):
         """Free mode: a new product from the scan screen's form, created as Claude's guess would have been."""
+        location = location or default_place(grocy)
         if not (code.strip() and name.strip() and generic.strip()) or location not in places(grocy):
             msg = "Fill in the name, what it counts as and where it's kept."
             return JSONResponse({"status": "error", "message": msg}, status_code=400)
@@ -913,7 +915,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
                     pdf=store.pdf_path(p.id) is not None,
                     source_url=p.source if p.source.startswith(("http://", "https://")) else None,
-                    locations=list(places(grocy)),
+                    locations=list(places(grocy)), default_location=default_place(grocy),
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
