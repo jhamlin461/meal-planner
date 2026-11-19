@@ -82,7 +82,10 @@ def suggest(grocy, ai, monday: date) -> list[Pick]:
     try:
         items = ai.suggest_week(ctx).items
     except AIPaused:
-        return local_picks(ctx)
+        products = {int(p["id"]): p for p in grocy.objects("products")}
+        generic = {p["name"]: products[int(p["parent_product_id"])]["name"] for p in products.values()
+                   if p.get("parent_product_id") and int(p["parent_product_id"]) in products}
+        return local_picks(ctx, generic)
     out, seen = [], set()
     for s in items:
         try:
@@ -95,10 +98,12 @@ def suggest(grocy, ai, monday: date) -> list[Pick]:
     return out
 
 
-def local_picks(ctx: dict) -> list[Pick]:
+def local_picks(ctx: dict, generic: dict[str, str] | None = None) -> list[Pick]:
     """Without Claude: recipes using the most expiring stock first (then the most in stock), none cooked in the last
-    3 weeks, one per open slot in order, no repeats."""
-    expiring = {e["product"] for e in ctx["expiring"]}
+    3 weeks, one per open slot in order, no repeats. `generic` maps a brand product's name to its generic's, so
+    expiring brand stock counts for recipes that use the generic."""
+    generic = generic or {}
+    expiring = {generic.get(e["product"], e["product"]) for e in ctx["expiring"]}
     recent = set(ctx["recent_recipes"])
     recipes = sorted((r for r in ctx["recipes"] if r["name"] not in recent),
                      key=lambda r: (-len(expiring & set(r["ingredients"])), -r["fulfillment"]))

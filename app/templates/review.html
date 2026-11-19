@@ -27,7 +27,18 @@
     <span class="inline-group"><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for {{ row.text }}"><span>{{ row.stock_unit }}</span></span>
   </div>
   {% if row.packaging %}<p class="warn">Packet sizes vary — enter the real amount</p>{% endif %}
-  {% if not row.product_id %}<div class="row">
+  {% if not row.product_id and ai_free %}{% set m = row.manual or {} %}<div>
+    <label class="field"><span>New product name</span><input name="new_name_{{ i }}" value="{{ row.new_name }}"></label>
+    <label class="field"><span>Counts as</span><input name="generic_{{ i }}" value="{{ m.generic or row.new_name }}" list="generic-names" autocomplete="off"></label>
+    <p class="hint">Pick one you already have, or type a new one.</p>
+    <div class="fields">
+      <label class="field"><span>Counted in</span><select name="stock_unit_{{ i }}">{% for v, t in [("g", "Grams"), ("ml", "Millilitres"), ("piece", "Pieces")] %}<option value="{{ v }}"{% if m.stock_unit == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Package size</span><input name="package_{{ i }}" value="{{ m.package }}" type="number" min="0" step="any" inputmode="decimal"></label>
+      <label class="field"><span>Kept in</span><select name="location_{{ i }}">{% for l in locations %}<option{% if l == (m.location or "Pantry") %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Kind</span><select name="category_{{ i }}">{% for v, t in [("food", "Food"), ("supply", "Household supply")] %}<option value="{{ v }}"{% if m.category == v %} selected{% endif %}>{{ t }}</option>{% endfor %}</select></label>
+    </div>
+    <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
+  </div>{% elif not row.product_id %}<div class="row">
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
   </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
@@ -41,9 +52,10 @@
   {% if row.error %}<p class="error">{{ row.error }}</p>{% endif %}
 </li>
 {% endfor %}</ul>
+{% if ai_free %}<datalist id="generic-names">{% for g in generics %}<option value="{{ g.name }}">{% endfor %}</datalist>{% endif %}
 <h2>Table</h2>
 {% if cfe %}{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}
-{% elif tableless %}<p class="muted">No table yet. Add steps below, or make the table later from the recipe page.</p>
+{% elif tableless %}<p class="muted">No table yet. Add steps below, or press Make the table on the recipe page after the 1st.</p>
 {% else %}{% for e in table_errors %}<p class="error">{{ e }}</p>{% endfor %}{% endif %}
 {% include "_cfe_editor.html" %}
 <div class="form-actions"><button class="btn" name="action" value="update">Update</button><button class="btn btn-primary" name="action" value="save">Save recipe</button></div>

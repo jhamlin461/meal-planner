@@ -116,17 +116,22 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
     return fields, uf
 
 
-def _create(grocy, g, name: str, code: str, nutrition: dict) -> Resolved:
+def _create(grocy, g, name: str, code: str | None, nutrition: dict) -> Resolved:
+    """The generic (found or new) and a product `name` under it with barcode `code`. Without a code, a name that is
+    the generic's own makes just the generic."""
     fields, uf = _product_fields(grocy, g)
     parent = _generic_named(grocy, g.generic_name)
     if parent:
         uf = _align_to_parent(grocy, parent, fields, uf)
     parent_id = _find_or_create_generic(grocy, g.generic_name, fields, uf, nutrition)
+    if code is None and name.lower() == g.generic_name.lower():
+        return Resolved(parent_id, g.generic_name, g.generic_name, True)
     if any(p["name"].lower() == name.lower() for p in grocy.objects("products")):
-        name = f"{name} ({code})"
+        name = f"{name} ({code or g.generic_name})"
     pid = grocy.create("products", {"name": name, **fields, "parent_product_id": parent_id})
     grocy.set_userfields("products", pid, {**uf, **nutrition})
-    grocy.create("product_barcodes", {"product_id": pid, "barcode": code})
+    if code:
+        grocy.create("product_barcodes", {"product_id": pid, "barcode": code})
     return Resolved(pid, name, g.generic_name, True)
 
 
@@ -157,19 +162,19 @@ def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -
     return _create(grocy, g, f"{g.generic_name} (scanned)", code, {})
 
 
-def create_manual(grocy, http: httpx.Client, code: str, name: str, generic: str, stock_unit: str,
+def create_manual(grocy, http: httpx.Client, code: str | None, name: str, generic: str, stock_unit: str,
                   package_amount: float | None, location: str, category: str) -> Resolved:
-    """Free mode: the product the scan screen's form describes, created as resolve() would from Claude's guess
-    (shelf life from the generic it joins, else a week; nutrition from Open Food Facts when it has the code)."""
-    hit = grocy.product_by_barcode(code)
-    if hit:  # scanned twice before saving
+    """Free mode: the product a form describes (the scan screen's, or the import review's with no barcode),
+    created as resolve() would from Claude's guess (shelf life from the generic it joins, else a week; nutrition
+    from Open Food Facts when it has the code)."""
+    if code and grocy.product_by_barcode(code):  # scanned twice before saving
         return resolve(grocy, None, http, code)
     parent = _generic_named(grocy, generic)
     days = int(float(parent.get("default_best_before_days") or 7)) if parent else 7
     g = ProductGuess.model_construct(generic_name=parent["name"] if parent else generic, is_new_generic=parent is None,
                                      stock_unit=stock_unit, package_amount=package_amount, location=location,
                                      best_before_days=days, g_per_unit=None, category=category)
-    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}))
+    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}) if code else {})
 
 
 def relink(grocy, product_id: int, generic_name: str) -> None:

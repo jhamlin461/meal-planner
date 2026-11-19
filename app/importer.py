@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 
 from app.ai import AIError, AIPaused, RecipeDraft
-from app.barcode import _generics, _product_fields, generic_choices
+from app.barcode import _generic_named, _generics, _product_fields, create_manual, generic_choices
 from app.cfe import CfeTable, Ingredient, ingredient_text, validate
 from app.nutrition import fill_missing_nutrition
 from app.qty import is_packaging, normalize_unit, parse_qty, to_stock_amount
@@ -276,6 +276,7 @@ class Pending(BaseModel):
     draft: RecipeDraft | None = None
     error: str | None = None
     batch_id: str | None = None
+    tableless: bool = False  # read without Claude from the page's JSON-LD: may be saved without a table
 
 
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -342,27 +343,56 @@ def recipe_part(text: str) -> str:
     return "\n".join(lines[max(0, start - 10):])[:PAGE_CAP]
 
 
-def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraft, bytes | None]:
-    """The draft and the dish photo (None when there is none)."""
-    if pdf:
-        return ai.structure_recipe(pdf=pdf), pdf_photo(pdf)
-    if not url:
-        raise ValueError("nothing to import: no URL or PDF")
-    r = http.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
-    r.raise_for_status()
-    text = extract_jsonld_recipe(r.text)
+def _recipe_text(ai, html: str) -> str:
+    """What Claude reads from a web page: its JSON-LD recipe, else its visible text (trimmed in economy mode)."""
+    text = extract_jsonld_recipe(html)
     if text is None:
-        text = page_text(r.text)
+        text = page_text(html)
         if ai.mode() == "economy":
             text = recipe_part(text)
+    return text
+
+
+def _get(http, url: str) -> httpx.Response:
+    r = http.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
+    r.raise_for_status()
+    return r
+
+
+def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraft, bytes | None, bool]:
+    """The draft, the dish photo (None when there is none) and whether it was read without Claude (no table)."""
+    if pdf:
+        return ai.structure_recipe(pdf=pdf), pdf_photo(pdf), False
+    if not url:
+        raise ValueError("nothing to import: no URL or PDF")
+    r = _get(http, url)
+    tableless = False
     try:
-        draft = ai.structure_recipe(text=text)
+        draft = ai.structure_recipe(text=_recipe_text(ai, r.text))
     except AIPaused:
         node = _jsonld(r.text)
         if node is None:
             raise  # nothing to go on without Claude: wait for the 1st
-        draft = draft_from_jsonld(node)
-    return draft, fetch_photo(http, photo_url(r.text, str(r.url)))
+        draft, tableless = draft_from_jsonld(node), True
+    return draft, fetch_photo(http, photo_url(r.text, str(r.url))), tableless
+
+
+def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = None) -> CfeTable:
+    """"Make the table" for a saved recipe: read its kept PDF, else its web page, else `text` (its saved ingredients
+    and steps; also used when the page can't be fetched). Raises AIError (AIPaused in free mode), or ValueError when
+    Claude's table doesn't check out."""
+    if pdf:
+        draft = ai.structure_recipe(pdf=pdf)
+    else:
+        if url:
+            try:
+                text = _recipe_text(ai, _get(http, url).text)
+            except httpx.HTTPError:
+                log.warning("could not fetch %s; using the saved recipe", url, exc_info=True)
+        draft = ai.structure_recipe(text=text)
+    if validate(draft.table):
+        raise ValueError("the table Claude made doesn't check out; try again, or make it by hand with Edit table")
+    return draft.table
 
 
 def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf: bytes | None) -> None:
@@ -382,12 +412,12 @@ def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf
         log.exception("could not record result of import %s", pending_id)
 
 
-def _ready(store: PendingStore, p: Pending, draft: RecipeDraft, photo: bytes | None) -> None:
+def _ready(store: PendingStore, p: Pending, draft: RecipeDraft, photo: bytes | None, tableless: bool = False) -> None:
     if photo:
         store.save_photo(p.id, photo)
     if draft.servings is None:
         draft.servings = 2
-    p.status, p.draft, p.error, p.batch_id = "ready", draft, None, None
+    p.status, p.draft, p.error, p.batch_id, p.tableless = "ready", draft, None, None, tableless
 
 
 BATCH_MIN = 3  # economy: this many PDFs imported at once go through one Message Batch
@@ -634,10 +664,21 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
     return rid
 
 
-def create_generic(grocy, ai, http, settings, name: str) -> int:
-    """New generic product for an unmatched ingredient (Claude fills the details), or the existing one."""
+def create_generic(grocy, ai, http, settings, name: str, details: dict | None = None) -> int:
+    """New generic product for an unmatched ingredient, or the existing one. Claude fills the details; in free mode
+    the reviewer does: `details` has generic, stock_unit, package_amount, location and category (create_manual's
+    fields), and the generic it names is the one returned."""
     name = name.strip()
     generics = _generics(grocy)
+    if details:
+        generic = details["generic"].strip() or name
+        hit = _generic_named(grocy, generic)
+        if hit is None:
+            r = create_manual(grocy, http, None, name, generic, details["stock_unit"], details["package_amount"],
+                              details["location"], details["category"])
+            hit = _generic_named(grocy, r.generic_name)
+            fill_missing_nutrition(grocy, int(hit["id"]), settings.fdc_api_key, http)
+        return int(hit["id"])
     hit = next((p for p in generics if p["name"].lower() == name.lower()), None)
     if hit:
         return int(hit["id"])

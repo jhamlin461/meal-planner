@@ -22,6 +22,8 @@
 <div class="cross-bar"><p class="muted">Tap a step or an ingredient to cross it off.</p><button class="btn" type="button" id="start-over">Start over</button></div>
 <details class="steps"><summary>Steps</summary><div class="prose">{{ (r.description or "")|safe }}</div></details>
 {% else %}
+{% if ai_free %}<p class="muted">The table can be made after the 1st.</p>
+{% else %}<form method="post" action="/recipes/{{ r.id }}/make-table"><button class="btn btn-primary">Make the table</button></form>{% endif %}
 <h2>Ingredients</h2>
 <ul class="rows ingredients">{% for line in fallback %}<li>{{ line }}</li>{% endfor %}</ul>
 <h2>Steps</h2>

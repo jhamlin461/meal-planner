@@ -146,6 +146,11 @@ if (video) {
     });
   });
 
+  document.getElementById("manual-cancel").addEventListener("click", () => {
+    manual.hidden = true;
+    toast(`Nothing saved for ${manualCode}.`);
+  });
+
   manual.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(manual);

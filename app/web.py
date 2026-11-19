@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ValidationError
 
-from app.ai import AI, AIError, budget_mode, month
+from app.ai import AI, AIError, AIPaused, budget_mode, month
 from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
 from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
 from app.config import Settings, load_settings
@@ -33,9 +33,9 @@ from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
-from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic, process,
-                          propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
-                          to_jpeg)
+from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic, make_table,
+                          page_text, process, propose_matches, put_photo, save_recipe, start_worker, stock_amount_for,
+                          submit_batch, to_jpeg)
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
@@ -510,7 +510,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/me")
     def me(request: Request):
         return page(request, "me.html", who=current_who(request), ai_spent=house.ai_spent(month()),
-                    ai_budget=settings.ai_monthly_budget, ai_mode=ai_mode())
+                    ai_budget=settings.ai_monthly_budget, ai_economy_at=settings.ai_economy_at, ai_mode=ai_mode())
 
     # ---- household supplies (Grocy product group; keep-at-least is the generic's min stock amount, counting the stock
     # of every brand under it) ------------------------------------------------------------------------------------
@@ -707,6 +707,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if not (code.strip() and name.strip() and generic.strip()) or location not in LOCATIONS:
             msg = "Fill in the name, what it counts as and where it's kept."
             return JSONResponse({"status": "error", "message": msg}, status_code=400)
+        if package_amount.strip() and _num(package_amount) is None:
+            return JSONResponse({"status": "error", "message": "The package size must be a number above 0."},
+                                status_code=400)
         r = create_manual(grocy, http, code.strip(), name.strip(), generic.strip(), stock_unit, _num(package_amount),
                           location, category)
         return apply_scan(r, action)
@@ -753,7 +756,30 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return page(request, "recipe.html", status_code, r=r, servings=servings, cfe=cfe, fallback=fallback,
                     error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
-                    source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat())
+                    source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat(),
+                    ai_free=ai_mode() == "free")
+
+    @app.post("/recipes/{rid}/make-table")
+    def make_table_post(request: Request, rid: int):  # plain def: Claude takes a while, FastAPI threadpools it
+        """Structure a recipe that has no table (its kept PDF, else its page, else its saved text) and save it."""
+        r = recipe_or_404(rid)
+        uf = grocy.userfields("recipes", rid)
+        pdf = settings.data_dir / "sources" / f"{rid}.pdf"  # where save_recipe keeps it; never a path from Grocy
+        positions = grocy.objects("recipes_pos", recipe_id=rid)
+        products = {int(p["id"]): p for p in grocy.objects("products")}
+        lines = [p.get("note") or ingredient_text(i, 1) for p, i in zip(positions, position_ingredients(positions,
+                                                                                                         products))]
+        text = "\n".join([r["name"], "", "Ingredients:", *(f"- {x}" for x in lines), "", "Instructions:",
+                          page_text(r.get("description") or "")])
+        try:
+            table = make_table(ai, http, text, uf.get("source_url") or None,
+                               pdf.read_bytes() if uf.get("source_pdf") and pdf.is_file() else None)
+        except AIPaused:
+            return recipe_page(request, rid, error="The table can be made after the 1st.", status_code=409)
+        except (AIError, ValueError) as e:
+            return recipe_page(request, rid, error=f"Couldn't make the table: {e}", status_code=502)
+        grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
+        return back(f"/recipes/{rid}")
 
     @app.get("/recipes/{rid}/photo")
     def recipe_photo(rid: int, w: int = 800):
@@ -824,8 +850,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/import")
     def import_list(request: Request):
         pend = store.all()
-        return page(request, "import.html", pending=pend, resume=_resume_day(),
-                    busy=any(p.status in ("processing", "reading") for p in pend))
+        refresh = 5 if any(p.status == "processing" for p in pend) else \
+            30 if any(p.status == "reading" for p in pend) else None  # a batch takes minutes: check less often
+        return page(request, "import.html", pending=pend, resume=_resume_day(), refresh=refresh)
 
     @app.post("/import")
     def import_post(bg: BackgroundTasks, files: list[UploadFile] = File(default=[]), urls: str = Form("")):
@@ -837,6 +864,16 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             p = store.new(url)
             bg.add_task(process, store, ai, http, p.id, url, None)
         return back("/import")
+
+    def manual_details(m: dict) -> dict:
+        """The review row's new-product fields (free mode), checked like the scan screen's."""
+        if m["stock_unit"] not in ("g", "ml", "piece") or m["location"] not in LOCATIONS \
+                or m["category"] not in ("food", "supply"):
+            raise ValueError("Pick how it's counted, where it's kept and what kind it is.")
+        if m["package"] and _num(m["package"]) is None:
+            raise ValueError("The package size must be a number above 0.")
+        return {"generic": m["generic"], "stock_unit": m["stock_unit"], "package_amount": _num(m["package"]),
+                "location": m["location"], "category": m["category"]}
 
     def pending_or_404(pid: str):
         p = store.get(pid)
@@ -854,9 +891,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["stock_unit"] = units.get(_int(prod.get("qu_id_stock")), "") if prod else ""
             row["packaging"] = is_packaging(row["unit"])
             row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
-        tableless = not table.ops and not p.draft.table.ops  # a free-mode import: a table can be made later
+        tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
+                    locations=LOCATIONS,
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
@@ -892,10 +930,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         for i, ing in enumerate(table.ingredients):
             f = lambda k: str(form.get(f"{k}_{i}") or "").strip()  # noqa: E731
             row = {"product_id": _int(f("product")), "amount": _num(f("amount")), "factor": f("factor"),
-                   "new_name": f("new_name") or ing.name, "error": None, "note": None}
+                   "new_name": f("new_name") or ing.name, "error": None, "note": None,
+                   "manual": {k: f(k) for k in ("generic", "stock_unit", "package", "location", "category")}}
             try:
                 if action == f"create:{i}":
-                    row["product_id"] = create_generic(grocy, ai, http, settings, row["new_name"])
+                    row["product_id"] = create_generic(grocy, ai, http, settings, row["new_name"],
+                                                       manual_details(row["manual"]) if ai.mode() == "free" else None)
                 pid_ = row["product_id"]
                 if pid_ and pid_ != _int(f("prev")):  # product changed: amount must be in its stock unit
                     row["amount"] = stock_amount_for(grocy, pid_, ing.qty, ing.unit)
@@ -930,7 +970,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 try:
                     rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
                                                      for i, r in enumerate(rows)], source_url, store.pdf_path(pid),
-                                      photo=store.photo_path(pid), need_table=bool(p.draft.table.ops))
+                                      photo=store.photo_path(pid), need_table=not p.tableless)
                 except ValueError as e:
                     errors.append(str(e))
                 else:

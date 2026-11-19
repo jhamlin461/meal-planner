@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Import{% endblock %}
-{% block head %}{% if busy %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+{% block head %}{% if refresh %}<meta http-equiv="refresh" content="{{ refresh }}">{% endif %}{% endblock %}
 {% block heading %}<h1>Import recipes</h1>{% endblock %}
 {% block content %}
 <form method="post" enctype="multipart/form-data" class="card">

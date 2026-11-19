@@ -144,12 +144,15 @@ def web(tmp_path):
     bootstrap(g)
     house = HouseStore(tmp_path / "house.db")
     settings = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
-    app = create_app(g, FakeAI(picks=Picks(items=[])), httpx.Client(transport=httpx.MockTransport(
+    ai = FakeAI(picks=Picks(items=[]))
+    app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(
         lambda r: httpx.Response(404))), settings, PendingStore(tmp_path / "pending"), house=house)
-    return TestClient(app, cookies={"who": "kitchen"}), house, g
+    c = TestClient(app, cookies={"who": "kitchen"})
+    c.app_ai = ai
+    return c, house, g
 
 
-@pytest.mark.parametrize("dollars,words", [(12.5, "Full"), (83.2, "Economy — cheaper settings until the 1st"),
+@pytest.mark.parametrize("dollars,words", [(12.5, "Full, the best settings until $80 is used this month"),(83.2, "Economy — cheaper settings until the 1st"),
                                            (100, "Paused until the 1st — using the free fallbacks")])
 def test_me_page_shows_this_months_ai_spend_and_mode(web, dollars, words):
     c, house, _ = web
@@ -516,3 +519,204 @@ def test_free_review_asks_for_the_factor_instead_of_suggesting(tmp_path):
     pid = c.grocy.create("products", {"name": "Flour", "qu_id_stock": ids(c.grocy).unit["g"]})
     html = c.post(f"/import/{p.id}", data={"action": "update", "product_0": str(pid)}).text
     assert 'name="factor_0"' in html and 'value="suggest:0"' not in html
+
+
+# ---- review round 1 ----------------------------------------------------------------------------------------------
+def saved_recipe(g, table=None):
+    """A saved recipe with one position (flour) and steps; no table unless given."""
+    from app.importer import IngredientMatch, save_recipe
+    from app.setup_grocy import ids
+    from app.cfe import Ingredient
+    pid = g.create("products", {"name": "Flour", "qu_id_stock": ids(g).unit["g"]})
+    t = table or CfeTable(pre=[], ops=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour")])
+    draft = RecipeDraft(title="Bread", servings=2, steps=["Mix it.", "Bake it."], table=t)
+    return save_recipe(g, draft, [IngredientMatch(0, pid, 240)], None, None, need_table=False)
+
+
+TABLE = CfeTable.model_validate({"pre": [], "ingredients": [{"qty": 2, "unit": "cup", "name": "flour"}],
+                                 "ops": [{"id": "o1", "label": "mix", "inputs": ["i0"]}]})
+
+
+def test_make_the_table_structures_the_saved_recipe(web):
+    c, house, g = web
+    rid = saved_recipe(g)
+    ai = c.app_ai
+    ai.draft = DRAFT.model_copy(update={"table": TABLE})
+    html = c.get(f"/recipes/{rid}").text
+    assert f'action="/recipes/{rid}/make-table"' in html and "Make the table" in html
+    r = c.post(f"/recipes/{rid}/make-table", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/recipes/{rid}"
+    assert "Bread" in ai.seen_text and "flour" in ai.seen_text.lower() and "Bake it." in ai.seen_text
+    assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]) == TABLE
+    assert "Make the table" not in c.get(f"/recipes/{rid}").text
+
+
+def test_make_the_table_uses_the_kept_pdf(web, tmp_path):
+    c, house, g = web
+    rid = saved_recipe(g)
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "sources" / f"{rid}.pdf").write_bytes(b"%PDF-kept")
+    g.set_userfields("recipes", rid, {"source_pdf": f"sources/{rid}.pdf"})
+    c.app_ai.draft = DRAFT.model_copy(update={"table": TABLE})
+    c.post(f"/recipes/{rid}/make-table")
+    assert c.app_ai.seen_pdf == b"%PDF-kept"
+
+
+def test_make_the_table_waits_for_the_1st_in_free_mode(web):
+    c, house, g = web
+    rid = saved_recipe(g)
+    spend(house, 100, datetime.now())
+    c.app_ai.mode_ = "free"
+    html = c.get(f"/recipes/{rid}").text
+    assert "The table can be made after the 1st" in html and "make-table" not in html
+    r = c.post(f"/recipes/{rid}/make-table")
+    assert "The table can be made after the 1st" in r.text and g.userfields("recipes", rid)["cfe_table"] == ""
+
+
+def test_free_review_creates_a_new_product_by_hand_and_saves_end_to_end(tmp_path):
+    from app.importer import process
+    ai = FakeAI(mode="free")
+    c, store = import_app(tmp_path, ai)
+    g = c.grocy
+    p = store.new("https://example.com/soup")
+    process(store, ai, jsonld_http(), p.id, "https://example.com/soup", None)
+    html = c.get(f"/import/{p.id}").text
+    assert 'name="stock_unit_0"' in html and 'name="location_0"' in html and 'name="category_0"' in html
+    form = {"new_name_0": "Crushed tomatoes", "generic_0": "Crushed tomatoes", "stock_unit_0": "g",
+            "package_0": "794", "location_0": "Pantry", "category_0": "food", "action": "create:0"}
+    html = c.post(f"/import/{p.id}", data=form).text
+    tom = next(x for x in g.objects("products") if x["name"] == "Crushed tomatoes")
+    assert not tom.get("parent_product_id") and g.userfields("products", tom["id"])["package_amount"] == 794
+    assert f'<option value="{tom["id"]}" selected>' in html
+    from app.setup_grocy import ids
+    i = ids(g)
+    butter = g.create("products", {"name": "Butter", "qu_id_stock": i.unit["g"]})
+    onion = g.create("products", {"name": "Onion", "qu_id_stock": i.unit["piece"]})
+    save = {"action": "save", "product_0": tom["id"], "prev_0": tom["id"], "amount_0": "794",
+            "product_1": butter, "prev_1": butter, "amount_1": "28", "product_2": onion, "prev_2": onion,
+            "amount_2": "1"}
+    r = c.post(f"/import/{p.id}", data=save, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert [x["product_id"] for x in g.objects("recipes_pos", recipe_id=rid)] == [tom["id"], butter, onion]
+    assert g.userfields("recipes", rid)["cfe_table"] == ""
+
+
+def test_full_mode_still_needs_a_step(tmp_path):
+    c, store = import_app(tmp_path, FakeAI())
+    p = store.new("x")
+    p.status = "ready"
+    p.draft = RecipeDraft(title="T", servings=2, steps=[], table=CfeTable(pre=[], ops=[], ingredients=[]))
+    store.save(p)
+    html = c.post(f"/import/{p.id}", data={"action": "save"}).text
+    assert "Add at least one step" in html and not c.grocy.objects("recipes")
+
+
+def batch_house(tmp_path):
+    """An economy AI with a real meter and a stub batches API whose results are set later."""
+    house = HouseStore(tmp_path / "house.db")
+    spend(house, 85, datetime.now())
+    results = []
+    batches = NS(create=lambda requests: NS(id="msgbatch_1"), retrieve=lambda bid: NS(processing_status="ended"),
+                 results=lambda bid: iter(results))
+    return AI(NS(messages=NS(batches=batches)), house), house, results
+
+
+def submitted(tmp_path, ai, results):
+    from app.importer import submit_batch
+    store = PendingStore(tmp_path / "pending")
+    pend = [store.new(f"r{n}.pdf", pdf=b"%PDF-" + bytes([48 + n])) for n in range(3)]
+    assert submit_batch(store, ai, pend)
+    results += [NS(custom_id=p.id, result=NS(type="succeeded", message=text_msg(DRAFT.model_dump_json())))
+                for p in pend]
+    return store, pend
+
+
+def test_a_batch_is_metered_once_even_when_collecting_fails_midway(tmp_path, monkeypatch):
+    from app import importer
+    ai, house, results = batch_house(tmp_path)
+    store, pend = submitted(tmp_path, ai, results)
+    calls = []
+
+    def flaky(pdf):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("disk hiccup")
+        return None
+    monkeypatch.setattr(importer, "pdf_photo", flaky)
+    importer.tick(store, ai, None)
+    assert {p.status for p in store.all()} == {"ready", "reading"}
+    importer.tick(store, ai, None)
+    assert {p.status for p in store.all()} == {"ready"}
+    assert ai.spent() == pytest.approx(85 + 3 * 2)  # 1M input tokens each at half of $4, counted once
+    assert house.open_batches() == []
+
+
+def test_a_batch_whose_imports_were_all_discarded_is_still_metered(tmp_path):
+    from app.importer import tick
+    ai, house, results = batch_house(tmp_path)
+    store, pend = submitted(tmp_path, ai, results)
+    for p in pend:
+        store.delete(p.id)
+    assert house.open_batches() == ["msgbatch_1"]
+    tick(store, ai, None)
+    tick(store, ai, None)
+    assert ai.spent() == pytest.approx(85 + 6) and house.open_batches() == []
+
+
+def test_one_bad_batch_does_not_stall_the_others(tmp_path):
+    from app.importer import tick
+    store = PendingStore(tmp_path)
+    a, b = store.new("a.pdf", pdf=b"%PDF-a"), store.new("b.pdf", pdf=b"%PDF-b")
+    for p, bid in ((a, "bad"), (b, "good")):
+        p.status, p.batch_id = "reading", bid
+        store.save(p)
+
+    class TwoBatches(FakeAI):
+        def recipe_batch_results(self, bid):
+            if bid == "bad":
+                raise RuntimeError("broken")
+            return {b.id: DRAFT}
+    tick(store, TwoBatches(), None)
+    assert store.get(b.id).status == "ready" and store.get(a.id).status == "reading"
+
+
+def test_manual_product_needs_a_positive_package_size(tmp_path):
+    g = FakeGrocy()
+    bootstrap(g)
+    app = create_app(g, FakeAI(mode="free"), httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(404))), Settings("", "", "", "KEY", None, 6, tmp_path, 3),
+        PendingStore(tmp_path / "pending"), house=HouseStore(tmp_path / "house.db"))
+    c = TestClient(app, cookies={"who": "kitchen"})
+    form = {"code": "111", "name": "Rice", "generic": "Rice", "stock_unit": "g", "location": "Pantry",
+            "category": "food"}
+    for bad in ("0", "-3", "lots"):
+        assert c.post("/api/scan/manual", data={**form, "package_amount": bad}).status_code == 400
+    assert c.post("/api/scan/manual", data={**form, "package_amount": ""}).json()["status"] == "need_amount"
+    assert 'id="manual-cancel"' in c.get("/scan").text
+
+
+def test_import_page_refreshes_slowly_while_only_batches_read(tmp_path):
+    c, store = import_app(tmp_path, FakeAI())
+    p = store.new("a.pdf", pdf=b"%PDF")
+    p.status, p.batch_id = "reading", "msgbatch_1"
+    store.save(p)
+    assert 'http-equiv="refresh" content="30"' in c.get("/import").text
+    store.new("b.pdf", pdf=b"%PDF")  # processing
+    assert 'http-equiv="refresh" content="5"' in c.get("/import").text
+
+
+def test_free_week_suggestions_count_brand_stock_toward_its_generic(fake_grocy_with_week):
+    from datetime import date, timedelta
+    from app.suggest import suggest
+    g = fake_grocy_with_week
+    for r in g.objects("meal_plan"):
+        g.delete("meal_plan", r["id"])
+    mon = date(2026, 11, 16)
+    g.entities["products"][11] = {"id": 11, "name": "Spinach"}
+    g.entities["products"][12] = {"id": 12, "name": "Acme baby spinach", "parent_product_id": 11}
+    g.entities["recipes"][2] = {"id": 2, "name": "Spinach pie", "base_servings": 2}
+    g.entities["recipes_pos"][2] = {"id": 2, "recipe_id": 2, "product_id": 11, "amount": 1, "note": ""}
+    g.add_stock(12, 1, date.today() + timedelta(days=1), None)
+    picks = suggest(g, FakeAI(mode="free"), mon)
+    assert picks[0].recipe_id == 2 and "Spinach" in picks[0].reason

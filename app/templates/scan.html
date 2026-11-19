@@ -28,7 +28,7 @@
   </div>
   <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == "Pantry" %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
   <label class="field"><span>Kind</span><select name="category"><option value="food">Food</option><option value="supply">Household supply</option></select></label>
-  <div class="card-actions"><button class="btn btn-primary">Save product</button></div>
+  <div class="card-actions"><button class="btn" type="button" id="manual-cancel">Cancel</button><button class="btn btn-primary">Save product</button></div>
 </form>
 <p class="scan-elsewhere"><a class="btn" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
 <dialog id="ask" aria-labelledby="ask-text">
