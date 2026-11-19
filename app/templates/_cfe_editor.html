@@ -12,6 +12,7 @@
 {% for o in table.ops + [none] %}{% set k = loop.index0 %}<li class="step-row">
   <input type="hidden" name="op_id" value="{{ o.id if o else '' }}">
   <label class="field"><span>{{ "What to do" if o else "New step" }}</span><input name="op_label" value="{{ o.label if o else '' }}"></label>
+  <label class="field"><span>Where</span><input name="op_where" value="{{ o.where if o else '' }}" placeholder="in a large pot"></label>
   <fieldset class="chips"><legend>Combines</legend>
     {% for g in table.ingredients %}{{ chip(k, "i" ~ loop.index0, o and ("i" ~ loop.index0) in o.inputs) }}{% endfor %}
     {% for e in table.ops[:k] %}{{ chip(k, e.id, o and e.id in o.inputs, " chip-step") }}{% endfor %}

@@ -54,3 +54,20 @@ def test_partial_renders_brownie():
 def test_validate_flags_op_without_inputs():
     t = BROWNIE.model_copy(update={"ops": BROWNIE.ops + [Op(id="o6", label="rest", inputs=[])]})
     assert "o6 has no inputs" in validate(t)
+
+
+def test_op_where_round_trips_and_renders():
+    t = BROWNIE.model_copy(update={"ops": [o.model_copy(update={"where": "in a small pot"}) if o.id == "o1" else o
+                                           for o in BROWNIE.ops]})
+    back = CfeTable.model_validate_json(t.model_dump_json())
+    assert back.ops[0].where == "in a small pot" and back.ops[1].where == ""
+    old = CfeTable.model_validate({"pre": [], "ingredients": [{"qty": 1, "unit": "", "name": "egg"}],
+                                   "ops": [{"id": "o1", "label": "beat", "inputs": ["i0"]}]})  # saved before `where`
+    assert old.ops[0].where == ""
+    cells = [c for row in layout(t) for c in row]
+    melt = next(c for c in cells if c.text == "melt")
+    assert melt.where == "in a small pot" and melt.ref == "o1" and cells[0].ref == "i0"
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent.parent / "app" / "templates"))
+    html = env.get_template("_cfe_table.html").render(pre=t.pre, grid=layout(t), ncols=ncols(t))
+    assert 'melt<span class="cfe-where">in a small pot</span>' in html
+    assert html.count('class="cfe-where"') == 1  # steps without a where render as before

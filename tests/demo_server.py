@@ -12,7 +12,7 @@ from app.ai import Picks, RecipeDraft
 from app.config import Settings
 from app.home import add_starters
 from app.house import HouseStore
-from app.importer import IngredientMatch, PendingStore, save_recipe
+from app.importer import IngredientMatch, PendingStore, put_photo, save_recipe, to_jpeg
 from app.mealplan import plan_meal
 from app.reminders import washer_finished
 from app.setup_grocy import bootstrap, ids, supplies_group
@@ -20,6 +20,16 @@ from app.web import create_app
 from tests.fakes import FakeAI, FakeGrocy, FakeHA
 from tests.test_cfe import BROWNIE
 from tests.test_web import soup_draft
+
+
+def dish(color=(92, 58, 40)) -> bytes:
+    """A stand-in dish photo: a warm plate on a darker table."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (1200, 900), (40, 34, 30))
+    d = ImageDraw.Draw(img)
+    d.ellipse((200, 100, 1000, 850), fill=(230, 226, 218))
+    d.ellipse((330, 230, 870, 720), fill=color)
+    return to_jpeg(img)
 
 
 def seed(data: Path, settings: Settings):
@@ -50,8 +60,13 @@ def seed(data: Path, settings: Settings):
     washer_finished(g, house, datetime.now() - timedelta(minutes=20))  # the laundry task
 
     pids = [product(ing.name) for ing in BROWNIE.ingredients]
-    draft = RecipeDraft(title="Fudgy brownies", servings=4, steps=["Mix", "Bake"], table=BROWNIE)
+    wheres = ["in a small pot", "same pot", "same pot", "in a large bowl", "in the 8x8 pan"]
+    table = BROWNIE.model_copy(update={"ops": [o.model_copy(update={"where": w}) for o, w in zip(BROWNIE.ops, wheres)]})
+    draft = RecipeDraft(title="Fudgy brownies", servings=4, steps=["Mix", "Bake"], table=table)
     rid = save_recipe(g, draft, [IngredientMatch(n, p, 100) for n, p in enumerate(pids)], None, None)
+    put_photo(g, rid, dish())
+    for name in ("Weeknight chili", "Sheet pan chicken with a rather long name and lemons"):
+        g.create("recipes", {"name": name, "base_servings": 4})
     plan_meal(g, today, "Dinner", rid, 4, settings, today=today)
 
     soon = []
@@ -75,6 +90,7 @@ def main():
     store = PendingStore(data / "pending")  # one import ready to review, one that failed
     ready = store.new("https://example.com/a-very-long-recipe-address/that-keeps-going/soup-with-dragon-eggs")
     store.save(ready.model_copy(update={"status": "ready", "draft": soup_draft()}))
+    store.save_photo(ready.id, dish((170, 120, 40)))
     failed = store.new("grandmas-cards.pdf")
     store.save(failed.model_copy(update={"status": "failed", "error": "No recipe found in this PDF."}))
     ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]))

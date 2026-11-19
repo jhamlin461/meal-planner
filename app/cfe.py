@@ -17,6 +17,7 @@ class Op(BaseModel):
     id: str
     label: str
     inputs: list[str]  # "i<index>" (ingredient) or another op's id
+    where: str = ""  # the bowl, pot or pan it happens in ("in a large pot", "same pot")
 
 
 class CfeTable(BaseModel):
@@ -30,6 +31,8 @@ class Cell(BaseModel):
     rowspan: int
     colspan: int
     kind: Literal["ingredient", "op", "filler"]
+    ref: str = ""  # the ingredient ("i<index>") or op id the cell shows; fillers have none
+    where: str = ""
 
 
 def ingredient_text(ing: Ingredient, scale: float) -> str:
@@ -115,11 +118,12 @@ def layout(t: CfeTable, scale: float = 1.0) -> list[list[Cell]]:
         raise ValueError("; ".join(errs))
     cols = _cols(t)
     col = lambda r: 0 if _is_ing(r) else cols[r]  # noqa: E731
-    starts: list[list[tuple[int, Cell]]] = [[(0, Cell(text=ingredient_text(g, scale), rowspan=1, colspan=1, kind="ingredient"))]
-                                            for g in t.ingredients]
+    starts: list[list[tuple[int, Cell]]] = [[(0, Cell(text=ingredient_text(g, scale), rowspan=1, colspan=1, kind="ingredient",
+                                                     ref=f"i{n}"))] for n, g in enumerate(t.ingredients)]
     for o in t.ops:
         rows = sorted(_rows(t, o.id))
-        starts[rows[0]].append((col(o.id), Cell(text=o.label, rowspan=len(rows), colspan=1, kind="op")))
+        starts[rows[0]].append((col(o.id), Cell(text=o.label, rowspan=len(rows), colspan=1, kind="op", ref=o.id,
+                                                       where=o.where)))
         run: list[str] = []  # consecutive ingredient inputs awaiting one merged filler
 
         def flush():

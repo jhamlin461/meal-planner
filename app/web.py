@@ -98,11 +98,13 @@ def _factor(s: str) -> float:
 
 
 def _table_from_form(form, old: CfeTable) -> CfeTable:
-    """Rebuild the ops from the editor: per step row an op_id (hidden), an op_label and the ticked chips op_in_<row>
-    (ingredient ids or earlier steps' op_ids). Blank rows are dropped, action remove:<row> drops that step and the
+    """Rebuild the ops from the editor: per step row an op_id (hidden), an op_label, an op_where and the ticked chips
+    op_in_<row> (ingredient ids or earlier steps' op_ids). Blank rows are dropped, action remove:<row> drops that step and the
     ticks pointing at it, and steps are renumbered o1, o2, ... in row order. A tick that names no ingredient and no
     earlier step (unknown, later, itself) is kept as-is so validate() rejects it."""
-    rows = [(i.strip(), lab.strip(), [r.strip() for r in form.getlist(f"op_in_{k}") if r.strip()])
+    wheres = form.getlist("op_where")
+    rows = [(i.strip(), lab.strip(), [r.strip() for r in form.getlist(f"op_in_{k}") if r.strip()],
+             wheres[k].strip() if k < len(wheres) else "")
             for k, (i, lab) in enumerate(zip(form.getlist("op_id"), form.getlist("op_label")))]
     act = str(form.get("action") or "")
     k = _int(act.removeprefix("remove:")) if act.startswith("remove:") else None
@@ -112,15 +114,16 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     ings = {f"i{n}" for n in range(len(old.ingredients))}
     earlier: dict[str, int] = {}  # old step id -> its row
     picked = []
-    for n, (oid, _, refs) in enumerate(rows):
+    for n, (oid, _, refs, _) in enumerate(rows):
         picked.append([r if r in ings else earlier.get(r, r) for r in refs if r in ings or r not in gone])
         if oid:
             earlier[oid] = n
     unknown = {r for refs in picked for r in refs if isinstance(r, str)}
     fresh = (f"o{n}" for n in itertools.count(1) if f"o{n}" not in unknown)
     new = [next(fresh) for _ in rows]
-    return old.model_copy(update={"ops": [Op(id=new[n], label=lab, inputs=[new[r] if isinstance(r, int) else r for r in refs])
-                                          for n, ((_, lab, _), refs) in enumerate(zip(rows, picked))]})
+    return old.model_copy(update={"ops": [Op(id=new[n], label=lab, where=where,
+                                             inputs=[new[r] if isinstance(r, int) else r for r in refs])
+                                          for n, ((_, lab, _, where), refs) in enumerate(zip(rows, picked))]})
 
 
 def _chip_names(table: CfeTable) -> dict[str, str]:

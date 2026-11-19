@@ -65,3 +65,8 @@ def test_sdk_errors_become_aierror():
         client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(parse=parse)))
         with pytest.raises(AIError):
             AI(client).guess_conversion("flour", "cup", "g")
+
+
+def test_cfe_prompt_asks_where_each_step_happens():
+    from app.ai import CFE_PROMPT
+    assert "`where`" in CFE_PROMPT and "same pot" in CFE_PROMPT and "bowl" in CFE_PROMPT

@@ -1433,3 +1433,35 @@ def test_recipe_page_leads_with_the_table(env):
     assert html.index('class="recipe-thumb"') < html.index("<h1")  # the photo sits beside the name
     html = c.get(f"/recipes/{brownie_recipe(g)}").text  # no photo: no thumbnail, no broken image
     assert 'class="recipe-thumb"' not in html and "<img" not in html
+
+
+# ---- cooking aids: where each step happens, cross off as you cook -------------------------------------------------
+def test_editor_saves_where(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}/table").text
+    assert html.count('name="op_where"') == 6 and "Where" in html  # five steps and the new one
+    form = {**chips(BROWNIE), "op_where": ["in a small pot", "same pot", "", "", "in an 8x8 pan"]}
+    assert c.post(f"/recipes/{rid}/table", data=form, follow_redirects=False).status_code == 303
+    saved = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    assert [o.where for o in saved.ops] == ["in a small pot", "same pot", "", "", "in an 8x8 pan"]
+    html = c.get(f"/recipes/{rid}").text
+    assert '<span class="cfe-where">in a small pot</span>' in html
+    html = c.post(f"/recipes/{rid}/table", data={**form, "action": "remove:0"}).text  # wheres follow their steps
+    assert re.findall(r'name="op_where" value="([^"]*)"', html) == ["same pot", "", "", "in an 8x8 pan", ""]
+
+
+def test_recipe_page_cross_off_hooks(env):
+    g, ai, store, c, _ = env
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}").text
+    assert f'data-cross-key="cross:{rid}"' in html
+    cells = re.findall(r'<td class="cfe-(ingredient|op)"[^>]*data-cross="(\w+)"[^>]*>', html)
+    assert len(cells) == 9 + 5 and ("ingredient", "i0") in cells and ("op", "o5") in cells
+    for td in re.findall(r'<td class="cfe-(?:ingredient|op)"[^>]*>', html):
+        assert 'role="button"' in td and 'tabindex="0"' in td and 'aria-pressed="false"' in td
+    assert re.search(r'<button[^>]*id="start-over"[^>]*>Start over</button>', html)
+    ai.draft = soup_draft()
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    review = c.get(f"/import/{store.all()[0].id}").text  # the review table is for checking, not cooking
+    assert "data-cross" not in review and "Start over" not in review

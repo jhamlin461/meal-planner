@@ -148,6 +148,16 @@ td.cfe-ingredient { white-space: nowrap; }
 td.cfe-filler { background: var(--surface); }
 td.cfe-op { background: var(--rail); font-weight: 650; font-stretch: 90%; text-align: center; min-width: 6em; }
 td.cfe-pre { background: transparent; color: var(--muted); font-style: italic; padding: 8px 12px; }
+/* Where a step happens: a quieter second line under its label. */
+.cfe-where { display: block; margin-top: 2px; font-size: .8em; font-weight: 400; font-stretch: 100%; color: var(--muted); }
+/* Crossing off while cooking: the cell dims and its words are struck through; nothing moves. */
+td[data-cross] { cursor: pointer; height: 48px; -webkit-tap-highlight-color: transparent; transition: opacity .15s; }
+td[data-cross]:focus-visible { outline-offset: -3px; }
+td[aria-pressed=true] { opacity: .45; text-decoration: line-through; text-decoration-thickness: 2px; }
+td[aria-pressed=true] .cfe-where { text-decoration: line-through; }
+.cross-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px;
+  margin: -4px 0 8px; }
+.cross-bar p { margin: 0; font-size: .875rem; flex: 1 1 14em; }
 @media (orientation: landscape) and (min-width: 1000px) {
   body { font-size: 18px; }
   table.cfe { font-size: 22px; }

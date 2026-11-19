@@ -17,7 +17,8 @@
   <span>servings</span>
 </form>
 {% if cfe %}
-{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}
+{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols, cross="cross:" ~ r.id %}{% include "_cfe_table.html" %}{% endwith %}
+<div class="cross-bar"><p class="muted">Tap a step or an ingredient to cross it off.</p><button class="btn" type="button" id="start-over">Start over</button></div>
 <details class="steps"><summary>Steps</summary><div class="prose">{{ (r.description or "")|safe }}</div></details>
 {% else %}
 <h2>Ingredients</h2>

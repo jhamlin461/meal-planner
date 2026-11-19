@@ -167,3 +167,25 @@ document.querySelectorAll(".step-rows").forEach((list) => list.addEventListener(
   const ticked = new Set([...list.querySelectorAll(".chip input:checked")].map((b) => b.value));
   list.querySelectorAll(".chip input").forEach((b) => b.parentElement.classList.toggle("used", !b.checked && ticked.has(b.value)));
 }));
+
+// Recipe table: tap (or Enter/Space on) a step or an ingredient to cross it off; kept per recipe on this device.
+// Storage may be missing (private mode): crossing off still works, it just isn't remembered.
+document.querySelectorAll("[data-cross-key]").forEach((wrap) => {
+  const key = wrap.dataset.crossKey;
+  const cells = wrap.querySelectorAll("[data-cross]");
+  let done;
+  try { done = new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch { done = new Set(); }
+  const show = () => cells.forEach((c) => c.setAttribute("aria-pressed", done.has(c.dataset.cross)));
+  const save = () => {
+    try { done.size ? localStorage.setItem(key, JSON.stringify([...done])) : localStorage.removeItem(key); } catch {}
+    show();
+  };
+  const toggle = (c) => { done.delete(c.dataset.cross) || done.add(c.dataset.cross); save(); };
+  wrap.addEventListener("click", (e) => { const c = e.target.closest("[data-cross]"); if (c) toggle(c); });
+  wrap.addEventListener("keydown", (e) => {
+    const c = e.target.closest("[data-cross]");
+    if (c && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(c); }
+  });
+  document.getElementById("start-over")?.addEventListener("click", () => { done.clear(); save(); });
+  show();
+});

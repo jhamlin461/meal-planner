@@ -71,6 +71,9 @@ Table rules:
 - An op's inputs must cover contiguous ingredient rows, so order ingredients accordingly.
 - An ingredient used in two steps becomes two rows with partial amounts.
 - Oven preheat and pan prep go in `pre`, not in ops.
+- Each op's `where` names the vessel, short: "in a large pot", "in a small bowl", "on a sheet pan". Use the one the
+  recipe names, else a sensible home-kitchen choice; never blank for an op that combines things. An op that carries
+  on in its input's vessel says so ("same pot").
 - Never use a packaging unit (packet, pouch, sachet, container, package, bag, box). Convert each packet to a real unit
   (g, ml, tbsp, tsp, cup, oz) using the size printed on the card; if none is printed, use the typical meal-kit packet
   size and put "est." in the note.
