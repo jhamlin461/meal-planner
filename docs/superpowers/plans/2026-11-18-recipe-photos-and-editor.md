@@ -82,3 +82,40 @@ if it is in a separate bowl / pan."
   saves a where value; the recipe page has the cross-out hooks (data attributes/roles) and a Start over control.
 - Commit: `feat: where each step happens, and cross steps off while cooking`.
 - Order: after Task A (editor rows) and together with Task B's recipe-page rework (same template).
+
+## Task F: Monthly AI budget with full, economy and free modes (owner, 2026-11-18)
+
+Owner: "I get $100 of credits for the API usage every month... Only do the cost optimizations once at $80, then only
+go to free once all $100 have been utilized. Keep full functionality before then."
+
+- **Meter**: every Claude call records `response.usage` (input, cache writes 5m/1h, cache reads, output; model;
+  call type) in the HouseStore with its cost at list prices (a small price table in app/ai.py: Opus 5.5 $4/$20,
+  cache read $0.20, writes 1.25x/2x; Sonnet 5.5 $2/$10, read $0.10; Haiku 5.5 $0.10/$0.50, read $0.01, writes
+  1.25x/2x; batch = 0.5x of all; source: the Pricing page fetched 2026-11-18 — keep it in one place). Month =
+  calendar month, local time zone. Settings `AI_MONTHLY_BUDGET` (default 100) and `AI_ECONOMY_AT` (default 80).
+- **Modes** from this month's spend: **full** (< economy_at): exactly today's behaviour; **economy** (economy_at ≤
+  spend < budget): recipe structuring at effort `medium` (same model), product guesses / conversions / ingredient
+  matching on `claude-haiku-5-5` (effort low), bulk imports of 3+ files through the Message Batches API (50% off;
+  imports show "Reading — usually a few minutes" until results arrive; poll in the reminder loop or a small worker;
+  results land in the pending store like normal imports), matching sends only the ~30 most likely products per
+  ingredient list (local fuzzy prefilter), web pages without JSON-LD are trimmed to the recipe text and capped
+  (~20k characters); **free** (≥ budget): no Claude calls at all.
+- **Free-mode fallbacks**: website imports with JSON-LD save ingredients + steps without a CfE table (the recipe page
+  already has a no-table fallback; the table can be filled in later with "Make the table" when AI is back); PDF and
+  photo imports are queued ("Waiting for next month's AI budget — it will be read on December 1") and processed
+  automatically when the month rolls over; barcode scans use Open Food Facts / UPCitemdb only, and an unknown item
+  opens a short manual product form (name, generic, unit, location, package size, food/supply); ingredient matching
+  uses plain normalised name matching; unit conversions ask the reviewer for the factor; week suggestions use a
+  local heuristic (expiring stock first, not cooked in the last 3 weeks, fill open slots).
+- **Always on** (no behaviour change): the meter, and prompt caching of the system prompt + schema
+  (`cache_control` on the system block) — it only makes repeated instructions cheaper.
+- **Me page**: "AI this month: $83.20 of $100 — economy mode" (plain sentence, no middle dot in the final copy),
+  with a one-line explanation of the current mode. Today shows a quiet note only in free mode.
+- Every AIError path keeps working; mode switches never crash a page.
+- Tests: cost math for each meter field and model; mode thresholds and month rollover; full mode sends exactly the
+  current requests (model/effort unchanged); economy picks the cheaper settings per call type; free mode makes no
+  Claude call for each feature and uses its fallback; batch submission/collection with a fake batches API; queued
+  PDFs processed after rollover.
+- Order: after Tasks B+E (both touch app/importer.py and app/ai.py), before C and D.
+- Commits: `feat: monthly AI meter and budget modes`; `feat: economy mode settings and batch imports`;
+  `feat: AI-free fallbacks once the month's budget is used`.
