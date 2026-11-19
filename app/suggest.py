@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from app.ai import AIPaused
-from app.inventory import free_stock, kits, stock_lines
+from app.inventory import kits, reserved, stock_lines_many
 from app.mealplan import default_servings
 from app.setup_grocy import ids
 from app.shopping import base_servings
@@ -50,7 +50,8 @@ def week_slots(grocy, monday: date) -> list[tuple[date, str]]:
 
 def build_context(grocy, monday: date, servings: int | None = None, house=None) -> dict:
     """`servings`: scale each recipe to it for fulfillment (None: its own base). With `house`, stock is what no meal kit
-    holds plus the recipe's own kit; a recipe with a kit in inventory is fully stocked (spec call 10)."""
+    holds plus the recipe's own kit; a recipe with a kit in inventory is fully stocked (spec call 10). Without `house`
+    kits are not known and every recipe counts all stock (production always passes it)."""
     _check_monday(monday)
     names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
     positions: dict[int, list[dict]] = {}
@@ -58,21 +59,25 @@ def build_context(grocy, monday: date, servings: int | None = None, house=None) 
         positions.setdefault(int(pos["recipe_id"]), []).append(pos)
     user = user_recipes(grocy)
     recipes_by_id = {int(r["id"]): r["name"] for r in user}
-    has_kit = set(kits(grocy, house)) if house is not None else set()
-    plain = grocy.stock_amounts() if house is None else free_stock(grocy, house)
+    held = reserved(grocy, house) if house is not None else {}
+    own_kits = kits(grocy, house) if house is not None else {}
+    amounts = grocy.stock_amounts()
+    scales = {int(r["id"]): servings / base_servings(r) if servings else 1.0 for r in user}
+    made = stock_lines_many(grocy, scales)  # the amounts cooking and shopping use; no amount means ignored
     recipes = []
     for r in user:
         rid = int(r["id"])
         ps = positions.get(rid, [])
-        stock = free_stock(grocy, house, recipes=(rid,)) if rid in has_kit else plain
-        scale = servings / base_servings(r) if servings else 1.0
-        lines, _ = stock_lines(grocy, rid, scale)  # the amounts cooking and shopping use; no amount means ignored
-        ok = sum(stock.get(l["pid"], 0.0) >= l["amount"] - 1e-6 for l in lines)
-        full = rid in has_kit or bool(lines) and ok == len(lines)
+        mine = own_kits.get(rid, {})
+        lines = made[rid][0]
+        # free stock: what no other recipe's kit holds (this recipe's own kit counts)
+        ok = sum(max(0.0, amounts.get(l["pid"], 0.0) - held.get(l["pid"], 0.0) + mine.get(l["pid"], 0.0))
+                 >= l["amount"] - 1e-6 for l in lines)
+        full = rid in own_kits or bool(lines) and ok == len(lines)
         recipes.append({"id": rid, "name": r["name"],
                         "ingredients": [names.get(int(p["product_id"]), "?") for p in ps],
-                        "fulfillment": 1.0 if rid in has_kit else round(ok / len(lines), 2) if lines else 0.0,
-                        "fully_stocked": full, "kit": rid in has_kit})
+                        "fulfillment": 1.0 if rid in own_kits else round(ok / len(lines), 2) if lines else 0.0,
+                        "fully_stocked": full, "kit": rid in own_kits})
     horizon = (date.today() + timedelta(days=7)).isoformat()
     expiring = sorted(
         ({"product": names.get(int(e["product_id"]), "?"), "best_before_date": str(e["best_before_date"])[:10]}
@@ -92,6 +97,7 @@ def suggest(grocy, ai, monday: date, from_stock: bool = False, house=None) -> li
     `from_stock`: fill the slots from what the household has (fully stocked recipes first)."""
     open_slots = set(week_slots(grocy, monday))
     valid = {int(r["id"]) for r in user_recipes(grocy)}
+    # the usual servings: no household setting for it exists, so a weekday dinner's default stands in
     ctx = build_context(grocy, monday, default_servings(monday, "Dinner") if from_stock else None, house)
     try:
         items = (ai.suggest_week(ctx, from_stock=True) if from_stock else ai.suggest_week(ctx)).items
@@ -130,13 +136,19 @@ def local_picks(ctx: dict, generic: dict[str, str] | None = None, from_stock: bo
     out = []
     for (day, section), r in zip(ctx["open_slots"], recipes):
         used = sorted(expiring & set(r["ingredients"]))
-        if from_stock and r.get("kit"):
-            reason = "Your meal kit is here"
-        elif from_stock and r.get("fully_stocked"):
-            reason = "You have everything"
-        elif from_stock and r["fulfillment"]:
-            reason = "You have most of it" if r["fulfillment"] >= 0.5 else "You have some of it"
-        else:
+        if not from_stock:  # recent recipes were left out, so this is true
             reason = f"Uses {', '.join(used)} before it expires" if used else "Not cooked in the last 3 weeks"
+        elif r.get("kit"):
+            reason = "Your meal kit is here"
+        elif r.get("fully_stocked"):
+            reason = "You have everything"
+        elif used:
+            reason = f"Uses {', '.join(used)} before it expires"
+        elif r["fulfillment"] >= 0.5:
+            reason = "You have most of it"
+        elif r["fulfillment"] > 0:
+            reason = "You have some of it"
+        else:
+            reason = "Nothing for this in stock yet"
         out.append(Pick(date.fromisoformat(day), section, r["id"], reason))
     return out

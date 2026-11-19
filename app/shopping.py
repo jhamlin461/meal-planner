@@ -54,11 +54,12 @@ def rebuild_lists(grocy, today: date, shopping_weekday: int, house=None) -> dict
     start, end = shopping_window(today, shopping_weekday)
     entries = [e for e in grocy.objects("meal_plan")
                if e.get("day") and start <= date.fromisoformat(str(e["day"])[:10]) <= end]
-    from app.inventory import free_stock, stock_lines  # inventory -> today -> mealplan -> shopping
+    from app.inventory import free_stock, stock_lines_many  # inventory -> today -> mealplan -> shopping
     base = {int(r["id"]): base_servings(r) for r in grocy.objects("recipes")}
     planned = {int(e["recipe_id"]) for e in entries if e.get("type") == "recipe" and e.get("recipe_id")}
-    positions = {rid: [{"product_id": line["pid"], "amount": line["amount"]} for line in stock_lines(grocy, rid, 1.0)[0]]
-                 for rid in planned if rid in base}  # what cooking takes (mealplan.cook), so that is what is bought
+    made = stock_lines_many(grocy, {rid: 1.0 for rid in planned if rid in base})
+    positions = {rid: [{"product_id": line["pid"], "amount": line["amount"]} for line in lines[0]]
+                 for rid, lines in made.items()}  # what cooking takes (mealplan.cook), so that is what is bought
     needs = week_needs(entries, positions, base)
     stock = free_stock(grocy, house, {int(e["recipe_id"]) for e in entries if e.get("type") == "recipe"
                                       and not _done(e)})

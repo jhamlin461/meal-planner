@@ -114,9 +114,25 @@ def test_local_picks_from_stock_order():
            "expiring": [], "recent_recipes": ["Recent full"], "open_slots": slots}
     picks = local_picks(ctx, from_stock=True)
     assert [p.recipe_id for p in picks] == [4, 3, 2, 1]
-    assert picks[0].reason == "Your meal kit is here" and picks[1].reason == "You have everything"
-    assert picks[3].reason != "You have everything"
+    assert [p.reason for p in picks] == ["Your meal kit is here", "You have everything", "You have everything",
+                                         "You have most of it"]
     assert [p.recipe_id for p in local_picks(ctx)][:1] != [4]  # without the flag the order is the old one
+
+
+def test_from_stock_reasons_are_true_for_every_pick():
+    from app.suggest import local_picks
+    slots = [[(MON + timedelta(days=i)).isoformat(), "Dinner"] for i in range(4)]
+
+    def r(i, name, fulfil, ings=("x",)):
+        return {"id": i, "name": name, "ingredients": list(ings), "fulfillment": fulfil, "fully_stocked": False,
+                "kit": False}
+
+    ctx = {"recipes": [r(1, "Most", 0.75), r(2, "Nothing", 0.0), r(3, "Old rice", 0.0, ("Rice",)), r(4, "Some", 0.25)],
+           "expiring": [{"product": "Rice", "best_before_date": "2026-11-20"}], "recent_recipes": ["Nothing"],
+           "open_slots": slots}
+    got = {p.recipe_id: p.reason for p in local_picks(ctx, from_stock=True)}
+    assert got == {1: "You have most of it", 2: "Nothing for this in stock yet", 3: "Uses Rice before it expires",
+                   4: "You have some of it"}
 
 
 def test_from_stock_prompt_flag():
@@ -163,3 +179,34 @@ def test_a_kit_makes_its_recipe_fully_stocked_and_first_and_only_its_own(fake_gr
     assert not got["Rice soup"]["fully_stocked"] and not got["Rice soup"]["kit"]  # another recipe's kit never counts
     first = local_picks(ctx, from_stock=True)[0]
     assert first.recipe_id == a and first.reason == "Your meal kit is here"
+
+
+def _grocy_reads(g, first, n):
+    """Add n recipes (R<first>..) each with a product of its own, then build a context (Grocy sending each row's
+    userfields with the list) and count the Grocy reads."""
+    for i in range(first, first + n):
+        g.entities["products"][200 + i] = {"id": 200 + i, "name": f"P{i}"}
+        _recipe(g, f"R{i}", [(200 + i, 5), (10, 5)])
+    plain, uf = g.objects, g.userfields
+    calls = []
+
+    def with_userfields(entity, **where):
+        calls.append(entity)
+        return [{**r, "userfields": uf(entity, r["id"])} if entity in ("products", "recipes") else r
+                for r in plain(entity, **where)]
+
+    g.objects = with_userfields
+    for name in ("userfields", "stock_amounts", "stock_entries", "get_object"):
+        real = getattr(g, name)
+        setattr(g, name, lambda *a, _real=real, _n=name, **k: calls.append(_n) or _real(*a, **k))
+    ctx = build_context(g, MON, servings=2)
+    g.objects, g.userfields = plain, uf
+    return ctx, len(calls)
+
+
+def test_build_context_reads_grocy_a_constant_number_of_times(fake_grocy_with_week):
+    g = _empty(fake_grocy_with_week)
+    few, n_few = _grocy_reads(g, 0, 2)
+    assert [r["name"] for r in few["recipes"]] == ["Bread", "R0", "R1"]
+    many, n_many = _grocy_reads(g, 2, 10)  # 4x the recipes, a product each: the same reads
+    assert len(many["recipes"]) == 13 and n_many == n_few

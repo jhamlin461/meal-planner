@@ -321,45 +321,78 @@ def _counted_in_packets(p: dict, stock: str, m: measure.Measure) -> bool:
     return stock == "piece" and (is_packaging(m.word) or any(is_packaging(w) for w in p.get("name", "").lower().split()))
 
 
+class _Seen:
+    """`grocy` with each userfields read made once (and from the rows' own `userfields` when Grocy sends them with the
+    list), so measure.of and friends cost one read per product, not one per position."""
+
+    def __init__(self, grocy, rows: dict[tuple[str, int], dict]):
+        self._g, self._seen = grocy, rows
+
+    def userfields(self, entity: str, id: int) -> dict:
+        if (entity, id) not in self._seen:
+            self._seen[(entity, id)] = self._g.userfields(entity, id)
+        return self._seen[(entity, id)]
+
+    def __getattr__(self, name):
+        return getattr(self._g, name)
+
+
+def stock_lines_many(grocy, scales: dict[int, float]) -> dict[int, tuple[list[dict], list[dict]]]:
+    """stock_lines for several recipes (rid -> servings / base servings) reading the recipe positions, products, units
+    and places once, and each product's and recipe's userfields at most once."""
+    products = {int(p["id"]): p for p in grocy.objects("products")}
+    seen = {("products", pid): p["userfields"] for pid, p in products.items() if isinstance(p.get("userfields"), dict)}
+    recipe_rows = {int(r["id"]): r for r in grocy.objects("recipes")}
+    seen |= {("recipes", rid): r["userfields"] for rid, r in recipe_rows.items() if isinstance(r.get("userfields"), dict)}
+    g = _Seen(grocy, seen)
+    by_recipe: dict[int, list[dict]] = {}
+    for pos in grocy.objects("recipes_pos"):
+        by_recipe.setdefault(int(pos["recipe_id"]), []).append(pos)
+    units = {v: k for k, v in ids(grocy).unit.items()}
+    have = places(grocy)
+    locs = {v: k for k, v in have.items()}
+    fallback_place = default_place(grocy)
+    out = {}
+    for rid, scale in scales.items():
+        positions = sorted(by_recipe.get(rid, []), key=lambda p: int(p["id"]))
+        raw = g.userfields("recipes", rid).get("cfe_table")
+        try:
+            ings = list(CfeTable.model_validate_json(raw).ingredients) if raw else []
+        except ValidationError:
+            ings = []
+        lines, skipped = [], []
+        for pos in positions:
+            ing = next((i for i in ings if line_text(i, 1) == pos.get("note")), None)  # as save_recipe noted it
+            if ing:
+                ings.remove(ing)
+            p = products.get(_int(pos.get("product_id")))
+            said = line_text(ing, scale) if ing else pos.get("note") or (p or {}).get("name") or "An ingredient"
+            if p is None:
+                skipped.append({"text": said, "why": "No product to add it to"})
+                continue
+            stock = units.get(_int(p.get("qu_id_stock")), "")
+            m = measure.of(g, None, p, stock)
+            amount = float(pos.get("amount") or 0) * scale
+            if ing and ing.packets and _counted_in_packets(p, stock, m):
+                amount = ing.packets * scale
+            if amount <= 1e-9:
+                skipped.append({"text": said, "why": "No amount to add"})
+                continue
+            place = locs.get(_int(p.get("location_id"))) or fallback_place
+            lines.append({"pid": int(p["id"]), "amount": amount, "place": place, "loc": have.get(place),
+                          "qty": amount_text(ing, scale) if ing else measure.show(amount, m),
+                          "words": ing.name + note_text(ing.note) if ing else p["name"],
+                          "packets": packets_of(ing, scale) if ing else ""})
+        out[rid] = (lines, skipped)
+    return out
+
+
 def stock_lines(grocy, rid: int, scale: float) -> tuple[list[dict], list[dict]]:
     """What adding recipe `rid`'s ingredients at `scale` (servings / base servings) books, and what cooking it takes:
     lines {pid, amount (stock units), qty, words, packets, place, loc} in the recipe table's words ("2 tbsp",
     "umami ginger sauce", "1 packet"), and the skipped {text, why}: no product, or no stock amount. An amount is the position's
     stored one, scaled (a packet's is its measured amount); a product counted in packets takes 1 piece per packet."""
-    positions = sorted(grocy.objects("recipes_pos", recipe_id=rid), key=lambda p: int(p["id"]))
-    products = {int(p["id"]): p for p in grocy.objects("products")}
-    units = {v: k for k, v in ids(grocy).unit.items()}
-    have = places(grocy)
-    locs = {v: k for k, v in have.items()}
-    raw = grocy.userfields("recipes", rid).get("cfe_table")
-    try:
-        ings = list(CfeTable.model_validate_json(raw).ingredients) if raw else []
-    except ValidationError:
-        ings = []
-    lines, skipped = [], []
-    for pos in positions:
-        ing = next((g for g in ings if line_text(g, 1) == pos.get("note")), None)  # as save_recipe noted it
-        if ing:
-            ings.remove(ing)
-        p = products.get(_int(pos.get("product_id")))
-        said = line_text(ing, scale) if ing else pos.get("note") or (p or {}).get("name") or "An ingredient"
-        if p is None:
-            skipped.append({"text": said, "why": "No product to add it to"})
-            continue
-        stock = units.get(_int(p.get("qu_id_stock")), "")
-        m = measure.of(grocy, None, p, stock)
-        amount = float(pos.get("amount") or 0) * scale
-        if ing and ing.packets and _counted_in_packets(p, stock, m):
-            amount = ing.packets * scale
-        if amount <= 1e-9:
-            skipped.append({"text": said, "why": "No amount to add"})
-            continue
-        place = locs.get(_int(p.get("location_id"))) or default_place(grocy)
-        lines.append({"pid": int(p["id"]), "amount": amount, "place": place, "loc": have.get(place),
-                      "qty": amount_text(ing, scale) if ing else measure.show(amount, m),
-                      "words": ing.name + note_text(ing.note) if ing else p["name"],
-                      "packets": packets_of(ing, scale) if ing else ""})
-    return lines, skipped
+    return stock_lines_many(grocy, {rid: scale})[rid]
 
 
 def _brands(grocy, pid: int) -> list[dict]:
