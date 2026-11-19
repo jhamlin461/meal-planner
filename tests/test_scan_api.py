@@ -50,9 +50,10 @@ def test_lookup_changes_no_stock(env):
     pid = milk(g)
     g.add_stock(pid, 100, None, ids(g).location["Fridge"])
     r = c.post("/api/scan/lookup", json={"code": "123"}).json()
-    assert r == {"status": "found", "product_id": pid, "product": "Brand Milk", "generic": "Milk", "unit": "ml",
-                 "package": 946, "place": "Fridge", "places": list(places(g)), "kind": "food", "in_stock": 100,
-                 "photo": None, "created": False, "need_min": False}
+    assert r == {"status": "found", "product_id": pid, "product": "Brand Milk", "generic": "Milk", "measure": "ml",
+                 "label": "ml", "package": 946, "left": "100 ml left", "keep": 946, "place": "Fridge",
+                 "places": list(places(g)), "kind": "food", "photo": None, "created": False, "need_min": False}
+    # no measure yet (Claude didn't give one): the stock unit, until it does
     assert g.stock_amounts()[pid] == 100 and len(g.stock[pid]) == 1
     assert c.post("/api/scan/lookup", json={"code": "999"}).json() == {"status": "unknown"}
 
@@ -107,7 +108,7 @@ def test_confirm_use_never_more_than_stock(env):
     assert g.stock[pid] == []
     r = confirm(c, pid, action="use").json()
     assert r == {"status": "ok", "action": "use", "product": "Brand Milk", "amount": 0, "place": None,
-                 "transaction_id": None}
+                 "transaction_id": None, "shown": "0 ml", "short": True}
     for bad in (0, -1, 1.5, "inf"):  # packs are whole packages, at least one
         assert confirm(c, pid, action="use", packs=bad).status_code == 422
 
@@ -166,7 +167,7 @@ def test_lookup_new_supply_flags_need_min(env):
                             location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
     r = c.post("/api/scan/lookup", json={"code": "4242"}).json()
     assert r["status"] == "found" and r["created"] and r["need_min"] and r["kind"] == "supply"
-    assert r["place"] == "Garage" and r["package"] == 40 and r["in_stock"] == 0
+    assert r["place"] == "Garage" and r["package"] == 40 and r["left"] == "None left"
     pid = r["product_id"]
     assert pid not in g.stock
     r = confirm(c, pid, action="add", min=2).json()
@@ -184,7 +185,7 @@ def test_manual_and_photo_return_found_without_adding(env):
     r = c.post("/api/scan/photo", data={"code": "555"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
     assert r["status"] == "found" and r["created"] and r["generic"] == "Beans" and r["package"] == 400
-    assert r["place"] == "Pantry" and r["in_stock"] == 0 and r["product_id"] not in g.stock
+    assert r["place"] == "Pantry" and r["left"] == "None left" and r["product_id"] not in g.stock
     form = {"code": "111", "name": "Jar of jam", "generic": "Jam", "stock_unit": "g", "package_amount": "300",
             "location": "Counter", "category": "food"}
     r = c.post("/api/scan/manual", data=form).json()

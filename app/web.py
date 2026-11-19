@@ -29,6 +29,7 @@ from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
 from app import ha_live
+from app import measure as msr
 from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
@@ -272,10 +273,15 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     env.filters["exact"] = _exact
     env.globals["chip_names"] = _chip_names
     env.globals["chip_users"] = _chip_users
+    env.filters["show"] = msr.show  # an amount in stock units, shown in a product's measure: "2 1/2 cups"
+    env.filters["in_measure"] = msr.value  # the same for a number field: "2.5"
+    env.globals["label"] = msr.label
+    env.globals["measure_choices"] = msr.choices
     templates = Jinja2Templates(env=env)
     plan_lock = threading.Lock()  # plan add/remove, Bought, Cooked it, list rebuild: never interleaved or repeated
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
     save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
+    measure_lock = threading.Lock()  # one measure fill at a time, so no product is asked about twice
 
     @app.middleware("http")
     async def no_cross_site_writes(request: Request, call_next):
@@ -576,6 +582,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         parent = grocy.get_object("products", int(p["parent_product_id"])) if p.get("parent_product_id") else None
         return parent or p
 
+    def typed(p: dict, word: str | None) -> msr.Measure:
+        """The measure an amount was typed in: the one its form showed, which must still be the product's (not a page
+        from before a change, or from before Claude picked one)."""
+        m = msr.of(grocy, None, p)
+        if word is not None and word != m.word:
+            raise ValueError(f"{p['name']} is now in {msr.label(m)}. Type the amount again.")
+        return m
+
     def set_min(pid: int, amount: float) -> None:
         gid = generic_of(product_or_404(pid))["id"]
         grocy.update("products", gid, {"min_stock_amount": amount, "cumulate_min_stock_amount_of_sub_products": 1})
@@ -592,10 +606,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/home/supplies/{pid}/used")
     def supply_used(pid: int, place: int | None = Form(None)):
-        """One unit (a bag, a roll), whatever the package size; never more than is in stock (Grocy refuses that)."""
+        """One of its measure (a bag, a roll, a bottle), whatever the package size; never more than is in stock (Grocy
+        refuses that)."""
         p = product_or_404(pid)  # a generic: Grocy takes the stock from its brands
         with plan_lock:
-            use = min(1.0, grocy.stock_amounts().get(pid, 0.0))
+            use = min(msr.of(grocy, None, p).factor, grocy.stock_amounts().get(pid, 0.0))
             if use > 0:
                 grocy.consume(pid, use)
             rebuild_running_low(grocy)
@@ -604,8 +619,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     GONE = "That place no longer exists."
 
     @app.post("/home/supplies/{pid}/min")
-    def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False), place: int | None = Form(None)):
-        set_min(pid, amount)  # 0 = never goes on Running low
+    def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False), place: int | None = Form(None),
+                   word: str | None = Form(None, alias="measure")):
+        try:
+            m = typed(generic_of(product_or_404(pid)), word)
+        except ValueError as e:
+            return inventory_back(place, err=str(e))
+        set_min(pid, msr.to_stock(amount, m))  # 0 = never goes on Running low
         return inventory_back(place)
 
     @app.post("/home/supplies/{pid}/move")
@@ -632,9 +652,21 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def pantry(msg: str = ""):
         return inventory_back(None, msg)
 
+    def fill_measures(pids: list[int]) -> None:
+        """Claude's measure for products shown without one, after the page is sent: they show it from the next visit.
+        ponytail: a product Claude can't answer for is asked again on the next visit (free mode asks nothing)."""
+        with measure_lock:
+            for pid in pids:
+                if p := grocy.get_object("products", pid):
+                    msr.of(grocy, ai, p)
+
     @app.get("/inventory")
-    def inventory(request: Request, place: int | None = None, msg: str = "", err: str = ""):
+    def inventory(request: Request, background: BackgroundTasks, place: int | None = None, msg: str = "",
+                  err: str = ""):
         inv, have = rows(grocy, settings, date.today()), places(grocy)
+        bare = sorted({r["pid"] for rs in inv.groups.values() for r in rs if r["m"].word == r["unit"]})
+        if bare and ai.mode() != "free":
+            background.add_task(fill_measures, bare)
         chips = {n: have[n] for n in inv.groups if n in have}  # places holding something, in places() order
         place = place if place in chips.values() else None  # an empty or unknown place shows everything
         groups = {n: r for n, r in inv.groups.items() if place is None or chips.get(n) == place}
@@ -642,13 +674,34 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     totals=inv.totals, chips=chips, place=place, locations=have, msg=msg, err=err)
 
     @app.post("/pantry/{pid}/consume")
-    def pantry_consume(pid: int, amount: float = Form(gt=0), place: int | None = Form(None)):
-        grocy.consume(pid, amount)
+    def pantry_consume(pid: int, amount: float = Form(gt=0), place: int | None = Form(None),
+                       word: str | None = Form(None, alias="measure")):
+        try:
+            m = typed(product_or_404(pid), word)
+        except ValueError as e:
+            return inventory_back(place, err=str(e))
+        use = min(msr.to_stock(amount, m), grocy.stock_amounts().get(pid, 0.0))  # "all of it" may round past stock
+        if use > 0:
+            grocy.consume(pid, use)
         return inventory_back(place)
 
     @app.post("/pantry/{pid}/amount")
-    def pantry_amount(pid: int, amount: float = Form(ge=0), place: int | None = Form(None)):
-        grocy.set_amount(pid, amount)
+    def pantry_amount(pid: int, amount: float = Form(ge=0), place: int | None = Form(None),
+                      word: str | None = Form(None, alias="measure")):
+        try:
+            m = typed(product_or_404(pid), word)
+        except ValueError as e:
+            return inventory_back(place, err=str(e))
+        grocy.set_amount(pid, msr.to_stock(amount, m))
+        return inventory_back(place)
+
+    @app.post("/inventory/{pid}/measure")
+    def inventory_measure(pid: int, word: str = Form(alias="measure"), place: int | None = Form(None)):
+        """The person's own measure for this product: every amount of it is shown and typed in it from now on."""
+        try:
+            msr.change(grocy, product_or_404(pid), word)
+        except ValueError as e:
+            return inventory_back(place, err=str(e))
         return inventory_back(place)
 
     @app.post("/pantry/{pid}/move")
@@ -743,14 +796,19 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return next((n for n, i in places(grocy).items() if i == loc), default_place(grocy))
 
     def found(r: Resolved) -> dict:
-        """What the scan sheet shows before anything is booked."""
+        """What the scan sheet shows before anything is booked. Amounts are in the product's measure: `measure` is the
+        word typed amounts go back with, `label` the word shown beside them, `keep` a new supply's suggested
+        keep-at-least (one package); `package` stays in stock units (it is only ever multiplied, never shown)."""
         p = product_or_404(r.product_id)
+        m = msr.of(grocy, ai, p)
+        package = _num(grocy.userfields("products", r.product_id).get("package_amount"))
+        left = grocy.stock_amounts().get(r.product_id, 0.0)
         return {"status": "found", "product_id": r.product_id, "product": r.name, "generic": r.generic_name,
-                "unit": unit_names().get(_int(p.get("qu_id_stock")), ""),
-                "package": _num(grocy.userfields("products", r.product_id).get("package_amount")),
+                "measure": m.word, "label": msr.label(m), "package": package,
+                "left": f"{msr.show(left, m)} left" if left > 0 else "None left",
+                "keep": float(msr.value(package, m)) if package else 1,
                 "place": place_of(p), "places": list(places(grocy)), "kind": "supply" if is_supply(p) else "food",
-                "in_stock": grocy.stock_amounts().get(r.product_id, 0.0), "photo": None, "created": r.created,
-                "need_min": needs_min(r, p)}
+                "photo": None, "created": r.created, "need_min": needs_min(r, p)}
 
     class LookupIn(BaseModel):
         code: str
@@ -764,20 +822,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         product_id: int
         action: Literal["add", "use"]
         packs: int = Field(default=1, ge=1)  # whole packages
-        amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # stock units, when the size is unknown
+        amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # in `measure`, when the size is unknown
         place: str | None = None  # add only; the product's own place when not given
-        min: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # a new supply's keep-at-least
+        min: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # a new supply's keep-at-least, in `measure`
+        measure: str | None = None  # the measure the sheet showed (lookup's); the product's own when not given
 
     @app.post("/api/scan/confirm")
     def api_scan_confirm(body: ConfirmIn):
         """Book what the sheet confirmed. The place applies to this booking only; supplies are used one at a time."""
         pid = body.product_id
         p = product_or_404(pid)
+        try:
+            m = typed(p, body.measure)
+        except ValueError as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
         known = _num(grocy.userfields("products", pid).get("package_amount"))
+        amount = msr.to_stock(body.amount, m) if body.amount else None
         if body.action == "use" and is_supply(p):
-            want = body.packs
+            want = body.packs * m.factor  # one of its measure each
         else:
-            want = body.amount or (body.packs * known if known else None)
+            want = amount or (body.packs * known if known else None)
         if not want:
             return JSONResponse({"status": "error", "message": "Type how much."}, status_code=400)
         have = places(grocy)
@@ -787,11 +851,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             if place not in have:
                 return JSONResponse({"status": "error", "message": f"There's no place called {place}."},
                                     status_code=400)
-            if body.amount and not known:  # remember the answer for this product's next scan
-                grocy.set_userfields("products", pid, {"package_amount": body.amount})
+            if amount and not known:  # remember the answer for this product's next scan
+                size = {"package_amount": amount, "package_source": "owner"}
+                grocy.set_userfields("products", pid, size)
                 gid = _int(p.get("parent_product_id"))  # and for its generic, which Running low and Bought use
                 if gid and not _num(grocy.userfields("products", gid).get("package_amount")):
-                    grocy.set_userfields("products", gid, {"package_amount": body.amount})
+                    grocy.set_userfields("products", gid, size)
             days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
             tid = grocy.add_stock(pid, want, date.today() + timedelta(days=days) if days > 0 else None, have[place])
             done = want
@@ -800,9 +865,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             if done > 0:
                 tid = grocy.consume(pid, done)
         if body.min:
-            set_min(pid, body.min)
+            set_min(pid, msr.to_stock(body.min, m))
         return {"status": "ok", "action": body.action, "product": p["name"], "amount": done, "place": place,
-                "transaction_id": tid}
+                "transaction_id": tid, "shown": msr.show(done, m), "short": done < want}
 
     class UndoIn(BaseModel):
         transaction_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")  # goes into Grocy's URL path

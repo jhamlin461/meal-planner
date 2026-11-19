@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import date
 
+from app import measure
 from app.grocy import GrocyError
 from app.setup_grocy import LOCATIONS, ids, supplies_group
 from app.today import _day
@@ -92,7 +93,8 @@ def _int(v) -> int | None:
 
 def rows(grocy, settings, today: date) -> Inventory:
     """Food: one row per product per place with stock. Supplies: one row per generic per place holding it or its
-    brands (that place's share; Running low counts the total), or one row at its default place when it has none."""
+    brands (that place's share; Running low counts the total), or one row at its default place when it has none.
+    Each row's `m` is its product's household measure (its stock unit until it has one)."""
     products = {int(p["id"]): p for p in grocy.objects("products")}
     i = ids(grocy)
     units, locs, group = {v: k for k, v in i.unit.items()}, {v: k for k, v in i.location.items()}, supplies_group(grocy)
@@ -134,6 +136,11 @@ def rows(grocy, settings, today: date) -> Inventory:
             r["total"] = family.get(r["pid"], 0.0)
             r["min"] = float(products.get(r["pid"], {}).get("min_stock_amount") or 0)
             r["low"] = r["total"] < r["min"]
+    measures: dict[int, measure.Measure] = {}
+    for r in out:  # stored measures only: Claude is asked after the page is sent (see web's inventory)
+        if r["pid"] not in measures:
+            measures[r["pid"]] = measure.of(grocy, None, products.get(r["pid"], {"id": r["pid"]}), r["unit"])
+        r["m"] = measures[r["pid"]]
     order = {n: k for k, n in enumerate(places(grocy))}
     groups: dict[str, list[dict]] = {}
     for r in sorted(out, key=lambda r: (order.get(locs.get(r["loc"]), len(order)), r["bb"], r["name"].lower())):

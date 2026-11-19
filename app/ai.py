@@ -18,7 +18,7 @@ BETAS = ["server-side-fallback-2026-07-01"]
 HAIKU = "claude-haiku-5-5"  # no server-side fallbacks: called without betas/fallbacks
 # Economy mode, per call type: (model, effort). Week suggestions are not listed: they stay as in full mode.
 ECONOMY = {"recipe": (MODEL, "medium"), "check": (MODEL, "medium"), "product": (HAIKU, "low"),
-           "conversion": (HAIKU, "low"), "match": (HAIKU, "low")}
+           "conversion": (HAIKU, "low"), "match": (HAIKU, "low"), "measure": (HAIKU, "low")}
 MATCH_LIMIT = 30  # economy: products sent with an ingredient list
 log = logging.getLogger(__name__)
 
@@ -102,6 +102,13 @@ class ProductGuess(BaseModel):
     best_before_days: int
     g_per_unit: float
     category: Literal["food", "supply"] = "food"
+    measure: str = ""  # the household measure it's counted in ("cups", "rolls"); see MEASURE_RULES
+    measure_factor: float | None = None  # stock units per 1 measure
+
+
+class MeasureGuess(BaseModel):
+    measure: str
+    factor: float
 
 
 class ConversionGuess(BaseModel):
@@ -175,6 +182,11 @@ naming the ingredient or step. No doubts when everything matches.
 The table was made with these instructions:
 """ + CFE_PROMPT
 
+MEASURE_RULES = """The measure is what the household counts or measures it in, in the plural: a container or count
+word for supplies, packaged goods and things counted one by one ("rolls", "bags", "cans", "bottles", "eggs"), or a
+kitchen measure for loose food (cups, tbsp, tsp, fl oz, oz, lb), never g or ml. Its factor is how many stock units one
+of it is (a cup of flour in g: about 125; a roll of paper towels in piece: 1; a bottle of dish soap in ml: its size)."""
+
 PRODUCT_PROMPT = """You fill in pantry product details for a grocery inventory.
 Use the given product info (barcode database data or a package photo). Prefer an existing generic from
 `generics` when one fits (is_new_generic=false, generic_name = its name exactly); otherwise propose a short new
@@ -184,10 +196,14 @@ stock_unit (e.g. count the tortillas when the generic is in piece), or null if u
 stock unit (1 for g, about 1 for ml of water-like liquids, grams per piece for piece).
 category is supply for non-food household consumables (trash bags, toilet paper, detergent, cat litter,
 cleaning products), else food. Supplies never expire (best_before_days -1) and go where they are kept at home
-(""" + ", ".join(HOME_LOCATIONS) + ")."
+(""" + ", ".join(HOME_LOCATIONS) + """).
+measure and measure_factor: """ + MEASURE_RULES
 
 CONVERSION_PROMPT = """Give the multiplier that converts an amount of the named cooking ingredient from
 from_unit to to_unit (to = from * factor), with a one-sentence explanation."""
+
+MEASURE_PROMPT = """Pick the household measure for a pantry or household product stocked in the given stock_unit.
+""" + MEASURE_RULES + """ Return measure and factor."""
 
 MATCH_PROMPT = """Match each recipe ingredient name (by its index in the list) to the best grocery product.
 product_id must be one of the given product ids, or null if nothing reasonably fits. Return one item per ingredient."""
@@ -355,6 +371,10 @@ class AI:
     def guess_conversion(self, product_name: str, from_unit: str, to_unit: str) -> ConversionGuess:
         text = json.dumps({"product": product_name, "from_unit": from_unit, "to_unit": to_unit})
         return self._parse("conversion", ConversionGuess, "low", CONVERSION_PROMPT, [{"type": "text", "text": text}])
+
+    def guess_measure(self, name: str, stock_unit: str) -> MeasureGuess:
+        text = json.dumps({"product": name, "stock_unit": stock_unit})
+        return self._parse("measure", MeasureGuess, "low", MEASURE_PROMPT, [{"type": "text", "text": text}])
 
     def match_ingredients(self, names: list[str], products: list[dict]) -> Picks:
         if len(products) > MATCH_LIMIT and self.mode() == "economy":

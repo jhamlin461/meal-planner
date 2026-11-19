@@ -299,7 +299,9 @@ class FakeAI:
     """Canned stand-in for app.ai.AI; set attributes per test, or set `error` to make every call raise."""
 
     def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None, mode="full",
-                 check=None):
+                 check=None, measure=None):
+        self.measure = measure  # guess_measure's answer (a MeasureGuess); None: it fails as Claude would
+        self.measures: list[tuple[str, str]] = []  # every guess_measure call's (name, stock unit)
         self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
         self.check = check  # check_table's answer (a TableCheck, or an exception it raises); None: the table back
         self.checks: list[dict] = []  # every check_table call's arguments; `checked` is the last
@@ -337,6 +339,14 @@ class FakeAI:
 
     def guess_conversion(self, product_name, from_unit, to_unit):
         return self._ret(self.conversion)
+
+    def guess_measure(self, name, stock_unit):
+        from app.ai import AIError
+        if self.mode_ != "free":
+            self.measures.append((name, stock_unit))
+        if self.measure is None and self.mode_ != "free" and not self.error:
+            raise AIError("no measure")
+        return self._ret(self.measure)
 
     def match_ingredients(self, names, products):
         return self._ret(self.picks)

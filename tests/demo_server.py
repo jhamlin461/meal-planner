@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 
-from app.ai import ConversionGuess, Picks, ProductGuess, RecipeDraft
+from app.ai import ConversionGuess, MeasureGuess, Picks, ProductGuess, RecipeDraft
 from app.config import Settings
 from app.home import add_starters
 from app.house import HouseStore
@@ -71,6 +71,8 @@ def seed(data: Path, settings: Settings):
     tp = product("Toilet paper", "piece", "Bathroom", product_group_id=group, min_stock_amount=4,
                  default_best_before_days=-1)
     g.add_stock(tp, 12, None, i.location["Bathroom"])
+    for pid, word in ((bags, "bags"), (tp, "rolls")):
+        g.set_userfields("products", pid, {"measure": word, "measure_factor": 1, "measure_source": "estimate"})
     g.volatile_result["missing_products"] = [{"id": bags, "name": g.get_object("products", bags)["name"],
                                               "amount_missing": 1}]
     add_starters(g, house, house.people())  # litter and trash chores, taking turns
@@ -97,6 +99,10 @@ def seed(data: Path, settings: Settings):
         pid = product(name, unit, loc)
         bb = today + timedelta(days=days)
         g.add_stock(pid, amount, bb, i.location[loc])
+        word, factor = {"Greek yogurt": ("cups", 245), "Eggs": ("eggs", 1), "Basmati rice": ("cups", 185),
+                        "Frozen peas": ("cups", 145)}.get(name, ("", 0))
+        if word:  # spinach has none yet: the first Inventory visit asks (the fake's answer), the next shows it
+            g.set_userfields("products", pid, {"measure": word, "measure_factor": factor, "measure_source": "estimate"})
         if days <= 3:
             soon.append({"product_id": pid, "amount": amount, "best_before_date": bb.isoformat()})
     g.volatile_result["due_products"] = [s for s in soon if s["best_before_date"] >= today.isoformat()]
@@ -124,7 +130,7 @@ def main():
     ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]), mode=mode,  # Create and Save work in the demo
                 guess=ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
                                    location="Pantry", best_before_days=30, g_per_unit=1),
-                conversion=ConversionGuess(factor=125, explanation=""))
+                conversion=ConversionGuess(factor=125, explanation=""), measure=MeasureGuess(measure="cups", factor=30))
     app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
                      settings, store, house=house, ha=ha)
     if len(sys.argv) > 1:

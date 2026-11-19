@@ -157,7 +157,7 @@ def test_scan_page_has_sheet_stepper_trip_and_close(env):
     assert re.search(r'<input id="packs" name="packs" type="number" min="1" step="1"', found)
     assert 'name="place"' in found and 'name="amount"' in found and "Keep at least" in found
     assert 'id="found-change"' in found and ">Change<" in found and ">Cancel<" in found
-    assert 'id="found-left"' in found and "${qty(left, d.unit)} left" in env[3].get("/static/app.js").text
+    assert 'id="found-left"' in found and '$("found-left").textContent = d.left;' in env[3].get("/static/app.js").text
     assert 'id="found-error" role="alert"' in found
     unknown = _section(sheet, 'data-state="unknown"', "</section>")
     assert "Take a photo of the package" in unknown and "Fill in the details" in unknown
@@ -1227,7 +1227,7 @@ def test_new_supply_asks_keep_at_least(env):
                             location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
     r = c.post("/api/scan/photo", data={"code": "4242"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
-    assert r["status"] == "found" and r["need_min"] and r["unit"] == "piece" and r["package"] == 40
+    assert r["status"] == "found" and r["need_min"] and r["label"] == "pieces" and r["package"] == 40
     pid = r["product_id"]
     assert pid not in g.stock
     for bad in (0, -1, "inf"):  # the sheet's Keep at least goes with the add

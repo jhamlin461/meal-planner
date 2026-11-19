@@ -165,7 +165,6 @@ if (video) {
   }
   $("retry").addEventListener("click", () => retry());
 
-  const qty = (n, unit) => (unit && unit !== "piece" ? `${n} ${unit}` : `${n}`);
   const byAmount = () => !$("amount-field").hidden;
 
   function showFound(d) {
@@ -175,8 +174,7 @@ if (video) {
     const keep = d.need_min && !use;
     $("h-found").textContent = d.product;
     $("found-generic").textContent = `Counts as ${d.generic}`;
-    const left = +Number(d.in_stock || 0).toFixed(2);
-    $("found-left").textContent = `${qty(left, d.unit)} left`;
+    $("found-left").textContent = d.left;  // in the item's measure: "2 1/2 cups left"
     $("found-photo").hidden = !d.photo;
     if (d.photo) $("found-photo").src = d.photo;
     f.place.replaceChildren(...d.places.map((p) => new Option(p, p, p === d.place, p === d.place)));
@@ -186,12 +184,12 @@ if (video) {
     $("amount-field").hidden = !amountMode;
     f.amount.value = "";
     f.amount.required = amountMode;
-    const unit = d.unit === "piece" ? "pieces" : d.unit;
+    const unit = d.label;  // the word for amounts typed in d.measure, the item's measure
     $("amount-label").textContent = use ? `How much did you use? (${unit})` : `How much is in it? (${unit})`;
     $("amount-hint").hidden = use;
     $("min-field").hidden = !keep;
     $("min-label").textContent = `Keep at least (${unit})`;
-    f.min.value = keep ? d.package ?? 1 : "";
+    f.min.value = keep ? d.keep : "";
     $("found-error").hidden = true;
     label();
     show("found");
@@ -229,14 +227,13 @@ if (video) {
     $("found-error").hidden = true;
     try {
       const r = await post("/api/scan/confirm", {product_id: d.product_id, action, packs: amount ? 1 : packs, amount,
-        place, min});
+        place, min, measure: d.measure});
       if (r.status !== "ok") throw new Error(r.message);
-      const n = amount ? qty(amount, d.unit) : packs;
-      const asked = amount || (d.kind === "supply" ? packs : packs * (d.package || 0));
+      const n = amount ? r.shown : packs;
       let text;
       if (action === "add") text = `Added ${n} ${d.product} to ${place}`;
       else if (r.amount <= 0) text = `No ${d.product} in stock, so nothing was used`;
-      else if (r.amount < asked) text = `Used the last ${d.product}`;
+      else if (r.short) text = `Used the last ${d.product}`;
       else text = `Used ${n} ${d.product}`;
       if (r.transaction_id) {
         trip.unshift({id: r.transaction_id, action, text});

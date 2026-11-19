@@ -4,6 +4,7 @@ import httpx
 
 from app.ai import AIPaused, ProductGuess
 from app.inventory import default_place, places
+from app.measure import fields as measure_fields, fixed
 from app.setup_grocy import ids, supplies_group
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{}.json"
@@ -65,6 +66,7 @@ def generic_choices(grocy) -> list[dict]:
 
 
 UNIT_FIELDS = ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price")
+MEASURE = ("measure", "measure_factor", "measure_source")
 
 
 def _generic_named(grocy, name: str) -> dict | None:
@@ -74,7 +76,7 @@ def _generic_named(grocy, name: str) -> dict | None:
 def _align_to_parent(grocy, parent: dict, fields: dict, uf: dict) -> dict:
     """Give a child its generic's units (Grocy sums child stock into the parent unconverted) and product group.
     Updates `fields`;
-    returns the child's userfields, minus package_amount/g_per_unit when those were in another unit."""
+    returns the child's userfields; when those were in another unit, its generic's g_per_unit and measure instead."""
     unit = int(parent.get("qu_id_stock") or 0)
     same = int(fields.get("qu_id_stock") or 0) == unit
     fields.update(dict.fromkeys(UNIT_FIELDS, unit))
@@ -82,7 +84,7 @@ def _align_to_parent(grocy, parent: dict, fields: dict, uf: dict) -> dict:
     if same:
         return uf
     puf = grocy.userfields("products", int(parent["id"]))
-    return {"g_per_unit": puf["g_per_unit"]} if puf.get("g_per_unit") not in (None, "") else {}
+    return {k: puf[k] for k in ("g_per_unit", *MEASURE) if puf.get(k) not in (None, "")}
 
 
 def _nutrition(info: dict) -> dict:
@@ -102,8 +104,9 @@ def _find_or_create_generic(grocy, name: str, fields: dict, uf: dict, nutrition:
     return pid
 
 
-def _product_fields(grocy, g) -> tuple[dict, dict]:
-    """(product columns, userfields) for a product described by a ProductGuess."""
+def _product_fields(grocy, g, source: str = "estimate") -> tuple[dict, dict]:
+    """(product columns, userfields) for a product described by a ProductGuess; `source` is where its package size
+    came from (a scan's own data or a typed form: "owner")."""
     i = ids(grocy)
     unit = i.unit[g.stock_unit]
     loc = i.location[g.location if g.location in i.location else default_place(grocy)]
@@ -112,15 +115,18 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
     if g.category == "supply":  # household supplies never expire
         fields |= {"product_group_id": supplies_group(grocy), "default_best_before_days": -1}
     gpu = g.g_per_unit if g.g_per_unit is not None else (None if g.stock_unit == "piece" else 1)
-    uf = {**({"package_amount": g.package_amount} if g.package_amount and g.package_amount > 0 else {}),
-          **({"g_per_unit": gpu} if gpu is not None else {})}  # unknown size: the scan screen asks for the amount
+    m = fixed(getattr(g, "measure", ""), getattr(g, "measure_factor", None), g.stock_unit)
+    uf = {**({"package_amount": g.package_amount, "package_source": source}
+             if g.package_amount and g.package_amount > 0 else {}),
+          **({"g_per_unit": gpu} if gpu is not None else {}),  # unknown size: the scan screen asks for the amount
+          **(measure_fields(m, "estimate") if m else {})}  # none (free mode): asked once Claude is back
     return fields, uf
 
 
 def _create(grocy, g, name: str, code: str | None, nutrition: dict) -> Resolved:
     """The generic (found or new) and a product `name` under it with barcode `code`. Without a code, a name that is
-    the generic's own makes just the generic."""
-    fields, uf = _product_fields(grocy, g)
+    the generic's own makes just the generic. A scan's or a typed package size counts as the owner's."""
+    fields, uf = _product_fields(grocy, g, "owner")
     parent = _generic_named(grocy, g.generic_name)
     if parent:
         uf = _align_to_parent(grocy, parent, fields, uf)
@@ -195,7 +201,8 @@ def relink(grocy, product_id: int, generic_name: str) -> None:
         fields = dict(child)
         new_uf = _align_to_parent(grocy, parent, fields, uf)
         upd = {k: fields[k] for k in UNIT_FIELDS}
-        grocy.set_userfields("products", product_id, {"package_amount": "", "g_per_unit": "", **new_uf})
+        grocy.set_userfields("products", product_id, {**dict.fromkeys(("package_amount", "package_source", "g_per_unit",
+                                                                        *MEASURE), ""), **new_uf})
     if parent:
         upd["product_group_id"] = parent.get("product_group_id")  # follows its generic between Pantry and Supplies
     parent_id = _find_or_create_generic(

@@ -1,9 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Inventory{% endblock %}
 {% block main_attrs %} class="roomy"{% endblock %}
-{% macro unit(u) %}{{ "pieces" if u == "piece" else u }}{% endmacro %}
-{% macro left(n, u) %}{% if n > 0 %}{{ n|num }}{% if u and u != "piece" %} {{ u }}{% endif %} left{% else %}None left{% endif %}{% endmacro %}
+{% macro left(r) %}{% if r.amount > 0 %}{{ r.amount|show(r.m) }} left{% else %}None left{% endif %}{% endmacro %}
 {% macro keep() %}{% if place %}<input type="hidden" name="place" value="{{ place }}">{% endif %}{% endmacro %}
+{# amounts are typed in the measure the row shows; the server refuses them if it has changed since #}
+{% macro typed(r) %}{{ keep() }}<input type="hidden" name="measure" value="{{ r.m.word }}">{% endmacro %}
+{% macro measure_in(r) %}{% set now = label(r.m) %}{% set words = measure_choices(r.unit, r.m) %}
+    <form class="inline" method="post" action="/inventory/{{ r.pid }}/measure">{{ keep() }}
+      <label for="measure-{{ r.pid }}-{{ r.loc }}">Measure in</label>
+      <span class="inline-group">
+        <select id="measure-{{ r.pid }}-{{ r.loc }}" name="measure">{% if now not in words %}<option value="" selected disabled>Choose</option>{% endif %}{% for w in words %}<option value="{{ w }}"{% if w == now %} selected{% endif %}>{{ w }}</option>{% endfor %}</select>
+        <button class="btn">Change</button>
+      </span>
+    </form>
+{%- endmacro %}
 {% macro move(r, action) %}
     <form class="inline" method="post" action="{{ action }}">{{ keep() }}
       <input type="hidden" name="from_location" value="{{ r.loc }}">{% if r.kind == "food" %}<input type="hidden" name="amount" value="{{ r.amount|exact }}">{% endif %}
@@ -45,45 +55,47 @@
 <h2>{{ loc }}</h2>
 <ul class="rows stock">
 {% for r in rows %}<li>
-  <p class="row stock-head"><b class="grow breakable">{{ r.name }}</b><span class="qty">{{ left(r.amount, r.unit) }}</span></p>
+  <p class="row stock-head"><b class="grow breakable">{{ r.name }}</b><span class="qty">{{ left(r) }}</span></p>
 {%- if r.kind == "food" %}
   {% if r.when %}<p class="stock-when {{ 'error' if r.past else 'muted' }}">{{ r.when }}</p>{% endif %}
   <div class="stock-actions">
-  <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">{{ keep() }}
+  <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">{{ typed(r) }}
     <label for="use-{{ r.pid }}-{{ r.loc }}">Used</label>
     <span class="inline-group">
-      <input id="use-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|exact }}" inputmode="decimal" required>
-      {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+      <input id="use-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" max="{{ (totals[r.pid] / r.m.factor)|exact }}" inputmode="decimal" required>
+      {%- if r.m.word %}<span>{{ label(r.m) }}</span>{% endif %}
       <button class="btn">Use</button>
     </span>
   </form>
   <details class="stock-more"><summary>More</summary>
-    <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">{{ keep() }}
+    <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">{{ typed(r) }}
       <label for="total-{{ r.pid }}-{{ r.loc }}">Total</label>
       <span class="inline-group">
-        <input id="total-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" value="{{ totals[r.pid]|exact }}" step="any" min="0" inputmode="decimal" required>
-        {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+        <input id="total-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" value="{{ totals[r.pid]|in_measure(r.m) }}" step="any" min="0" inputmode="decimal" required>
+        {%- if r.m.word %}<span>{{ label(r.m) }}</span>{% endif %}
         <button class="btn">Set total</button>
       </span>
     </form>
     {{ move(r, "/pantry/%s/move" % r.pid) }}
+    {{ measure_in(r) }}
     {{ wipe(r) }}
   </details>
   </div>
 {%- else %}{% set split = r.total != r.amount %}
-  {% if r.low or split %}<p class="stock-when {{ 'warn' if r.low else 'muted' }}">{% if split %}{{ r.total|num }} in all.{% if r.low %} {% endif %}{% endif %}{% if r.low %}Running low.{% endif %}</p>{% endif %}
+  {% if r.low or split %}<p class="stock-when {{ 'warn' if r.low else 'muted' }}">{% if split %}{{ r.total|show(r.m) }} in all.{% if r.low %} {% endif %}{% endif %}{% if r.low %}Running low.{% endif %}</p>{% endif %}
   <div class="stock-actions">
   <form method="post" action="/home/supplies/{{ r.pid }}/used">{{ keep() }}<button class="btn"{% if r.total <= 0 %} disabled{% endif %}>Used one</button></form>
   <details class="stock-more"><summary>More</summary>
     {% if r.amount > 0 %}{{ move(r, "/home/supplies/%s/move" % r.pid) }}{% endif %}
-    <form class="inline" method="post" action="/home/supplies/{{ r.pid }}/min">{{ keep() }}
+    <form class="inline" method="post" action="/home/supplies/{{ r.pid }}/min">{{ typed(r) }}
       <label for="min-{{ r.pid }}-{{ r.loc }}">Keep at least</label>
       <span class="inline-group">
-        <input id="min-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" value="{{ r.min|exact }}" inputmode="decimal" required>
-        {%- if r.unit %}<span>{{ r.unit }}{{ "s" if r.unit == "piece" and r.min != 1 }}</span>{% endif %}
+        <input id="min-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" value="{{ r.min|in_measure(r.m) }}" inputmode="decimal" required>
+        {%- if r.m.word %}<span>{{ label(r.m, r.min / r.m.factor) }}</span>{% endif %}
         <button class="btn">Save</button>
       </span>
     </form>
+    {{ measure_in(r) }}
     {{ wipe(r) }}
   </details>
   </div>
