@@ -365,5 +365,5 @@ def test_inventory_more_has_clear_and_remove(env):
     html = c.get("/inventory").text
     for pid in (yogurt, bags):
         assert f'action="/inventory/{pid}/clear"' in html and f'action="/inventory/{pid}/remove"' in html
-    assert r"Remove Greek yogurt? Its stock, barcode and details are deleted. This can't be undone." in html
+    assert r"Remove Greek yogurt? Its stock, barcode and details are deleted. This can\u0027t be undone." in html
     assert 'class="btn danger"' in html and "style=" not in html
