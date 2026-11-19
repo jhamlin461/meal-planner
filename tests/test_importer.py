@@ -82,6 +82,32 @@ def test_pending_store_roundtrip(tmp_path):
     assert store.get("../../etc/passwd") is None
 
 
+def test_an_import_discarded_while_claude_reads_it_stays_gone(tmp_path):
+    store = PendingStore(tmp_path)
+    p = store.new("soup.pdf", pdf=b"%PDF-1")
+
+    class DiscardingAI(RecordingAI):
+        def structure_recipe(self, **kw):
+            store.delete(p.id)  # the reviewer discards it during the long read
+            return super().structure_recipe(**kw)
+
+    process(store, DiscardingAI(draft=make_draft([(1, "", "egg")])), httpx.Client(), p.id, None, b"%PDF-1")
+    assert store.get(p.id) is None and list(tmp_path.iterdir()) == []  # no json, no photo, no .tmp
+
+
+def test_pending_list_tolerates_a_file_vanishing(tmp_path, monkeypatch):
+    store = PendingStore(tmp_path)
+    keep, gone = store.new("a.pdf"), store.new("b.pdf")
+    real = Path.read_text
+
+    def racing(f, *a, **kw):
+        if f.stem == gone.id:
+            f.unlink()  # discarded between the glob and the read
+        return real(f, *a, **kw)
+    monkeypatch.setattr(Path, "read_text", racing)
+    assert [x.id for x in store.all()] == [keep.id]
+
+
 def test_process_url_marks_ready(tmp_path):
     seen = {}
 

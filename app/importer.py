@@ -297,11 +297,15 @@ class PendingStore:
         p = Pending(id=uuid.uuid4().hex, status="processing", source=source)
         if pdf:
             self._file(p.id, ".pdf").write_bytes(pdf)
-        self.save(p)
+        self.save(p, new=True)
         return p
 
-    def save(self, p: Pending) -> None:
+    def save(self, p: Pending, new: bool = False) -> None:
+        """Writes the import back; an import discarded meanwhile (its .json gone) stays discarded.
+        ponytail: check-then-write, so a discard in the same millisecond can still lose; a lock if that ever bites."""
         f = self._file(p.id, ".json")
+        if not new and not f.exists():
+            return
         tmp = f.with_suffix(".tmp")
         tmp.write_text(p.model_dump_json(), encoding="utf-8")
         tmp.replace(f)  # atomic: a reader never sees half a file
@@ -319,11 +323,17 @@ class PendingStore:
         return f if f and f.exists() else None
 
     def save_photo(self, id: str, data: bytes) -> None:
-        self._file(id, ".jpg").write_bytes(data)
+        if self._file(id, ".json").exists():  # not for an import discarded meanwhile
+            self._file(id, ".jpg").write_bytes(data)
 
     def all(self) -> list[Pending]:
-        files = sorted(self.dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
-        return [Pending.model_validate_json(f.read_text(encoding="utf-8")) for f in files]
+        out = []
+        for f in self.dir.glob("*.json"):
+            try:  # one discarded between the glob and the read is just gone
+                out.append((f.stat().st_mtime, Pending.model_validate_json(f.read_text(encoding="utf-8"))))
+            except FileNotFoundError:
+                pass
+        return [p for _, p in sorted(out, key=lambda x: x[0])]
 
     def delete(self, id: str) -> None:
         for ext in (".json", ".pdf", ".jpg"):
