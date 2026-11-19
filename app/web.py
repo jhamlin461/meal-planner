@@ -685,7 +685,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def inventory(request: Request, background: BackgroundTasks, place: int | None = None, msg: str = "",
                   err: str = ""):
         inv, have = rows(grocy, settings, date.today()), places(grocy)
-        bare = sorted({r["pid"] for rs in inv.groups.values() for r in rs if r["m"].word == r["unit"]})
+        bare = sorted({r[k] for rs in inv.groups.values() for r in rs
+                       for k, m in (("pid", "m"), ("gid", "km")) if r[m].word == r["unit"]})
         if bare and ai.mode() != "free":
             background.add_task(fill_measures, bare)
         chips = {n: have[n] for n in inv.groups if n in have}  # places holding something, in places() order
@@ -721,7 +722,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def inventory_measure(pid: int, word: str = Form("", alias="measure"), place: int | None = Form(None)):
         """The person's own measure for this product: every amount of it is shown and typed in it from now on."""
         try:
-            msr.change(grocy, product_or_404(pid), word)
+            p = product_or_404(pid)
+            msr.change(grocy, p, word)
+            if p.get("parent_product_id"):  # a brand and its generic are one item to the person
+                msr.change(grocy, generic_of(p), word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
         return inventory_back(place)
@@ -1325,7 +1329,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     # ---- shopping -----------------------------------------------------------------------------------------------
     @app.get("/shopping")
-    def shopping(request: Request, bad: int = 0):
+    def shopping(request: Request, background: BackgroundTasks, bad: int = 0):
         i = ids(grocy)
         with plan_lock:
             rebuild()
@@ -1337,8 +1341,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             p = products.get(pid)
             amount = float(row.get("amount") or 0)
             pkg = _num(grocy.userfields("products", pid).get("package_amount")) if p else None
+            unit = units.get(_int(p.get("qu_id_stock")), "") if p else ""
             return {"id": int(row["id"]), "pid": pid if p else None, "name": p["name"] if p else row.get("note") or "(item)",
-                    "amount": amount, "m": msr.of(grocy, None, p, units.get(_int(p.get("qu_id_stock")), "")) if p else None,
+                    "amount": amount, "unit": unit, "m": msr.of(grocy, None, p, unit) if p else None,
                     "done": bool(int(float(row.get("done") or 0))),
                     "packs": packages_needed(amount, pkg) if pkg else None, "pkg": pkg}
 
@@ -1346,6 +1351,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                  for n in ("Meal plan", "Running low", "Extras")}
         # ticked = already got it, so it stays out of the Walmart hand-off; a product is on one list only
         todo = {r["pid"]: r["amount"] for r in lists["Meal plan"] + lists["Running low"] if r["pid"] and not r["done"]}
+        bare = sorted({r["pid"] for n in ("Meal plan", "Running low") for r in lists[n] if r["pid"] and r["m"].word == r["unit"]})
+        if bare and ai.mode() != "free":
+            background.add_task(fill_measures, bare)
         cart, rest = walmart_items(grocy, todo)
         return page(request, "shopping.html", lists=lists, bad=bad,
                     cart_link=cart_url(cart, settings.walmart_store_id) if cart else None,

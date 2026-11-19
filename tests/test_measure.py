@@ -277,3 +277,33 @@ def test_background_fill_asks_a_failed_product_once_a_day(env):
     c.get("/inventory")
     c.get("/inventory")
     assert ai.measures == [("Flour", "g")]
+
+
+def test_brand_food_row_asks_a_measure_for_its_generic_too(env):
+    g, ai, c = env
+    milk = product(g, "Milk", unit="ml")
+    brand = product(g, "Store milk", unit="ml", parent_product_id=milk)
+    g.add_stock(brand, 500, None, ids(g).location["Pantry"])
+    ai.measure = MeasureGuess(measure="cups", factor=236.6)
+    c.get("/inventory")
+    assert {n for n, _ in ai.measures} == {"Milk", "Store milk"}
+    assert g.userfields("products", milk)["measure"] == "cups"
+
+
+def test_measure_in_on_a_brand_row_changes_its_generic_too(env):
+    g, ai, c = env
+    milk = product(g, "Milk", unit="ml")
+    brand = product(g, "Store milk", unit="ml", parent_product_id=milk)
+    g.add_stock(brand, 500, None, ids(g).location["Pantry"])
+    measured(g, milk, "cups", 236.6)
+    measured(g, brand, "cups", 236.6)
+    c.post(f"/inventory/{brand}/measure", data={"measure": "tbsp"})
+    assert g.userfields("products", brand)["measure"] == g.userfields("products", milk)["measure"] == "tbsp"
+
+
+def test_shopping_asks_a_measure_for_products_without_one(env):
+    g, ai, c = env
+    supply(g, "Dish soap", min_stock=2, stock=0)
+    ai.measure = MeasureGuess(measure="bottles", factor=750)
+    c.get("/shopping")
+    assert [n for n, _ in ai.measures] == ["Dish soap"]

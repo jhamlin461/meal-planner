@@ -105,7 +105,8 @@ def rows(grocy, settings, today: date) -> Inventory:
     def row(pid: int, loc: int, kind: str) -> dict:
         p = products.get(pid, {})
         return {"pid": pid, "loc": loc, "name": p.get("name", f"product {pid}"), "amount": 0.0, "bb": NEVER,
-                "unit": units.get(_int(p.get("qu_id_stock")), ""), "kind": kind, "when": "", "past": False}
+                "unit": units.get(_int(p.get("qu_id_stock")), ""), "kind": kind, "when": "", "past": False,
+                "gid": generic(pid)}
 
     vol = grocy.volatile(settings.expiry_warn_days)
     soon = [{"name": products.get(int(r["product_id"]), {}).get("name", f"product {r['product_id']}"),
@@ -138,7 +139,7 @@ def rows(grocy, settings, today: date) -> Inventory:
             r["low"] = r["total"] < r["min"]
     measures: dict[int, measure.Measure] = {}
     for r in out:  # stored measures only: Claude is asked after the page is sent (see web's inventory)
-        for key, pid in (("m", r["pid"]), ("km", generic(r["pid"]))):  # km: the generic's, where Keep at least is typed
+        for key, pid in (("m", r["pid"]), ("km", r["gid"])):  # km: the generic's, where Keep at least is typed
             if pid not in measures:
                 measures[pid] = measure.of(grocy, None, products.get(pid, {"id": pid}),
                                             units.get(_int(products.get(pid, {}).get("qu_id_stock")), ""))

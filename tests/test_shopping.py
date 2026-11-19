@@ -17,7 +17,7 @@ def test_two_recipes_sharing_flour_sum_before_subtracting():
     positions = {1: [{"product_id": 10, "amount": 150}], 2: [{"product_id": 10, "amount": 300}]}
     needs = week_needs(entries, positions, {1: 2, 2: 2})
     assert needs == {10: 600}
-    assert combined_need(needs, {}, {10: 500}, {}) == {10: 100}
+    assert combined_need(needs, {10: 500}, {}) == {10: 100}
 
 
 def test_week_needs_ignores_done_notes_and_coerces_strings():
@@ -78,7 +78,7 @@ def test_staple_in_stock_stays_off_list_end_to_end(fake_grocy_with_week):
 
 
 def test_float_noise_does_not_create_phantom_item():
-    assert combined_need({1: 0.1 * 3}, {}, {1: 0.3}, {}) == {}
+    assert combined_need({1: 0.1 * 3}, {1: 0.3}, {}) == {}
 
 
 def test_rebuild_survives_free_text_row_and_bad_base_servings(fake_grocy_with_week):
@@ -196,3 +196,40 @@ def test_fake_volatile_keeps_fixed_result_without_min_stock(fake_grocy_with_week
     v = g.volatile(3)
     assert v["due_products"] == [{"product_id": 10}]
     assert v["missing_products"] == [{"id": bags, "name": "Trash bags", "amount_missing": 2, "is_partly_in_stock": 0}]
+
+
+def test_combined_need_uses_only_the_stock_it_is_given(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    bags = _supply(g, stock=5)  # Grocy's total is 5, above the minimum of 2
+    assert rebuild_lists(g, TODAY, 6).get(bags) is None
+    assert combined_need({}, {bags: 1}, {bags: 2}) == {bags: 1}  # free stock 1: under the minimum
+
+
+def test_staple_listed_only_when_out(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.set_userfields("products", 10, {"staple": "1"})  # needs 300 g
+    assert rebuild_lists(g, TODAY, 6) == {}  # 100 g in stock
+    g.stock[10][0]["amount"] = 0
+    assert rebuild_lists(g, TODAY, 6) == {10: 300}
+
+
+def test_plan_covered_but_not_plan_plus_minimum_lists_the_difference(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.add_stock(10, 250, None, None)  # 350 g in stock, plan needs 300
+    g.update("products", 10, {"min_stock_amount": 100})
+    assert rebuild_lists(g, TODAY, 6) == {10: 50}
+    assert [(r["product_id"], r["amount"]) for r in _list(g, "Meal plan")] == [(10, 50)]
+    assert _list(g, "Running low") == []
+
+
+def test_tick_follows_a_product_moving_between_lists(fake_grocy_with_week):
+    g = fake_grocy_with_week
+    g.update("products", 10, {"min_stock_amount": 400})  # below its minimum and planned: Meal plan, 600
+    rebuild_lists(g, TODAY, 6)
+    [row] = _list(g, "Meal plan")
+    g.update("shopping_list", row["id"], {"done": 1})
+    g.delete("meal_plan", g.objects("meal_plan")[0]["id"])  # plan gone: now only Running low, 300
+    rebuild_lists(g, TODAY, 6)
+    assert _list(g, "Meal plan") == []
+    [moved] = _list(g, "Running low")
+    assert (moved["product_id"], moved["amount"], moved["done"]) == (10, 300, 1)

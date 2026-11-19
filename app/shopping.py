@@ -29,13 +29,12 @@ def week_needs(entries: list[dict], positions: dict[int, list[dict]],
     return needs
 
 
-def combined_need(meal_plan: dict[int, float], running_low: dict[int, float], stock, mins: dict[int, float]
-                  ) -> dict[int, float]:
+def combined_need(meal_plan: dict[int, float], stock, mins: dict[int, float]) -> dict[int, float]:
     """Per product, enough to cook the plan and still keep the minimum: max(0, need + min - stock). `meal_plan` is what
-    the plan needs (not what is short); `running_low` names products below their minimum. `stock`: product -> amount
-    to count (Task 7's meal kits pass free stock here)."""
+    the plan needs (not what is short). `stock`: the amount to count per product, the only stock read (Task 7's meal
+    kits pass free stock here); a product with a minimum is covered even with no plan."""
     out = {}
-    for pid in meal_plan.keys() | running_low.keys():
+    for pid in meal_plan.keys() | mins.keys():
         short = meal_plan.get(pid, 0.0) + mins.get(pid, 0.0) - stock.get(pid, 0.0)
         if short > 1e-6:  # tolerate float noise (0.1*3 vs 0.3)
             out[pid] = short
@@ -56,16 +55,18 @@ def rebuild_lists(grocy, today: date, shopping_weekday: int) -> dict[int, float]
     stock = grocy.stock_amounts()
     staples = {pid for pid in needs if stock.get(pid, 0) > 0 and str(grocy.userfields("products", pid).get("staple")) == "1"}
     needs = {pid: n for pid, n in needs.items() if pid not in staples}
-    low = {int(r["id"]): float(r["amount_missing"]) for r in grocy.volatile(1).get("missing_products") or []}
     mins = {int(p["id"]): float(p["min_stock_amount"]) for p in grocy.objects("products")
             if float(p.get("min_stock_amount") or 0) > 0}
-    need = combined_need(needs, low, stock, mins)
-    _sync_list(grocy, "Meal plan", {pid: a for pid, a in need.items() if pid in needs})
-    _sync_list(grocy, "Running low", {pid: a for pid, a in need.items() if pid not in needs})
+    need = combined_need(needs, stock, mins)
+    ticked = {int(r["product_id"]): float(r.get("amount") or 0) for n in ("Meal plan", "Running low")
+              for r in grocy.objects("shopping_list", shopping_list_id=ids(grocy).list[n])
+              if r.get("product_id") and _done(r)}  # a tick follows its product to the other list
+    _sync_list(grocy, "Meal plan", {pid: a for pid, a in need.items() if pid in needs}, ticked)
+    _sync_list(grocy, "Running low", {pid: a for pid, a in need.items() if pid not in needs}, ticked)
     return need
 
 
-def _sync_list(grocy, name: str, wanted: dict[int, float]) -> None:
+def _sync_list(grocy, name: str, wanted: dict[int, float], ticked: dict[int, float]) -> None:
     """Make list `name` one row per product in `wanted`, in place so row ids (and done flags) stay stable for pages
     already open. Callers compute `wanted` before this, so a failure can't leave the list emptied."""
     list_id = ids(grocy).list[name]
@@ -85,7 +86,7 @@ def _sync_list(grocy, name: str, wanted: dict[int, float]) -> None:
     for pid, amount in wanted.items():
         if pid not in kept:
             grocy.create("shopping_list", {"shopping_list_id": list_id, "product_id": pid, "amount": amount,
-                                           "done": 0})
+                                           "done": int(amount <= ticked.get(pid, 0.0) + 1e-9)})
 
 
 def walmart_items(grocy, shortfall: dict[int, float]) -> tuple[list[tuple[str, int]], list[dict]]:

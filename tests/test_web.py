@@ -845,14 +845,15 @@ def test_suggest_lists_picks_with_accept(env):
 def test_shopping_shows_walmart_link_with_store(env, tmp_path):
     g, ai, store, _, _ = env
     pid, rid = flour_recipe(g)
-    g.set_userfields("products", pid, {"walmart_item_id": "10535106", "package_amount": 2268})
+    g.set_userfields("products", pid, {"walmart_item_id": "10535106", "package_amount": 2268,
+                                       "measure": "cups", "measure_factor": 126})
     app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(no_network)),
                      Settings("", "", "", "KEY", "5435", 6, tmp_path, 3), store)
     c = TestClient(app)
     c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid, "servings": "4"})
     html = c.get("/shopping").text
     assert "addToCart?items=10535106&amp;storeId=5435" in html
-    assert "Flour" in html and "1 pack of 2268 g" in html
+    assert "Flour" in html and "1 pack of 18 cups" in html
     [row] = g.objects("shopping_list", shopping_list_id=ids(g).list["Meal plan"])
     c.post(f"/shopping/{row['id']}/toggle")  # ticked = already got it, so out of the hand-off
     assert "addToCart" not in c.get("/shopping").text
@@ -2179,4 +2180,4 @@ def test_product_on_both_lists_shown_once_with_combined_amount(env):
 
 def test_combined_need():
     from app.shopping import combined_need
-    assert combined_need({1: 300, 2: 50}, {1: 150, 3: 2}, {1: 100, 2: 100, 3: 1}, {1: 150, 3: 3}) == {1: 350, 3: 2}
+    assert combined_need({1: 300, 2: 50}, {1: 100, 2: 100, 3: 1}, {1: 150, 3: 3}) == {1: 350, 3: 2}
