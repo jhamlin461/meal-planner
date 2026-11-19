@@ -18,7 +18,8 @@ BETAS = ["server-side-fallback-2026-07-01"]
 HAIKU = "claude-haiku-5-5"  # no server-side fallbacks: called without betas/fallbacks
 # Economy mode, per call type: (model, effort). Week suggestions are not listed: they stay as in full mode.
 ECONOMY = {"recipe": (MODEL, "medium"), "check": (MODEL, "medium"), "product": (HAIKU, "low"),
-           "conversion": (HAIKU, "low"), "match": (HAIKU, "low"), "measure": (HAIKU, "low")}
+           "conversion": (HAIKU, "low"), "match": (HAIKU, "low"), "measure": (HAIKU, "low"),
+           "walmart": (HAIKU, "low")}
 MATCH_LIMIT = 30  # economy: products sent with an ingredient list
 log = logging.getLogger(__name__)
 
@@ -109,6 +110,12 @@ class ProductGuess(BaseModel):
 class MeasureGuess(BaseModel):
     measure: str
     factor: float
+
+
+class WalmartRead(BaseModel):
+    package_amount: float | None = None  # what the listing sells, in the product's stock unit
+    grams_per_piece: float | None = None
+    measure_factor: float | None = None  # stock units per 1 of the product's household measure
 
 
 class ConversionGuess(BaseModel):
@@ -204,6 +211,11 @@ from_unit to to_unit (to = from * factor), with a one-sentence explanation."""
 
 MEASURE_PROMPT = """Pick the household measure for a pantry or household product stocked in the given stock_unit.
 """ + MEASURE_RULES + """ Return measure and factor."""
+
+WALMART_PROMPT = """A household product is linked to a Walmart listing. From the listing words (URL slug and page title),
+give what is plainly stated and null for the rest: package_amount, the size of one package in the given stock_unit
+(convert oz, lb, fl oz, count to g, ml or piece); grams_per_piece, for a product counted in pieces; measure_factor,
+stock units in one cup (or the product's household measure) only when the listing makes it obvious."""
 
 MATCH_PROMPT = """Match each recipe ingredient name (by its index in the list) to the best grocery product.
 product_id must be one of the given product ids, or null if nothing reasonably fits. Return one item per ingredient."""
@@ -375,6 +387,10 @@ class AI:
     def guess_measure(self, name: str, stock_unit: str) -> MeasureGuess:
         text = json.dumps({"product": name, "stock_unit": stock_unit})
         return self._parse("measure", MeasureGuess, "low", MEASURE_PROMPT, [{"type": "text", "text": text}])
+
+    def read_walmart(self, name: str, stock_unit: str, text: str) -> WalmartRead:
+        text = json.dumps({"product": name, "stock_unit": stock_unit, "listing": text})
+        return self._parse("walmart", WalmartRead, "low", WALMART_PROMPT, [{"type": "text", "text": text}])
 
     def match_ingredients(self, names: list[str], products: list[dict]) -> Picks:
         if len(products) > MATCH_LIMIT and self.mode() == "economy":

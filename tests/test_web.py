@@ -2045,3 +2045,60 @@ def test_main_app_sets_up_grocy_before_the_worker_and_starts_without_it(monkeypa
     monkeypatch.setattr(web, "bootstrap", down)
     calls.clear()
     assert web.main_app() is not None and calls == [("worker",)]  # the app still starts
+
+
+def _rice(g, name="Rice", unit="g", **uf):
+    pid = product(g, name, unit=unit)
+    g.set_userfields("products", pid, uf)
+    return pid
+
+
+def _link(c, pid, slug="Great-Value-Long-Grain-White-Rice-32-oz"):
+    return c.post(f"/products/{pid}/walmart", data={"link": f"https://www.walmart.com/ip/{slug}/10450114"})
+
+
+def test_link_refines_estimated_package_and_measure(env):
+    from app.ai import WalmartRead
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(package_amount=907, grams_per_piece=None, measure_factor=190)
+    pid = _rice(g, "Rice", package_amount=500, package_source="estimate", measure="cups", measure_factor=200,
+                  measure_source="estimate")
+    blank = _rice(g, "Rice 2", measure="cups", measure_factor=200)  # no sources: counts as estimates
+    assert _link(c, pid).status_code == 200 and _link(c, blank).status_code == 200
+    uf = g.userfields("products", pid)
+    assert (float(uf["package_amount"]), uf["package_source"], float(uf["measure_factor"]), uf["measure_source"],
+            uf["measure"], uf["walmart_item_id"]) == (907, "link", 190, "link", "cups", "10450114")
+    assert float(g.userfields("products", blank)["measure_factor"]) == 190
+    assert ai.walmart_reads[0] == ("Rice", "g", "Great Value Long Grain White Rice 32 oz")
+    # a blank package size is filled, and grams per piece land in g_per_unit for a piece product
+    ai.walmart = WalmartRead(package_amount=12, grams_per_piece=55, measure_factor=None)
+    eggs = product(g, "Eggs", unit="piece")
+    _link(c, eggs, "Eggs-12-ct")
+    uf = g.userfields("products", eggs)
+    assert (float(uf["package_amount"]), uf["package_source"], float(uf["g_per_unit"])) == (12, "link", 55)
+
+
+def test_link_never_overwrites_owner_values(env):
+    from app.ai import WalmartRead
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(package_amount=907, grams_per_piece=60, measure_factor=190)
+    pid = _rice(g, "Rice", package_amount=500, package_source="owner", g_per_unit=50, measure="cups",
+                  measure_factor=200, measure_source="owner")
+    _link(c, pid)
+    uf = g.userfields("products", pid)
+    assert (float(uf["package_amount"]), uf["package_source"], float(uf["measure_factor"]), uf["measure_source"],
+            float(uf["g_per_unit"])) == (500, "owner", 200, "owner", 50)
+    assert uf["walmart_item_id"] == "10450114"
+
+
+def test_link_saved_when_read_fails(env):
+    from app.ai import AIError
+    g, ai, _, c, _ = env
+    pid = _rice(g, "Rice", package_amount=500, package_source="estimate")
+    assert _link(c, pid).status_code == 200  # ai.walmart None: the read fails
+    ai.error = AIError("down")
+    assert _link(c, pid).status_code == 200
+    ai.error, ai.mode_ = None, "free"
+    assert _link(c, pid).status_code == 200
+    uf = g.userfields("products", pid)
+    assert uf["walmart_item_id"] == "10450114" and float(uf["package_amount"]) == 500 and uf["package_source"] == "estimate"

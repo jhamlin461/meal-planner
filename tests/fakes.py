@@ -299,7 +299,9 @@ class FakeAI:
     """Canned stand-in for app.ai.AI; set attributes per test, or set `error` to make every call raise."""
 
     def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None, mode="full",
-                 check=None, measure=None):
+                 check=None, measure=None, walmart=None):
+        self.walmart = walmart  # read_walmart's answer (a WalmartRead); None: it fails as Claude would
+        self.walmart_reads: list[tuple] = []  # every read_walmart call's (name, stock unit, text)
         self.measure = measure  # guess_measure's answer (a MeasureGuess); None: it fails as Claude would
         self.measures: list[tuple[str, str]] = []  # every guess_measure call's (name, stock unit)
         self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
@@ -347,6 +349,14 @@ class FakeAI:
         if self.measure is None and self.mode_ != "free" and not self.error:
             raise AIError("no measure")
         return self._ret(self.measure)
+
+    def read_walmart(self, name, stock_unit, text):
+        from app.ai import AIError
+        if self.mode_ != "free":
+            self.walmart_reads.append((name, stock_unit, text))
+        if self.walmart is None and self.mode_ != "free" and not self.error:
+            raise AIError("no read")
+        return self._ret(self.walmart)
 
     def match_ingredients(self, names, products):
         return self._ret(self.picks)

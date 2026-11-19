@@ -17,3 +17,10 @@ def test_packages_needed():
 
 def test_search_url_encodes_name():
     assert search_url("all purpose flour") == "https://www.walmart.com/search?q=all+purpose+flour"
+
+
+def test_slug_text():
+    from app.walmart import slug_text
+    assert slug_text("https://www.walmart.com/ip/Great-Value-Long-Grain-White-Rice-32-oz/10450114?x=1") == \
+        "Great Value Long Grain White Rice 32 oz"
+    assert slug_text("10450114") == "" and slug_text("https://www.walmart.com/ip/10450114") == ""

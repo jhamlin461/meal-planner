@@ -48,7 +48,7 @@ from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import expiring, summary, today_view
-from app.walmart import cart_url, packages_needed, parse_item_id, search_url
+from app.walmart import cart_url, packages_needed, parse_item_id, refine, search_url
 
 HERE = Path(__file__).parent
 UPLOAD_MAX = 10 * 1024 * 1024  # a recipe photo from the phone
@@ -1400,6 +1400,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if item is None:
             return back("/shopping?bad=1")
         grocy.set_userfields("products", pid, {"walmart_item_id": item})
+        refine(grocy, ai, http, pid, link, item)
         return back("/shopping")
 
     @app.get("/api/expiring")
