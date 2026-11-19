@@ -499,6 +499,11 @@ def test_remove_step_remaps_references(env):
     form = dict(re.findall(r'name="(op_in_\d+)" value="(o\d+)" checked', html))
     assert form == {"op_in_1": "o1", "op_in_2": "o2", "op_in_3": "o3"}  # mix(o2) took o1; nothing points at melt
     assert re.findall(r'name="op_id" value="([^"]*)"', html) == ["o1", "o2", "o3", "o4", ""]
+    # blanking a step (no label, no ticks) removes it the same way: ticks on it go too, no unknown-step error
+    html = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_label": ["", *chips(BROWNIE)["op_label"][1:]],
+                                                 "op_in_0": []}).text
+    assert "isn&#39;t an ingredient or an earlier step" not in html and "“unsalted butter” isn&#39;t in any step" in html
+    assert re.findall(r'name="op_id" value="([^"]*)"', html) == ["o1", "o2", "o3", "o4", ""]
 
 
 def test_unknown_input_id_rejected(env):
@@ -525,6 +530,7 @@ def test_editor_shows_only_unused_chips(env):
     assert _shown(html) == [{"i0"}, {"o1", "i1", "i2", "i3"}, {"o2", "i4"}, {"o3", "i5", "i6", "i7", "i8"}, {"o4"}, {"o5"}]  # a new step can take bake
     assert html.count('class="chip used"') + html.count('class="chip chip-step used"') > 0
     assert html.count('class="show-all"') == 6  # one per step row; CSS hides it when nothing is tucked away
+    assert 'aria-label="Show all for melt"' in html and 'aria-label="Show all for the new step"' in html
     # unticking bake's input puts fold in (o4) back on show for bake and the new step; bake itself is unused too
     html = c.post(f"/recipes/{rid}/table", data={**chips(BROWNIE), "op_in_4": [], "action": "addop"}).text
     assert _shown(html)[4] == {"o4"} and _shown(html)[5] == {"o4", "o5"}

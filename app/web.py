@@ -106,6 +106,7 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     act = str(form.get("action") or "")
     k = _int(act.removeprefix("remove:")) if act.startswith("remove:") else None
     gone = {rows.pop(k)[0]} if k is not None and 0 <= k < len(rows) else set()
+    gone |= {r[0] for r in rows if not (r[1] or r[2])}  # a blanked step is removed too
     rows = [r for r in rows if r[1] or r[2]]
     ings = {f"i{n}" for n in range(len(old.ingredients))}
     earlier: dict[str, int] = {}  # old step id -> its row
