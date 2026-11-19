@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError, AIPaused, budget_mode, month
 from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
-from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
+from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, metric, ncols, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
@@ -253,7 +253,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def load_table(uf: dict) -> CfeTable | None:
         try:
-            return CfeTable.model_validate_json(uf["cfe_table"]) if uf.get("cfe_table") else None
+            return metric(CfeTable.model_validate_json(uf["cfe_table"])) if uf.get("cfe_table") else None  # old US tables too
         except ValidationError:
             return None
 
@@ -872,6 +872,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["stock_unit"] = units.get(_int(prod.get("qu_id_stock")), "") if prod else ""
             row["packaging"] = is_packaging(row["unit"])
             row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
+            try:  # what the typed or suggested factor comes to, before Update stores it
+                row["preview"] = _fmt(ing.qty * _factor(row["factor"])) if row["convert"] and row["factor"] else None
+            except ValueError:
+                row["preview"] = None
         tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",

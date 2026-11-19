@@ -21,14 +21,14 @@ from urllib.parse import urljoin
 
 import httpx
 from PIL import Image, ImageOps
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pypdf import PdfReader
 
 from app.ai import AIError, AIPaused, RecipeDraft
 from app.barcode import _generic_named, _generics, _product_fields, create_manual, generic_choices
-from app.cfe import CfeTable, Ingredient, ingredient_text, validate
+from app.cfe import CfeTable, Ingredient, ingredient_text, metric, validate
 from app.nutrition import fill_missing_nutrition
-from app.qty import is_packaging, normalize_unit, parse_qty, to_stock_amount
+from app.qty import celsius, is_packaging, normalize_unit, parse_qty, to_stock_amount
 from app.setup_grocy import LOCATIONS, ids
 
 UA = "MealPlanner/1.0"
@@ -278,6 +278,12 @@ class Pending(BaseModel):
     batch_id: str | None = None
     tableless: bool = False  # read without Claude from the page's JSON-LD: may be saved without a table
     ai_picks: dict[str, int | None] = {}  # Claude's product per ingredient name, so a reload doesn't ask again
+
+    @field_validator("draft")
+    @classmethod
+    def _metric(cls, d: RecipeDraft | None) -> RecipeDraft | None:
+        """g, ml and °C however the source wrote it, imports from before this rule included (idempotent)."""
+        return d and d.model_copy(update={"table": metric(d.table), "steps": [celsius(x) for x in d.steps]})
 
 
 _ID = re.compile(r"[0-9a-f]{32}")

@@ -383,7 +383,7 @@ def test_free_mode_imports_jsonld_without_a_table_and_queues_the_rest(tmp_path):
     assert store.get(soup.id).status == "ready" and d.title == "Best Tomato Soup" and d.servings == 4
     assert d.steps == ["Melt the butter.", "Cook the onion until soft.", "Add tomatoes and simmer 20 min."]
     assert d.table.ops == [] and [(i.qty, i.unit, i.name) for i in d.table.ingredients] == [
-        (1, "can", "crushed tomatoes"), (2, "tbsp", "butter"), (1, "", "onion, diced")]
+        (1, "can", "crushed tomatoes"), (30, "ml", "butter"), (1, "", "onion, diced")]
     assert store.get(pie.id).status == "waiting" and store.get(pdf.id).status == "waiting"
 
 

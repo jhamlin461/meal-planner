@@ -90,3 +90,22 @@ def to_stock_amount(qty: float, unit: str, stock_unit: str,
             if end == stock_unit:
                 return qty * f1 * f2
     return None
+
+
+# US kitchen units -> metric (unit, factor). Volumes go to ml; the AI prompt weighs solids in g instead.
+_METRIC = {"cup": ("ml", 240), "tbsp": ("ml", 15), "tsp": ("ml", 5), "oz": ("g", 28.35), "lb": ("g", 453.6),
+           "stick": ("g", 113)}
+
+
+def to_metric(qty: float | None, unit: str) -> tuple[float | None, str]:
+    """('3/4', cup) -> (180, ml); metric, counts and unknown units pass through unchanged."""
+    to = _METRIC.get(normalize_unit(unit))
+    if to is None:
+        return qty, unit
+    return (None if qty is None else round(qty * to[1], 1)), to[0]
+
+
+def celsius(text: str) -> str:
+    """'bake 350°F 30 min' -> 'bake 175°C 30 min' (nearest 5 degrees); '350°F (180°C)' keeps the card's own °C."""
+    return re.sub(r"(\d{2,3})\s*(?:°\s*|degrees\s+)F\b(?:\s*\((\d{2,3})\s*°\s*C\))?",
+                  lambda m: f"{m[2] or round((int(m[1]) - 32) * 5 / 9 / 5) * 5}°C", text)

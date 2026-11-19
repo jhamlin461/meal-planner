@@ -71,3 +71,12 @@ def test_op_where_round_trips_and_renders():
     html = env.get_template("_cfe_table.html").render(pre=t.pre, grid=layout(t), ncols=ncols(t))
     assert 'melt<span class="cfe-where">in a small pot</span>' in html
     assert html.count('class="cfe-where"') == 1  # steps without a where render as before
+
+
+def test_metric_table_and_decimal_amounts():
+    from app.cfe import ingredient_text, metric
+    t = metric(CfeTable(pre=["Preheat oven to 425°F"], ingredients=[
+        Ingredient(qty=0.75, unit="cup", name="white rice"), Ingredient(qty=0.5, unit="tsp", name="salt"),
+        Ingredient(qty=2, unit="clove", name="garlic")], ops=[Op(id="o1", label="bake 350°F", inputs=["i0", "i1", "i2"])]))
+    assert [ingredient_text(i, 1) for i in t.ingredients] == ["180 ml white rice", "2.5 ml salt", "2 clove garlic"]
+    assert t.pre == ["Preheat oven to 220°C"] and t.ops[0].label == "bake 175°C"

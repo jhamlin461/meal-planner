@@ -123,7 +123,7 @@ CFE_PROMPT = """You convert a recipe into a Cooking-for-Engineers (CfE) table pl
 Return title, servings (null if the source does not say), steps (plain numbered steps, text only) and table.
 Table rules:
 - `ingredients` are listed in the order they are combined; each has qty, unit, name, note.
-- `ops` are the actions. An op has id, a short verb label ("melt", "mix", "fold in", "bake 350°F 30–40 min") and inputs.
+- `ops` are the actions. An op has id, a short verb label ("melt", "mix", "fold in", "bake 180°C 30–40 min") and inputs.
 - Each input is `i<index>` (zero-based ingredient row) or the id of another op.
 - Exactly one op is final (the root): nothing consumes it.
 - Every ingredient is used by exactly one op.
@@ -133,8 +133,11 @@ Table rules:
 - Each op's `where` names the vessel, short: "in a large pot", "in a small bowl", "on a sheet pan". Use the one the
   recipe names, else a sensible home-kitchen choice; never blank for an op that combines things. An op that carries
   on in its input's vessel says so ("same pot").
+- Metric only: weigh solids in g (rice, flour, sugar, butter, cheese, meat, even small amounts of salt or spices),
+  liquids in ml, temperatures in °C; convert US units (cup, tbsp, tsp, oz, lb, °F) everywhere, steps included.
+  Counts stay counts (clove, piece, pinch).
 - Never use a packaging unit (packet, pouch, sachet, container, package, bag, box). Convert each packet to a real unit
-  (g, ml, tbsp, tsp, cup, oz) using the size printed on the card; if none is printed, use the typical meal-kit packet
+  (g or ml) using the size printed on the card; if none is printed, use the typical meal-kit packet
   size and put "est." in the note.
 - Replace kit-only seasoning blends (e.g. "Southwest Spice Blend") with their component spices: one row each, amounts
   estimated, note "est., from <blend name>". Ops must still cover those rows contiguously."""

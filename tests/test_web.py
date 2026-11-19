@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.ai import ConversionGuess, IngredientPick, Picks, ProductGuess, RecipeDraft
-from app.cfe import CfeTable, Ingredient, Op
+from app.cfe import CfeTable, Ingredient, Op, metric
 from app.config import Settings
 from app.grocy import GrocyError
 from app.importer import IngredientMatch, PendingStore, save_recipe
@@ -57,7 +57,7 @@ def chips(t: CfeTable) -> dict:
 
 
 def soup_draft():
-    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"),
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=500, unit="ml", name="flour"),
                                       Ingredient(qty=1, unit="", name="dragon egg")],
                  ops=[Op(id="o1", label="mix", inputs=["i0", "i1"])])
     return RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
@@ -241,7 +241,7 @@ def test_recipe_page_has_cfe_table_and_wakelock(env):
 def test_recipe_servings_scales(env):
     g, _, _, c, _ = env
     html = c.get(f"/recipes/{brownie_recipe(g)}?servings=4").text
-    assert "8 oz unsalted butter" in html and 'value="4"' in html
+    assert "227 g unsalted butter" in html and 'value="4"' in html
 
 
 def test_recipe_macros_per_serving(env):
@@ -379,8 +379,8 @@ def test_import_creates_pending_and_review_save(env):
     assert len(pend) == 2 and all(p.status == "ready" for p in pend)
     pdf = next(p for p in pend if p.source == "soup.pdf")
     html = c.get(f"/import/{pdf.id}").text
-    assert "2 cup flour" in html and "dragon egg" in html and "1 cup =" in html  # flour g, no cup conversion
-    r = c.post(f"/import/{pdf.id}", data=review_form(product_0=flour, prev_0=flour, factor_0="125",
+    assert "500 ml flour" in html and "dragon egg" in html and "1 ml =" in html  # flour g, no ml conversion
+    r = c.post(f"/import/{pdf.id}", data=review_form(product_0=flour, prev_0=flour, factor_0="0.5",
                                                     product_1=egg, prev_1=egg, amount_1="1"),
                follow_redirects=False)
     assert r.status_code == 303
@@ -400,19 +400,22 @@ def test_review_create_suggest_and_errors(env):
     ai.draft = soup_draft()
     ai.guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="piece", package_amount=None,
                             location="Pantry", best_before_days=30, g_per_unit=60)
-    ai.conversion = ConversionGuess(factor=125, explanation="a cup of flour weighs about 125 g")
+    ai.conversion = ConversionGuess(factor=0.5, explanation="a ml of flour weighs about 0.5 g")
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
     html = c.post(f"/import/{pid}", data=review_form(action="create:1", new_name_1="Dragon egg")).text
     egg = next(p["id"] for p in g.objects("products") if p["name"] == "Dragon egg")
     assert f'<option value="{egg}" selected' in html and 'name="amount_1" value="1"' in html
+    assert '<input type="hidden" name="amount_0" value="">' in html  # no product yet: no amount box to puzzle over
     html = c.post(f"/import/{pid}", data=review_form(action="suggest:0", product_0=flour)).text
-    assert 'name="factor_0" value="125' in html and "about 125 g" in html
+    assert 'name="factor_0" value="0.5' in html and "about 0.5 g" in html
+    assert "Your stock counts this in g, the recipe in ml." in html and "That makes 250 g for this recipe." in html
+    assert "<span>Uses</span>" in html and 'type="hidden" name="amount_0"' not in html
     html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="abc")).text
     assert "could not convert" in html and store.get(pid) is not None
     html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="inf")).text
     assert "finite" in html
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg,
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="0.5", product_1=egg, prev_1=egg,
                                                      amount_1="1", op_in_0=["i0"])).text
     assert "“dragon egg” isn&#39;t in any step yet" in html and g.objects("recipes") == []
     assert 'name="amount_0" value="250' in html  # conversion was applied and kept
@@ -431,7 +434,7 @@ def test_table_edit_rejects_invalid_and_saves_valid(env):
                follow_redirects=False)
     assert r.status_code == 303
     saved = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
-    assert saved.ops[0].label == "brown" and len(saved.ops) == 5 and saved.ingredients == BROWNIE.ingredients
+    assert saved.ops[0].label == "brown" and len(saved.ops) == 5 and saved.ingredients == metric(BROWNIE).ingredients
 
 
 def test_review_shows_no_internal_ids(env):
@@ -467,7 +470,7 @@ def test_combines_chips_round_trip(env):
     ai.draft = RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
-    r = c.post(f"/import/{pid}", data={**review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg,
+    r = c.post(f"/import/{pid}", data={**review_form(product_0=flour, prev_0=flour, factor_0="0.5", product_1=egg,
                                                      prev_1=egg, amount_1="1"), **chips(t)}, follow_redirects=False)
     assert r.status_code == 303
     saved = CfeTable.model_validate_json(g.userfields("recipes", int(r.headers["location"].rsplit("/", 1)[1]))["cfe_table"])
@@ -485,7 +488,7 @@ def test_duplicate_names_show_amounts(env):
     assert "<span>mix, step 2</span>" in html and "<span>mix, step 3</span>" in html and "<span>melt</span>" in html
     g.set_userfields("recipes", rid, {"cfe_table": t.model_dump_json()})
     html = c.get(f"/recipes/{rid}/table").text
-    assert "<span>kosher salt, 1 tsp</span>" in html and "<span>kosher salt, to taste</span>" in html
+    assert "<span>kosher salt, 5 ml</span>" in html and "<span>kosher salt, to taste</span>" in html
     assert "<span>rice</span>" in html
 
 
@@ -608,18 +611,18 @@ def test_review_factor_is_not_applied_to_a_newly_picked_product(env):
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
     html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=flour, prev_0=flour,
-                                                     factor_0="125")).text
+                                                     factor_0="0.5")).text
     assert 'name="amount_0" value="250"' in html
     # reviewer switches the row to Sugar; the hidden factor typed for Flour comes along with the form
     html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=sugar, prev_0=flour,
-                                                     amount_0="250", factor_0="125")).text
+                                                     amount_0="250", factor_0="0.5")).text
     assert not g.objects("quantity_unit_conversions", product_id=sugar)
-    assert 'name="amount_0" value=""' in html and 'name="factor_0" value=""' in html and "1 cup =" in html
+    assert 'name="amount_0" value=""' in html and 'name="factor_0" value=""' in html and "1 ml =" in html
     egg_guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
                              location="Pantry", best_before_days=30, g_per_unit=1)
     ai.guess = egg_guess  # same for a product created from the row
     c.post(f"/import/{pid}", data=review_form(action="create:0", new_name_0="Bread flour", product_0="",
-                                              prev_0=flour, factor_0="125"))
+                                              prev_0=flour, factor_0="0.5"))
     bread = next(p["id"] for p in g.objects("products") if p["name"] == "Bread flour")
     assert not g.objects("quantity_unit_conversions", product_id=bread)
 
@@ -641,7 +644,7 @@ def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
     app = create_app(g, FakeAI(picks=Picks(items=[]), draft=soup_draft()),
                      httpx.Client(transport=httpx.MockTransport(no_network)),
                      Settings("", "", "", "KEY", None, 6, tmp_path, 3), store)
-    form = review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg, amount_1="1")
+    form = review_form(product_0=flour, prev_0=flour, factor_0="0.5", product_1=egg, prev_1=egg, amount_1="1")
     codes = {}
     with TestClient(app) as c:  # one event loop shared by all requests, like uvicorn
         c.post("/import", data={"urls": "https://example.com/soup"})

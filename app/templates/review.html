@@ -26,7 +26,7 @@
 <form method="post">
 <button class="default" name="action" value="update" tabindex="-1" aria-hidden="true">Update</button>{# Enter key = Update, never Create #}
 <h2>Ingredients</h2>
-<p class="muted">Amounts are in the product's stock unit. Changed a product? Press Update to recalculate.</p>
+<p class="muted">Pick the product each ingredient comes from. Cooking the recipe takes the amount shown out of your stock. Changed a product? Press Update.</p>
 <ul class="rows review-rows">
 {% for row in rows %}{% set i = loop.index0 %}<li>
   <p class="review-text breakable">{{ row.text }}</p>
@@ -36,7 +36,8 @@
       {% for g in generics %}<option value="{{ g.id }}"{% if g.id == row.product_id %} selected{% endif %}>{{ g.name }}</option>{% endfor %}
     </select>
     <input type="hidden" name="prev_{{ i }}" value="{{ row.prev or '' }}">
-    <span class="inline-group"><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal" aria-label="Amount for {{ row.text }}"><span>{{ row.stock_unit }}</span></span>
+    {% if row.product_id %}<label class="inline-group"><span>Uses</span><input type="text" name="amount_{{ i }}" value="{{ row.amount|num }}" size="6" inputmode="decimal"><span>{{ row.stock_unit }}</span></label>
+    {%- else %}<input type="hidden" name="amount_{{ i }}" value="{{ row.amount|num }}">{% endif %}
   </div>
   {% if row.packaging %}<p class="warn">Packet sizes vary — enter the real amount</p>{% endif %}
   {% if not row.product_id and ai_free %}{% set m = row.manual or {} %}<div>
@@ -54,7 +55,8 @@
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
   </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
-  {% if row.convert %}<div class="row">
+  {% if row.convert %}<p class="muted">Your stock counts this in {{ row.stock_unit }}, the recipe in {{ row.unit }}. How many {{ row.stock_unit }} is 1 {{ row.unit }}?{% if row.preview %} That makes {{ row.preview }} {{ row.stock_unit }} for this recipe.{% endif %}</p>
+  <div class="row">
     <span class="inline-group"><span>1 {{ row.unit }} =</span>
     <input type="text" name="factor_{{ i }}" value="{{ row.factor }}" size="6" inputmode="decimal" aria-label="Conversion factor">
     <span>{{ row.stock_unit }}</span></span>

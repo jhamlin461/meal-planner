@@ -498,3 +498,16 @@ def test_process_keeps_photo_and_save_puts_it_in_grocy(tmp_path):
     assert g.recipe_picture(name, 400)[0] == store.photo_path(p.id).read_bytes()
     store.delete(p.id)
     assert not (tmp_path / "pending" / f"{p.id}.jpg").exists()
+
+
+def test_pending_drafts_load_in_metric(tmp_path):
+    from app.ai import RecipeDraft
+    from app.cfe import CfeTable, Ingredient, Op
+    from app.importer import PendingStore
+    store = PendingStore(tmp_path)
+    p = store.new("old.pdf")
+    p.status, p.draft = "ready", RecipeDraft(title="T", servings=2, steps=["Bake at 400°F."], table=CfeTable(
+        pre=[], ingredients=[Ingredient(qty=1, unit="tbsp", name="butter")], ops=[Op(id="o1", label="melt", inputs=["i0"])]))
+    store.save(p)  # saved as an import from before the metric rule would have been
+    d = store.get(p.id).draft
+    assert (d.table.ingredients[0].qty, d.table.ingredients[0].unit) == (15, "ml") and d.steps == ["Bake at 205°C."]
