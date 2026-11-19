@@ -364,6 +364,46 @@ def test_inventory_more_has_clear_and_remove(env):
     bags = supply(g, "Trash bags", "Garage")
     html = c.get("/inventory").text
     for pid in (yogurt, bags):
-        assert f'action="/inventory/{pid}/clear"' in html and f'action="/inventory/{pid}/remove"' in html
-    assert r"Remove Greek yogurt? Its stock, barcode and details are deleted. This can\u0027t be undone." in html
+        assert f'action="/inventory/{pid}/clear"' in html and f'href="/inventory/{pid}/remove"' in html
+    assert "onsubmit" not in html
+    assert "You have none left. It stays known, so scanning it again fills in the details, and it can still go on the shopping list." in html
     assert 'class="btn danger"' in html and "style=" not in html
+
+
+def test_remove_confirm_page(env):
+    g, c = env
+    p = places(g)
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    r = c.get(f"/inventory/{yogurt}/remove?place={p['Fridge']}")
+    assert r.status_code == 200 and "style=" not in r.text and "onsubmit" not in r.text
+    assert "Remove Greek yogurt? Its stock, barcode and details are deleted. This can't be undone." in r.text
+    assert f'action="/inventory/{yogurt}/remove"' in r.text and f'value="{p["Fridge"]}"' in r.text
+    assert 'href="/inventory' in r.text and g.get_object("products", yogurt)  # a GET deletes nothing
+    uses(g, yogurt, recipe="Fudgy brownies")
+    r = c.get(f"/inventory/{yogurt}/remove")
+    assert 'role="alert"' in r.text and "Fudgy brownies uses this." in r.text and f'action="/inventory/{yogurt}/remove"' not in r.text
+    assert c.get("/inventory/9999/remove").status_code == 404
+
+
+def test_remove_grocy_refusal_keeps_barcodes_and_list_rows(env):
+    from app.grocy import GrocyError
+    g, c = env
+    bags = supply(g, "Trash bags", "Garage")
+    a = supply(g, "Hefty bags", "Closet", parent_product_id=bags)
+    b = supply(g, "Glad bags", "Closet", 2, parent_product_id=bags)
+    for pid in (a, b, bags):
+        g.create("product_barcodes", {"product_id": pid, "barcode": f"c{pid}"})
+        g.create("shopping_list", {"product_id": pid, "amount": 1})
+    real = g.delete
+
+    def delete(entity, id):
+        if entity == "products" and id == b:
+            raise GrocyError("nope", 400, "still in a recipe")
+        real(entity, id)
+    g.delete = delete
+    r = c.post(f"/inventory/{bags}/remove", follow_redirects=True)
+    assert r.status_code == 200 and 'role="alert"' in r.text
+    assert "Grocy wouldn&#39;t remove Glad bags: still in a recipe. Removed Hefty bags first." in r.text
+    assert {x["product_id"] for x in g.objects("product_barcodes")} == {b, bags}
+    assert {x["product_id"] for x in g.objects("shopping_list")} == {b, bags}
+    assert g.get_object("products", b) and g.get_object("products", bags) and not g.get_object("products", a)

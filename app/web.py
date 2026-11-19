@@ -39,7 +39,7 @@ from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
 from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
-                           rename_place, rows)
+                           rename_place, rows, why_not_remove)
 from app.setup_grocy import SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
@@ -599,6 +599,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             clear_stock(grocy, pid)
             rebuild_running_low(grocy)
         return inventory_back(place, f"Cleared {p['name']}.")
+
+    @app.get("/inventory/{pid}/remove")
+    def inventory_remove_confirm(request: Request, pid: int, place: int | None = None):
+        """The confirmation step (works without JavaScript); a product that can't go shows why instead."""
+        p = product_or_404(pid)
+        return page(request, "inventory_remove.html", p=p, place=place, refusal=why_not_remove(grocy, pid))
 
     @app.post("/inventory/{pid}/remove")
     def inventory_remove(pid: int, place: int | None = Form(None)):

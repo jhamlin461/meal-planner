@@ -16,12 +16,10 @@
 {%- endmacro %}
 {% macro wipe(r) %}
     <form class="inline" method="post" action="/inventory/{{ r.pid }}/clear">{{ keep() }}
-      <p class="muted">Sets what's in stock to none. The item stays on your list.</p>
+      <p class="muted">You have none left. It stays known, so scanning it again fills in the details, and it can still go on the shopping list.</p>
       <button class="btn">Clear stock</button>
     </form>
-    <form class="inline" method="post" action="/inventory/{{ r.pid }}/remove" onsubmit="return confirm({{ ("Remove %s? Its stock, barcode and details are deleted. This can't be undone." % r.name)|tojson|forceescape }})">{{ keep() }}
-      <button class="btn danger">Remove item</button>
-    </form>
+    <p><a class="btn danger" href="/inventory/{{ r.pid }}/remove{% if place %}?place={{ place }}{% endif %}">Remove item</a></p>
 {%- endmacro %}
 {% block heading %}<h1>Inventory</h1>{% endblock %}
 {% block content %}

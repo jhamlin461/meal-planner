@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import date
 
+from app.grocy import GrocyError
 from app.setup_grocy import LOCATIONS, ids, supplies_group
 from app.today import _day
 
@@ -154,26 +155,43 @@ def users_of(grocy, pid: int) -> list[str]:
     return sorted(made, key=str.lower) + sorted(done - made, key=str.lower)  # recipes first, then chores
 
 
+def _zero(grocy, pid: int) -> None:
+    if any(int(e["product_id"]) == pid and float(e["amount"]) > 0 for e in grocy.stock_entries()):
+        grocy.set_amount(pid, 0)
+
+
 def clear_stock(grocy, pid: int) -> None:
     """Stock to 0 in every place, for a generic its brands' too; the product stays."""
-    held = {int(e["product_id"]) for e in grocy.stock_entries() if float(e["amount"]) > 0}
     for k in _family(grocy, pid):
-        if k in held:
-            grocy.set_amount(k, 0)
+        _zero(grocy, k)
+
+
+def why_not_remove(grocy, pid: int) -> str:
+    """The reason a product can't be removed (a recipe or chore uses it, or one of its brands), or ""."""
+    used = list(dict.fromkeys(n for k in _family(grocy, pid) for n in users_of(grocy, k)))
+    if not used:
+        return ""
+    if len(used) == 1:
+        return f"{used[0]} uses this. Change it first, or use Clear stock."
+    return f"{', '.join(used[:-1])} and {used[-1]} use this. Change them first, or use Clear stock."
 
 
 def remove_product(grocy, pid: int) -> None:
     """Delete a product with its stock, barcodes and shopping list rows; a generic goes with its brands.
-    Refused while a recipe or chore uses it (or, for a generic, any of its brands)."""
-    family = _family(grocy, pid)
-    used = list(dict.fromkeys(n for k in family for n in users_of(grocy, k)))
-    if used:
-        who = used[0] if len(used) == 1 else ", ".join(used[:-1]) + f" and {used[-1]}"
-        raise ValueError(f"{who} uses this. Change it first, or use Clear stock." if len(used) == 1
-                         else f"{who} use this. Change them first, or use Clear stock.")
-    clear_stock(grocy, pid)
-    for k in family:
+    Refused while a recipe or chore uses it (or, for a generic, any of its brands). Each product is zeroed, then
+    deleted, then its barcodes and list rows, so a Grocy refusal never leaves a product stripped of its rows."""
+    if why := why_not_remove(grocy, pid):
+        raise ValueError(why)
+    done: list[str] = []
+    for k in _family(grocy, pid):
+        name = grocy.get_object("products", k)["name"]
+        _zero(grocy, k)
+        try:
+            grocy.delete("products", k)
+        except GrocyError as e:
+            first = f" Removed {', '.join(done[:-1])} and {done[-1]} first." if len(done) > 1 else                 f" Removed {done[0]} first." if done else ""
+            raise ValueError(f"Grocy wouldn't remove {name}: {e.reason or e}.{first}") from e
+        done.append(name)
         for entity in ("product_barcodes", "shopping_list"):
             for r in grocy.objects(entity, product_id=k):
                 grocy.delete(entity, int(r["id"]))
-        grocy.delete("products", k)

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Remove {{ p.name }}{% endblock %}
+{% block content %}
+<h1>Remove item</h1>
+{% set back = "/inventory" ~ ("?place=%s" % place if place else "") %}
+{% if refusal %}
+<p class="card error" role="alert">{{ refusal }}</p>
+<p><a class="btn" href="{{ back }}">Back to inventory</a></p>
+{% else %}
+<form class="card" method="post" action="/inventory/{{ p.id }}/remove">
+  {% if place %}<input type="hidden" name="place" value="{{ place }}">{% endif %}
+  <p>Remove {{ p.name }}? Its stock, barcode and details are deleted. This can't be undone.</p>
+  <div class="card-actions"><a class="btn" href="{{ back }}">Cancel</a><button class="btn danger">Remove item</button></div>
+</form>
+{% endif %}
+{% endblock %}
