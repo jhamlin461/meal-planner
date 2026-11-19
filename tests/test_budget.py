@@ -464,9 +464,9 @@ def test_free_scan_asks_for_the_details_and_creates_the_product_like_the_ai_path
     app = create_app(g, FakeAI(mode="free"), http, Settings("", "", "", "KEY", None, 6, tmp_path, 3),
                      PendingStore(tmp_path / "pending"), house=HouseStore(tmp_path / "house.db"))
     c = TestClient(app, cookies={"who": "kitchen"})
-    assert c.post("/api/scan", json={"code": "111"}).json() == {
+    assert c.post("/api/scan/lookup", json={"code": "111"}).json() == {
         "status": "manual", "code": "111", "name": "Great Value All Purpose Flour"}
-    assert c.post("/api/scan", json={"code": "222"}).json()["status"] == "manual"  # in no database
+    assert c.post("/api/scan/lookup", json={"code": "222"}).json()["status"] == "manual"  # in no database
     assert 'id="manual"' in c.get("/scan").text
     form = {"code": "111", "name": "Great Value All Purpose Flour", "generic": "Flour",
             "stock_unit": "g", "package_amount": "2268", "location": "Pantry", "category": "food"}

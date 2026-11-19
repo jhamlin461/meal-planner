@@ -273,7 +273,7 @@ def test_nav_tabs(env):
         html = c.get(url).text
         assert 'href="/pantry"' not in html and 'href="/home/supplies"' not in html and ">Supplies<" not in html, url
     assert 'class="segmented pages"' not in c.get("/home").text  # Chores is one page
-    for url in ("/scan", "/scan?from=chores", "/inventory/places"):
+    for url in ("/inventory/places",):  # the scanner has no rail; its close link goes to /inventory
         assert 'href="/inventory" aria-current="page"' in c.get(url).text, url
 
 

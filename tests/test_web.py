@@ -115,7 +115,7 @@ def test_scan_button_only_on_inventory_pages(env):
 
 def test_rail_has_no_scan_entries(env):
     c = env[3]
-    for url in ["/plan", "/inventory", "/home", "/scan", "/scan?from=chores"]:
+    for url in ["/plan", "/inventory", "/home"]:  # the scanner itself has no rail (full screen)
         rail = c.get(url).text
         rail = rail[rail.index('class="rail"'):rail.index("</nav>")]
         assert "/scan" not in rail and "barcode-scan" not in rail, url
@@ -125,7 +125,69 @@ def test_scan_page_belongs_to_inventory(env):
     c = env[3]
     for url in ("/scan", "/scan?from=chores"):  # from=chores is still accepted
         html = c.get(url).text
-        assert 'class="segmented pages"' not in html and 'href="/inventory" aria-current="page"' in html, url
+        assert 'class="segmented pages"' not in html and 'data-section="inventory"' in html, url
+        assert re.search(r'<a class="scan-close" href="/inventory" aria-label="Close scanner">', html), url
+
+
+def test_scan_page_full_screen_no_tabs(env):
+    c = env[3]
+    html = c.get("/scan").text
+    for chrome in ('class="rail"', 'class="title-row"', 'class="settings-btn"', 'class="rail-settings"'):
+        assert chrome not in html, chrome
+    assert '<main class="scan">' in html and html.count("<h1") == 1
+    assert 'class="rail"' in c.get("/inventory").text and 'class="title-row"' in c.get("/inventory").text
+    css = c.get("/static/style.css").text
+    rule = css[css.index("main.scan {"):]
+    assert "position: fixed" in rule[:rule.index("}")] and "inset: 0" in rule[:rule.index("}")]
+
+
+def _section(html, start, end="</"):
+    s = html[html.index(start):]
+    return s[:s.index(end)]
+
+
+def test_scan_page_has_sheet_stepper_trip_and_close(env):
+    html = env[3].get("/scan").text
+    sheet = _section(html, '<dialog id="sheet"', "</dialog>")
+    assert 'class="sheet"' in sheet
+    loading = _section(sheet, 'data-state="loading"', "</section>")
+    assert 'role="status"' in loading and "Looking up…" in loading and 'class="shimmer' in loading
+    found = _section(sheet, '<form id="found"', "</form>")
+    assert 'aria-label="One less"' in found and 'aria-label="One more"' in found
+    assert re.search(r'<input id="packs" name="packs" type="number" min="1" step="1"', found)
+    assert 'name="place"' in found and 'name="amount"' in found and "Keep at least" in found
+    assert 'id="found-change"' in found and ">Change<" in found and ">Cancel<" in found
+    assert 'id="found-error" role="alert"' in found
+    unknown = _section(sheet, 'data-state="unknown"', "</section>")
+    assert "Take a photo of the package" in unknown and "Fill in the details" in unknown
+    assert 'capture="environment"' in unknown
+    assert '<form id="manual"' in sheet and "Save product" in sheet
+    assert "Try again" in _section(sheet, 'data-state="error"', "</section>")
+    trip = _section(sheet, 'data-state="trip"', "</section>")
+    assert "This trip" in trip and 'id="trip-list"' in trip
+    assert re.search(r'<button class="scan-trip" id="trip" type="button" hidden>', html)
+    assert "Add to stock" in html and "Use up" in html and "Open scanner in browser" in html
+    assert '<dialog id="fix"' in html and '<dialog id="ask"' not in html
+    js = env[3].get("/static/app.js").text
+    for bit in ("navigator.vibrate?.(60)", "/api/scan/lookup", "/api/scan/confirm", "/api/scan/undo",
+                "sessionStorage", "video.pause()", ".stop()", "decodeFromVideoElement"):
+        assert bit in js, bit
+    assert '"/api/scan"' not in js and "prompt(" not in js
+    css = env[3].get("/static/style.css").text
+    rule = css[css.index("dialog.sheet {"):]
+    rule = rule[:rule.index("}")]
+    assert "max-height: 70dvh" in rule and "overflow-y: auto" in rule
+    rule = css[css.index(".stepper button {"):]
+    assert "min-height: 56px" in rule[:rule.index("}")]
+    motion = css[css.index("@media (prefers-reduced-motion: reduce) { .shimmer"):]
+    assert "display: none" in motion[:motion.index("}")]
+
+
+def test_scan_page_no_inline_styles(env):
+    html = env[3].get("/scan").text
+    assert "style=" not in html and "<style" not in html and "<script>" not in html
+    js = env[3].get("/static/app.js").text
+    assert ".style." not in js and "innerHTML" not in js
 
 
 def _render_base(path, query=""):
@@ -319,29 +381,6 @@ def test_plan_marks_today_and_links_recipe(env):
     c.post(f"/recipes/{rid}/plan", data={"day": datetime.date.today().isoformat(), "section": "Dinner", "servings": ""})
     html = c.get("/plan").text
     assert "is-today" in html and f'href="/recipes/{rid}"' in html
-
-
-def test_scan_known_add_increments_stock(env):
-    g, _, _, c, _ = env
-    i = ids(g)
-    generic = product(g, "Milk", "ml")
-    pid = product(g, "Brand Milk", "ml", parent_product_id=generic, location_id=i.location["Fridge"],
-                  default_best_before_days=7)
-    g.set_userfields("products", pid, {"package_amount": 946})
-    g.create("product_barcodes", {"product_id": pid, "barcode": "123"})
-    r = c.post("/api/scan", json={"code": "123", "action": "add"}).json()
-    assert r == {"status": "ok", "product": "Brand Milk", "generic": "Milk", "created": False, "product_id": pid,
-                 "action": "add", "amount": 946}
-    [e] = g.stock[pid]
-    assert e["amount"] == 946 and e["location_id"] == i.location["Fridge"]
-    assert e["best_before_date"] == (date.today() + timedelta(days=7)).isoformat()
-    assert c.post("/api/scan", json={"code": "123", "action": "use"}).json()["amount"] == 946
-    assert g.stock[pid] == []
-    assert c.post("/api/scan", json={"code": "123", "action": "use"}).json()["amount"] == 0  # nothing left
-
-
-def test_scan_unknown_returns_unknown(env):
-    assert env[3].post("/api/scan", json={"code": "999", "action": "add"}).json() == {"status": "unknown"}
 
 
 def test_scan_photo_creates_the_product(env):
@@ -933,54 +972,18 @@ def test_relink_refused_when_stock_is_in_another_unit(env):
     assert r.status_code == 400 and "in stock in another unit" in r.json()["message"]
 
 
-def test_scan_with_unknown_package_size_asks_for_amount(env):
-    g, _, _, c, _ = env
-    pid = product(g, "Brand Rice", parent_product_id=product(g, "Rice"))
-    g.create("product_barcodes", {"product_id": pid, "barcode": "321"})
-    for action in ("add", "use"):
-        r = c.post("/api/scan", json={"code": "321", "action": action}).json()
-        assert r["status"] == "need_amount" and r["unit"] == "g" and r["product"] == "Brand Rice"
-        assert r["action"] == action
-    assert pid not in g.stock
-    r = c.post("/api/scan", json={"code": "321", "action": "add", "amount": 300}).json()
-    assert r["status"] == "ok" and r["amount"] == 300 and g.stock_amounts()[pid] == 300
-    assert c.post("/api/scan", json={"code": "321", "action": "use", "amount": 120}).json()["amount"] == 120
-    assert g.stock_amounts()[pid] == 180
-    for bad in (0, -5, "inf", "nan"):
-        assert c.post("/api/scan", json={"code": "321", "action": "add", "amount": bad}).status_code == 422
-
-
 def _barcoded(g, name="Brand Rice", code="321", **kw):
     pid = product(g, name, parent_product_id=product(g, name.split()[-1]), **kw)
     g.create("product_barcodes", {"product_id": pid, "barcode": code})
     return pid
 
 
-def test_add_with_typed_amount_remembers_package_size(env):
-    g, _, _, c, _ = env
-    pid = _barcoded(g)
-    assert c.post("/api/scan", json={"code": "321", "action": "add"}).json()["status"] == "need_amount"
-    r = c.post("/api/scan", json={"code": "321", "action": "add", "amount": 32}).json()
-    assert r["status"] == "ok" and r["amount"] == 32
-    assert g.userfields("products", pid)["package_amount"] == 32
-    r = c.post("/api/scan", json={"code": "321", "action": "add"}).json()
-    assert r["status"] == "ok" and r["amount"] == 32 and g.stock_amounts()[pid] == 64
-
-
-def test_typed_amount_never_overwrites_known_size(env):
-    g, _, _, c, _ = env
-    pid = _barcoded(g)
-    g.set_userfields("products", pid, {"package_amount": 32})
-    c.post("/api/scan", json={"code": "321", "action": "add", "amount": 5})
-    assert g.userfields("products", pid)["package_amount"] == 32
-
-
 def test_use_with_amount_is_not_remembered(env):
     g, _, _, c, _ = env
     pid = _barcoded(g)
     g.add_stock(pid, 500, None, None)
-    c.post("/api/scan", json={"code": "321", "action": "use", "amount": 120})
-    assert "package_amount" not in g.userfields("products", pid)
+    assert c.post("/api/scan/confirm", json={"product_id": pid, "action": "use", "amount": 120}).json()["amount"] == 120
+    assert "package_amount" not in g.userfields("products", pid) and g.stock_amounts()[pid] == 380
 
 
 def test_supply_used_one_takes_one_unit(env):
@@ -993,12 +996,10 @@ def test_supply_used_one_takes_one_unit(env):
 def test_scan_use_on_supply_takes_one_unit(env):
     g, _, _, c, _ = env
     bags = supply(g, stock=64, package_amount=32)
-    g.create("product_barcodes", {"product_id": bags, "barcode": "555"})
-    r = c.post("/api/scan", json={"code": "555", "action": "use"}).json()
+    r = c.post("/api/scan/confirm", json={"product_id": bags, "action": "use"}).json()
     assert r["status"] == "ok" and r["amount"] == 1 and g.stock_amounts()[bags] == 63
-    bare = supply(g, "Sponges", stock=5)  # no package size: still never asks
-    g.create("product_barcodes", {"product_id": bare, "barcode": "556"})
-    r = c.post("/api/scan", json={"code": "556", "action": "use"}).json()
+    bare = supply(g, "Sponges", stock=5)  # no package size: still never asks for an amount
+    r = c.post("/api/scan/confirm", json={"product_id": bare, "action": "use"}).json()
     assert r["status"] == "ok" and g.stock_amounts()[bare] == 4
 
 
@@ -1007,7 +1008,7 @@ def test_scan_use_on_food_still_takes_a_package(env):
     pid = _barcoded(g, "Brand Beans", "777")
     g.set_userfields("products", pid, {"package_amount": 400})
     g.add_stock(pid, 1200, None, None)
-    assert c.post("/api/scan", json={"code": "777", "action": "use"}).json()["amount"] == 400
+    assert c.post("/api/scan/confirm", json={"product_id": pid, "action": "use"}).json()["amount"] == 400
     assert g.stock_amounts()[pid] == 800
 
 
@@ -1225,17 +1226,16 @@ def test_new_supply_asks_keep_at_least(env):
     assert r["status"] == "found" and r["need_min"] and r["unit"] == "piece" and r["package"] == 40
     pid = r["product_id"]
     assert pid not in g.stock
-    for bad in (0, -1, "inf"):
-        assert c.post(f"/api/products/{pid}/min", json={"amount": bad}).status_code == 422
-    assert c.post("/api/products/999/min", json={"amount": 2}).status_code == 404
-    assert c.post(f"/api/products/{pid}/min", json={"amount": 2}).json() == {"status": "ok"}
+    for bad in (0, -1, "inf"):  # the sheet's Keep at least goes with the add
+        assert c.post("/api/scan/confirm", json={"product_id": pid, "action": "add", "min": bad}).status_code == 422
+    assert pid not in g.stock
+    r = c.post("/api/scan/confirm", json={"product_id": pid, "action": "add", "min": 2}).json()
+    assert r["status"] == "ok" and r["amount"] == 40 and g.stock_amounts()[pid] == 40
     generic = g.get_object("products", g.get_object("products", pid)["parent_product_id"])
     assert generic["min_stock_amount"] == 2 and generic["cumulate_min_stock_amount_of_sub_products"] == 1
     assert "min_stock_amount" not in g.get_object("products", pid)  # kept on the generic, not the brand
-    r = c.post("/api/scan", json={"code": "4242", "action": "add"}).json()  # the add continues
-    assert r["status"] == "ok" and r["amount"] == 40 and g.stock_amounts()[pid] == 40
     assert g.stock[pid][0]["best_before_date"] is None  # never expires
-    assert c.post("/api/scan", json={"code": "4242", "action": "add"}).json()["status"] == "ok"  # asked once only
+    assert c.post("/api/scan/lookup", json={"code": "4242"}).json()["need_min"] is False  # asked once only
     ai.guess = ai.guess.model_copy(update={"is_new_generic": False})  # a second brand of the same generic
     r = c.post("/api/scan/photo", data={"code": "4343"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
@@ -1334,16 +1334,6 @@ def test_remaining_pages_use_shell(env, tmp_path):
         assert "·" not in html and "→" not in html, url  # no middle dots or arrows in copy
 
 
-def test_scan_prompts_are_in_page(env):
-    html = env[3].get("/scan").text
-    sheet = html[html.index('<dialog id="ask"'):]
-    sheet = sheet[:sheet.index("</dialog>")]
-    assert 'type="number"' in sheet and 'class="card-actions"' in sheet and sheet.count("<button") == 2
-    assert 'id="scan-result"' in html and html.index('id="scanner"') < html.index('id="scan-result"')
-    js = env[3].get("/static/app.js").text
-    assert "prompt(" not in js and "we'll remember it." in js and "Keep at least how many?" in js
-
-
 def test_inventory_food_rows_read_like_supplies(env):
     g, _, _, c, _ = env
     i = ids(g)
@@ -1361,17 +1351,14 @@ def test_inventory_food_rows_read_like_supplies(env):
     assert f"Use by {day}" in html and f"Best before {day}" in html
 
 
-def test_scan_dialogs_save_on_enter_and_new_scan_clears_result(env):
+def test_scan_sheet_saves_on_enter(env):
     html = env[3].get("/scan").text
-    for dialog in ('<dialog id="ask"', '<dialog id="fix"'):
-        d = html[html.index(dialog):]
-        d = d[:d.index("</dialog>")]
-        assert d.index('value="ok"') < d.index('value="cancel"'), dialog  # Enter submits the first button
-    js = env[3].get("/static/app.js").text
-    param = re.search(r"decodeFromVideoDevice\(undefined, video, \((\w+)\) =>", js).group(1)
-    hidden = re.search(r"(\w+)\.hidden = true;\s*run\(`Looking up", js).group(1)
-    assert hidden != param and f'const {hidden} = document.getElementById("scan-result")' in js
-
+    fix = _section(html, '<dialog id="fix"', "</dialog>")
+    assert fix.index('value="ok"') < fix.index('value="cancel"')  # Enter submits the first button
+    for form in ('<form id="found"', '<form id="manual"'):
+        f = _section(html, form, "</form>")
+        submits = [b for b in re.findall(r"<button[^>]*>", f) if 'type="button"' not in b]
+        assert len(submits) == 1 and "btn-primary" in submits[0], form  # the phone's Go confirms
 
 def test_typed_pack_size_reaches_running_low_bought(env):
     """Running low names the generic, so a size typed for a new brand is kept on its generic too."""

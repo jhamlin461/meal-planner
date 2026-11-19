@@ -108,8 +108,16 @@ def test_confirm_use_never_more_than_stock(env):
     r = confirm(c, pid, action="use").json()
     assert r == {"status": "ok", "action": "use", "product": "Brand Milk", "amount": 0, "place": None,
                  "transaction_id": None}
-    for bad in (0, -1):
+    for bad in (0, -1, 1.5, "inf"):  # packs are whole packages, at least one
         assert confirm(c, pid, action="use", packs=bad).status_code == 422
+
+
+def test_old_instant_scan_endpoint_is_gone(env):
+    g, _, c = env
+    pid = milk(g)
+    assert c.post("/api/scan", json={"code": "123", "action": "add"}).status_code in (404, 405)
+    assert c.post(f"/api/products/{pid}/min", json={"amount": 2}).status_code in (404, 405)  # Keep at least rides on confirm
+    assert pid not in g.stock
 
 
 def test_confirm_rejects_unknown_place(env):

@@ -3,6 +3,7 @@
 {%- set section = section|default("today" if path == "/" else "settings" if path in ("/settings", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
 {%- set pages = [("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [] -%}
 {%- macro current(href) %}{% if path == href or path.startswith(href + "/") %} aria-current="page"{% endif %}{% endmacro -%}
+{%- set full = path == "/scan" -%}{# the scanner is full screen: no tabs, rail or title row #}
 {%- set theme = request.cookies.get("theme") if request.cookies.get("theme") in ("black", "light", "auto") else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
@@ -25,7 +26,7 @@
 {% block head %}{% endblock %}
 </head>
 <body data-section="{{ section }}">
-<nav class="rail" aria-label="Main">
+{% if not full %}<nav class="rail" aria-label="Main">
 <ul>
 {% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("home", "/home", "Chores", "broom")]  %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
@@ -37,15 +38,15 @@
 {% endfor %}
 </ul>
 <a class="rail-settings" href="/settings"{% if section == "settings" %} aria-current="page"{% endif %}>{{ icon("cog-outline") }}<span>Settings</span></a>
-</nav>
+</nav>{% endif %}
 <main{% block main_attrs %}{% endblock %}>
 {% if pages %}<nav class="segmented pages" aria-label="Meals pages">
 {%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
 </nav>{% endif %}
-<div class="title-row">{% block heading %}{% endblock %}
+{% if not full %}<div class="title-row">{% block heading %}{% endblock %}
 {%- if path == "/inventory" %}
 <a class="button title-action" href="/scan">{{ icon("barcode-scan") }}Scan</a>{% endif %}
-<a class="settings-btn" href="/settings" aria-label="Settings"{% if section == "settings" %} aria-current="page"{% endif %}>{{ icon("cog-outline") }}</a></div>
+<a class="settings-btn" href="/settings" aria-label="Settings"{% if section == "settings" %} aria-current="page"{% endif %}>{{ icon("cog-outline") }}</a></div>{% endif %}
 {% block content %}{% endblock %}
 </main>
 <div id="toast" role="status" hidden></div>

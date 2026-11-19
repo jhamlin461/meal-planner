@@ -38,142 +38,264 @@ async function shrink(file) {
   return new Promise((done) => c.toBlob(done, "image/jpeg", 0.85));
 }
 
+// Scanner (Scan & Go): a read stops decoding and holds the frame; the sheet looks the code up and nothing changes
+// until it's confirmed. Closing the sheet any way (Cancel, Esc, a confirm) starts scanning again.
 const video = document.getElementById("scanner");
 if (video) {
-  const status = document.getElementById("scan-status");
-  const unknown = document.getElementById("unknown");
-  const photo = document.getElementById("photo");
-  const dlg = document.getElementById("fix");
-  const sheet = document.getElementById("ask");
-  const card = document.getElementById("scan-result");
-  const manual = document.getElementById("manual");
-  const idle = "Point the camera at a barcode.";
-  const action = () => document.querySelector("[name=scan-action]:checked").value;
-  let busy = false, last = "", lastAt = 0, unknownCode = "", manualCode = "", shown = null;
+  const $ = (id) => document.getElementById(id);
+  const sheet = $("sheet"), found = $("found"), manual = $("manual"), photo = $("photo"), fix = $("fix");
+  const stage = document.querySelector(".scan-stage"), status = $("scan-status"), tripBtn = $("trip");
+  const reader = new ZXingBrowser.BrowserMultiFormatReader();
+  const mode = () => document.querySelector("[name=scan-action]:checked");
+  let scanning = null, last = "", lastAt = 0, code = "", item = null, action = "add", turn = 0, retry = null;
 
-  // A number from the in-page sheet, or null when skipped.
-  function ask(text, value, [no, yes]) {
-    document.getElementById("ask-text").textContent = text;
-    const input = document.getElementById("ask-amount");
-    input.value = value ?? "";
-    const noBtn = sheet.querySelector("[value=cancel]"), yesBtn = sheet.querySelector("[value=ok]");
-    noBtn.textContent = no;
-    yesBtn.textContent = yes;
-    sheet.returnValue = "";  // Esc keeps the last value
-    sheet.showModal();
-    input.focus();
-    return new Promise((done) => {
-      sheet.onclose = () => {
-        const n = Number(input.value);
-        done(sheet.returnValue === "ok" && n > 0 && Number.isFinite(n) ? n : null);
-      };
+  // This trip: kept for the tab's session; without storage it still works, it just isn't kept across reloads.
+  let trip = [];
+  try { trip = JSON.parse(sessionStorage.getItem("scan-trip")) || []; } catch { trip = []; }
+  function saveTrip() {
+    try { sessionStorage.setItem("scan-trip", JSON.stringify(trip)); } catch { /* not kept, still shown */ }
+    drawTrip();
+  }
+  function drawTrip() {
+    const added = trip.filter((t) => t.action === "add").length, used = trip.length - added;
+    tripBtn.textContent = [added && `${added} added`, used && `${used} used`].filter(Boolean).join(", ");
+    tripBtn.hidden = !trip.length;
+    $("trip-list").replaceChildren(...trip.map((t) => {
+      const li = document.createElement("li"), text = document.createElement("span");
+      const undo = document.createElement("button"), err = document.createElement("p");
+      li.className = "trip-line";
+      text.className = "grow breakable";
+      text.textContent = t.text;
+      undo.type = "button";
+      undo.className = "btn";
+      undo.textContent = "Undo";
+      undo.setAttribute("aria-label", `Undo ${t.text}`);
+      err.className = "error";
+      err.setAttribute("role", "alert");
+      err.hidden = true;
+      undo.addEventListener("click", async () => {
+        undo.disabled = true;
+        try {
+          const r = await post("/api/scan/undo", {transaction_id: t.id});
+          if (r.status !== "ok") throw new Error(r.message);
+          trip = trip.filter((x) => x !== t);
+          saveTrip();
+          if (trip.length) sheet.querySelector("[data-state=trip] [data-focus]").focus();
+          else sheet.close();
+        } catch (e) {
+          err.textContent = e.message;
+          err.hidden = false;
+          undo.disabled = false;
+        }
+      });
+      li.append(text, undo, err);
+      return li;
+    }));
+  }
+  drawTrip();
+
+  function cameraError(e) {
+    status.textContent = `Camera unavailable: ${e.message}`;
+    $("elsewhere").hidden = false;
+  }
+
+  // Decode until a read. The camera stays on between reads; only the decoding stops.
+  function scan() {
+    if (scanning || !video.srcObject) return;
+    stage.classList.remove("locked");
+    lastAt = Date.now();  // the package just handled may still be in front of the camera
+    scanning = reader.decodeFromVideoElement(video, (result, _error, controls) => {
+      if (!result) return;
+      const c = result.getText(), now = Date.now();
+      const repeat = c === last && now - lastAt < 2000;
+      if (c === last) lastAt = now;
+      if (repeat) return;
+      controls.stop();
+      scanning = null;
+      video.pause();  // hold the frame that was read
+      stage.classList.add("locked");
+      navigator.vibrate?.(60);
+      last = c;
+      code = c;
+      action = mode().value;
+      lookup(() => post("/api/scan/lookup", {code}));
+    }).catch(cameraError);
+  }
+  function hold() {
+    scanning?.then((controls) => controls?.stop());
+    scanning = null;
+  }
+  Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({video: {facingMode: "environment"}}))
+    .then((stream) => { video.srcObject = stream; scan(); }, cameraError);
+
+  function show(state) {
+    for (const s of sheet.querySelectorAll("[data-state]")) s.hidden = s.dataset.state !== state;
+    sheet.setAttribute("aria-labelledby", `h-${state}`);
+    if (!sheet.open) {
+      hold();
+      sheet.showModal();
+    }
+    sheet.querySelector(`[data-state=${state}] [data-focus]`)?.focus();
+  }
+  sheet.addEventListener("close", () => {
+    turn++;  // a lookup still on its way is dropped
+    mode().focus();
+    scan();
+  });
+  sheet.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) sheet.close(); });
+
+  // Look something up with the sheet in its loading state; `again` is what Try again does.
+  async function lookup(request, label = "Looking up…", again = null) {
+    const my = ++turn;
+    retry = again || (() => lookup(request, label, again));
+    $("h-loading").textContent = label;
+    show("loading");
+    let d;
+    try { d = await request(); } catch (e) { d = {status: "error", message: e.message}; }
+    if (my !== turn || !sheet.open) return;
+    if (d.status === "found") showFound(d);
+    else if (d.status === "manual") openManual(d.name, true);
+    else if (d.status === "unknown") {
+      $("unknown-code").textContent = code;
+      show("unknown");
+    } else {
+      $("error-text").textContent = d.message || "Something went wrong.";
+      show("error");
+    }
+  }
+  $("retry").addEventListener("click", () => retry());
+
+  const qty = (n, unit) => (unit && unit !== "piece" ? `${n} ${unit}` : `${n}`);
+  const byAmount = () => !$("amount-field").hidden;
+
+  function showFound(d) {
+    item = d;
+    const use = action === "use", f = found.elements;
+    const amountMode = d.package == null && !(use && d.kind === "supply");  // supplies are used one at a time
+    const keep = d.need_min && !use;
+    $("h-found").textContent = d.product;
+    $("found-generic").textContent = `Counts as ${d.generic}`;
+    $("found-photo").hidden = !d.photo;
+    if (d.photo) $("found-photo").src = d.photo;
+    f.place.replaceChildren(...d.places.map((p) => new Option(p, p, p === d.place, p === d.place)));
+    $("place-field").hidden = use;
+    $("packs-field").hidden = amountMode;
+    f.packs.value = 1;
+    $("amount-field").hidden = !amountMode;
+    f.amount.value = "";
+    f.amount.required = amountMode;
+    const unit = d.unit === "piece" ? "pieces" : d.unit;
+    $("amount-label").textContent = use ? `How much did you use? (${unit})` : `How much is in it? (${unit})`;
+    $("amount-hint").hidden = use;
+    $("min-field").hidden = !keep;
+    $("min-label").textContent = `Keep at least (${unit})`;
+    f.min.value = keep ? d.package ?? 1 : "";
+    $("found-error").hidden = true;
+    label();
+    show("found");
+    if (amountMode) f.amount.focus();
+  }
+
+  function label() {
+    const f = found.elements;
+    $("found-go").textContent = action === "add" ? `Add to ${f.place.value}` : byAmount() ? "Use" : `Use ${f.packs.value || 1}`;
+  }
+  found.addEventListener("input", label);
+  for (const b of found.querySelectorAll("[data-step]")) {
+    b.addEventListener("click", () => {
+      const packs = found.elements.packs;
+      packs.value = Math.max(1, Math.round(Number(packs.value) || 1) + Number(b.dataset.step));
+      label();
     });
   }
 
-  function report(title, note) {
-    document.getElementById("result-title").textContent = title;
-    document.getElementById("result-note").textContent = note;
-    card.hidden = false;
+  function fail(text) {
+    $("found-error").textContent = text;
+    $("found-error").hidden = false;
   }
 
-  document.getElementById("result-fix").addEventListener("click", () => {
-    const d = shown;
-    document.getElementById("fix-name").textContent = d.product;
-    const input = dlg.querySelector("[name=generic]");
+  found.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = item, f = found.elements, go = $("found-go");
+    const packs = Number(f.packs.value), amount = byAmount() ? Number(f.amount.value) : null;
+    const min = $("min-field").hidden ? null : Number(f.min.value) || null;
+    if (amount !== null && !(amount > 0)) return fail("Type how much.");
+    if (amount === null && !(Number.isInteger(packs) && packs >= 1)) return fail("Pick a whole number, 1 or more.");
+    if (min !== null && !(min > 0)) return fail("Keep at least needs a number above 0.");
+    const place = action === "add" ? f.place.value : null;
+    go.disabled = true;
+    $("found-error").hidden = true;
+    try {
+      const r = await post("/api/scan/confirm", {product_id: d.product_id, action, packs: amount ? 1 : packs, amount,
+        place, min});
+      if (r.status !== "ok") throw new Error(r.message);
+      const n = amount ? qty(amount, d.unit) : packs;
+      const asked = amount || (d.kind === "supply" ? packs : packs * (d.package || 0));
+      let text;
+      if (action === "add") text = `Added ${n} ${d.product} to ${place}`;
+      else if (r.amount <= 0) text = `No ${d.product} in stock, so nothing was used`;
+      else if (r.amount < asked) text = `Used the last ${d.product}`;
+      else text = `Used ${n} ${d.product}`;
+      if (r.transaction_id) {
+        trip.unshift({id: r.transaction_id, action, text});
+        saveTrip();
+      }
+      toast(text);
+      if (sheet.open) sheet.close();
+    } catch (err) {
+      fail(err.message);
+    }
+    go.disabled = false;
+  });
+
+  // "Counts as": the relink dialog opens over the sheet.
+  $("found-change").addEventListener("click", () => {
+    const d = item, input = fix.querySelector("[name=generic]");
+    $("fix-name").textContent = d.product;
     input.value = d.generic;
-    dlg.onclose = async () => {
-      if (dlg.returnValue !== "ok") return;
+    fix.onclose = async () => {
+      if (fix.returnValue !== "ok") return;
       const name = input.value.trim();
       try {
         const r = await post("/api/relink", {product_id: d.product_id, generic_name: name});
-        if (r.status !== "ok") return toast(r.message);
+        if (r.status !== "ok") throw new Error(r.message);
         d.generic = name;
-        document.getElementById("result-note").textContent = `Counts as ${name}.`;
-      } catch (e) { toast(e.message); }
+        $("found-generic").textContent = `Counts as ${name}`;
+      } catch (err) { fail(err.message); }
     };
-    dlg.returnValue = "";
-    dlg.showModal();
+    fix.returnValue = "";
+    fix.showModal();
   });
 
-  async function show(d, code) {
-    if (d.status === "need_min") {  // a new supply: how many to keep before it goes on Running low, then the add
-      const n = await ask(`Keep at least how many? (${d.product}, ${d.unit})`, d.default, ["Skip", "Save"]);
-      if (n) await post(`/api/products/${d.product_id}/min`, {amount: n});
-      return show(await post("/api/scan", {code, action: d.action}), code);
-    }
-    if (d.status === "need_amount") {  // package size unknown: ask, then send the same scan with the amount
-      const n = await ask(`How much is in one package of ${d.product}? (${d.unit}) — we'll remember it.`, null,
-        ["Cancel", d.action === "add" ? "Add" : "Use"]);
-      if (n) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
-      toast(`Nothing changed for ${d.product}.`);
-    } else if (d.status === "manual") {  // AI paused: the product's details by hand
-      manualCode = code;
-      document.getElementById("manual-code").textContent = code;
-      manual.reset();
-      manual.elements.namedItem("name").value = d.name || "";
-      manual.hidden = false;
-    } else if (d.status === "unknown") {
-      unknownCode = code;
-      document.getElementById("unknown-code").textContent = code;
-      unknown.hidden = false;
-    } else if (d.status !== "ok") {
-      toast(d.message || "Something went wrong.");
-    } else {
-      shown = d;
-      const title = d.action === "add" ? `Added ${d.product}` : d.amount > 0 ? `Used ${d.product}` : `No ${d.product} in stock`;
-      report(title, `Counts as ${d.generic}.`);
-    }
-  }
-
-  async function run(label, work) {
-    busy = true;
-    status.textContent = label;
-    try { await work(); } catch (e) { toast(e.message); }
-    busy = false;
-    status.textContent = idle;
-  }
-
+  $("take-photo").addEventListener("click", () => photo.click());
   photo.addEventListener("change", () => {
     const file = photo.files[0];
     photo.value = "";
     if (!file) return;
-    unknown.hidden = true;
-    run("Reading the photo…", async () => {
+    lookup(async () => {
       const fd = new FormData();
-      fd.append("code", unknownCode);
-      fd.append("action", action());
+      fd.append("code", code);
       fd.append("image", await shrink(file), "photo.jpg");
-      await show(await post("/api/scan/photo", fd), unknownCode);
-    });
+      return post("/api/scan/photo", fd);
+    }, "Reading the photo…", () => show("unknown"));
   });
 
-  document.getElementById("manual-cancel").addEventListener("click", () => {
-    manual.hidden = true;
-    toast(`Nothing saved for ${manualCode}.`);
-  });
-
+  function openManual(name, paused) {
+    manual.reset();
+    manual.elements.namedItem("name").value = name || "";
+    $("manual-note").textContent = paused ? `AI is paused until the 1st, so tell me about barcode ${code}.`
+      : `Barcode ${code}.`;
+    show("manual");
+  }
+  $("to-manual").addEventListener("click", () => openManual("", false));
   manual.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(manual);
-    fd.append("code", manualCode);
-    fd.append("action", action());
-    manual.hidden = true;
-    run("Saving…", async () => show(await post("/api/scan/manual", fd), manualCode));
+    fd.append("code", code);
+    lookup(() => post("/api/scan/manual", fd), "Saving…", () => show("manual"));
   });
 
-  new ZXingBrowser.BrowserMultiFormatReader().decodeFromVideoDevice(undefined, video, (result) => {
-    if (!result) return;
-    const code = result.getText(), now = Date.now();
-    const repeat = code === last && now - lastAt < 2000;  // same package still in front of the camera
-    if (code === last) lastAt = now;
-    if (busy || repeat) return;
-    last = code;
-    lastAt = now;
-    unknown.hidden = true;
-    manual.hidden = true;
-    card.hidden = true;
-    run(`Looking up ${code}…`, async () => show(await post("/api/scan", {code, action: action()}), code));
-  }).catch((e) => { status.textContent = `Camera unavailable: ${e.message}`; });
+  tripBtn.addEventListener("click", () => show("trip"));
 }
 
 // Chore form: show only the fields for the chosen "Repeats" option (all stay visible without JS).

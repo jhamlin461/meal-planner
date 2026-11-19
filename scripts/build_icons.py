@@ -7,7 +7,8 @@ OUT = Path(__file__).resolve().parent.parent / "app" / "static" / "icons.svg"
 URL = "https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/svg/{}.svg"
 ICONS = """white-balance-sunny silverware-fork-knife home-outline barcode-scan washing-machine broom cat trash-can-outline
 calendar-check battery-sync-outline basket-outline fridge-outline book-open-variant cart-outline account-outline
-check alarm-snooze plus pencil-outline chevron-right alert-circle-outline chevron-left""".split()
+check alarm-snooze plus pencil-outline chevron-right alert-circle-outline chevron-left camera-outline
+file-upload-outline cog-outline close minus""".split()
 
 
 def symbol(name: str, svg: str) -> str:

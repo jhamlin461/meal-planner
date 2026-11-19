@@ -548,14 +548,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             move_family(grocy, pid, from_location, to_location)
         return inventory_back(place)
 
-    class MinIn(BaseModel):
-        amount: float = Field(gt=0, allow_inf_nan=False)
-
-    @app.post("/api/products/{pid}/min")
-    def api_min(pid: int, body: MinIn):
-        set_min(pid, body.amount)
-        return {"status": "ok"}
-
     @app.post("/settings/theme")
     def set_theme(request: Request, theme: Literal["dark", "black", "light", "auto"] = Form()):
         """Per-device theme; back to the page it was switched on (same-site paths only)."""
@@ -661,41 +653,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         """A new supply: its keep-at-least is asked once per generic, not per brand."""
         return r.created and is_supply(p) and not float(generic_of(p).get("min_stock_amount") or 0)
 
-    def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
-        """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
-        p = grocy.get_object("products", r.product_id) or {}
-        info = {"product": r.name, "generic": r.generic_name, "created": r.created, "product_id": r.product_id,
-                "action": action}
-        known = _num(grocy.userfields("products", r.product_id).get("package_amount"))
-        pkg = amount or known
-        unit = unit_names().get(_int(p.get("qu_id_stock")), "")
-        if is_supply(p) and action == "use":
-            pkg = 1.0  # supplies are used one at a time
-        if action == "add" and needs_min(r, p):
-            return {"status": "need_min", **info, "unit": unit, "default": pkg or 1}
-        if pkg is None:
-            return {"status": "need_amount", **info, "unit": unit}
-        if action == "add":
-            if amount and not known:  # remember the answer for this product's next scan
-                grocy.set_userfields("products", r.product_id, {"package_amount": amount})
-                gid = _int(p.get("parent_product_id"))  # and for its generic, which Running low and Bought use
-                if gid and not _num(grocy.userfields("products", gid).get("package_amount")):
-                    grocy.set_userfields("products", gid, {"package_amount": amount})  # a brand has its generic's unit
-            days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
-            grocy.add_stock(r.product_id, pkg, date.today() + timedelta(days=days) if days > 0 else None,
-                            _int(p.get("location_id")))
-            done = pkg
-        else:
-            done = min(pkg, grocy.stock_amounts().get(r.product_id, 0.0))
-            if done > 0:
-                grocy.consume(r.product_id, done)
-        return {"status": "ok", **info, "amount": done}
-
-    class ScanIn(BaseModel):
-        code: str
-        action: Literal["add", "use"] = "add"
-        amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # typed when the size is unknown
-
     def resolve_code(code: str) -> Resolved | dict:
         """A scanned code's product, else what the page shows instead (unknown, the product form, an error)."""
         try:
@@ -707,11 +664,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if r is None:
             return {"status": "manual", "code": code, "name": ""} if ai.mode() == "free" else {"status": "unknown"}
         return r
-
-    @app.post("/api/scan")
-    def api_scan(body: ScanIn):
-        r = resolve_code(body.code.strip())
-        return r if isinstance(r, dict) else apply_scan(r, body.action, body.amount)
 
     def place_of(p: dict) -> str:
         """The product's own place by name (the fallback place if its location is gone)."""
@@ -739,7 +691,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     class ConfirmIn(BaseModel):
         product_id: int
         action: Literal["add", "use"]
-        packs: float = Field(default=1, gt=0, allow_inf_nan=False)
+        packs: int = Field(default=1, ge=1)  # whole packages
         amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # stock units, when the size is unknown
         place: str | None = None  # add only; the product's own place when not given
         min: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # a new supply's keep-at-least

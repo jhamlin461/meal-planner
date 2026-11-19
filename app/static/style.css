@@ -143,7 +143,6 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
   box-shadow: 0 6px 24px rgba(0,0,0,.35); }
 @media (min-width: 900px) { #toast { left: calc(var(--rail-w) + 24px); bottom: 24px; } }
 
-video#scanner { width: 100%; aspect-ratio: 4 / 3; max-height: 50vh; background: #000; border-radius: 14px; object-fit: cover; }
 dialog { border: 0; border-radius: 14px; background: var(--surface); color: var(--text); width: min(92vw, 420px);
   padding: 16px 16px 14px; overflow: hidden; }
 dialog .field { margin: 0; }
@@ -310,16 +309,82 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .stock-more p { margin: 0 0 6px; font-size: .875rem; }
 .btn.danger, .card-actions .btn.danger { color: var(--now); }
 
-/* Scan: mode switch, then the camera full width, then what happened as a card. */
-.scan-mode { margin: 0 0 12px; max-width: 22em; }
-.scan-mode label { position: relative; cursor: pointer; }
+/* Scan & Go: the camera fills the screen and stays dark in every theme; the sheet over it follows the theme. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+main.scan { position: fixed; inset: 0; max-width: none; margin: 0; padding: 0; background: #000; }
+.scan-stage { position: absolute; inset: 0; overflow: hidden; color: var(--text); --text: #fff; --muted: rgba(255,255,255,.8);
+  --line: rgba(255,255,255,.3); color-scheme: dark; }
+.scan-stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+/* Four corners over a dimmed picture; on a read they close in and take the action colour while the frame holds. */
+.scan-frame { --c: 36px; --w: 4px; position: absolute; left: 50%; top: 44%; width: min(80vw, 400px); aspect-ratio: 8 / 5;
+  translate: -50% -50%; border-radius: 6px; color: var(--text); box-shadow: 0 0 0 100vmax rgba(0,0,0,.4);
+  background: linear-gradient(currentColor 0 0) top left / var(--c) var(--w),
+    linear-gradient(currentColor 0 0) top left / var(--w) var(--c),
+    linear-gradient(currentColor 0 0) top right / var(--c) var(--w),
+    linear-gradient(currentColor 0 0) top right / var(--w) var(--c),
+    linear-gradient(currentColor 0 0) bottom left / var(--c) var(--w),
+    linear-gradient(currentColor 0 0) bottom left / var(--w) var(--c),
+    linear-gradient(currentColor 0 0) bottom right / var(--c) var(--w),
+    linear-gradient(currentColor 0 0) bottom right / var(--w) var(--c);
+  background-repeat: no-repeat; transition: scale .2s cubic-bezier(.2, .8, .2, 1), color .2s; }
+.locked .scan-frame { color: var(--action); scale: .92; }
+.scan-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 12px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 40px; background: linear-gradient(rgba(0,0,0,.55), transparent); }
+.scan-close { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; color: var(--text);
+  background: rgba(0,0,0,.5); box-shadow: inset 0 0 0 1px var(--line); }
+.scan-trip { margin-left: auto; border-radius: 24px; padding: 6px 20px; box-shadow: 0 2px 12px rgba(0,0,0,.35); }
+.scan-bottom { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center;
+  gap: 12px; padding: 56px 16px calc(20px + env(safe-area-inset-bottom)); text-align: center;
+  background: linear-gradient(transparent, rgba(0,0,0,.65)); }
+#scan-status { margin: 0; max-width: 32em; font-weight: 500; overflow-wrap: anywhere; text-shadow: 0 1px 3px #000; }
+.scan-elsewhere { margin: 0; }
+.scan-mode { flex: none; width: min(100%, 22em); padding: 4px; border-radius: 28px; background: rgba(0,0,0,.6); }
+.scan-mode label { position: relative; cursor: pointer; border-radius: 24px; }
 .scan-mode input { position: absolute; opacity: 0; pointer-events: none; }
 .scan-mode label:has(input:checked) { background: var(--action); color: var(--on-action); font-weight: 600; }
 .scan-mode label:has(input:focus-visible) { outline: 3px solid var(--text); outline-offset: -3px; }
-#scan-status { margin: 10px 2px; }
-.result-title { margin: 0; color: var(--text); font-size: 1.2rem; font-weight: 650; font-stretch: 90%; }
-#scan-result p, #unknown p { margin: 4px 0 0; }
-.scan-elsewhere { margin: 16px 0; }
+main.scan ~ #toast { left: 16px; bottom: calc(132px + env(safe-area-inset-bottom)); }
+
+/* The sheet: slides up from the bottom, never taller than 70% of the screen, scrolls inside. */
+dialog.sheet { margin: auto auto 0; width: 100%; max-width: 560px; max-height: 70vh; max-height: 70dvh; overflow-y: auto;
+  overscroll-behavior: contain; padding: 10px 20px calc(16px + env(safe-area-inset-bottom)); border-radius: 22px 22px 0 0;
+  box-shadow: 0 -8px 40px rgba(0,0,0,.4); }
+dialog.sheet::before { content: ""; display: block; width: 40px; height: 4px; margin: 0 auto 14px; border-radius: 2px;
+  background: var(--line); }
+dialog.sheet[open] { animation: sheet-up .28s cubic-bezier(.2, .8, .2, 1); }
+dialog.sheet::backdrop { background: rgba(0,0,0,.3); }
+@keyframes sheet-up { from { translate: 0 100%; } }
+.sheet .field { margin: 0 0 12px; }
+.sheet p { margin: 0 0 12px; }
+.sheet .hint { margin: -6px 0 12px; }
+.sheet-title { margin: 0 0 4px; color: var(--text); font-size: 1.375rem; font-weight: 700; font-stretch: 90%; line-height: 1.2; }
+.sheet-go, .sheet-wide { width: 100%; margin-top: 10px; }
+.sheet-go { min-height: 56px; border-radius: 14px; font-size: 1.0625rem; }
+.shimmer-card { display: grid; grid-template-columns: 72px 1fr; gap: 10px 14px; margin: 14px 0 8px; }
+.shimmer { display: block; height: 16px; border-radius: 8px; align-self: center; animation: shimmer 1.3s linear infinite;
+  background: linear-gradient(90deg, var(--line) 30%, color-mix(in srgb, var(--text) 24%, transparent) 50%, var(--line) 70%)
+    0 0 / 300% 100%; }
+.shimmer-photo { grid-row: span 2; height: 72px; border-radius: 12px; }
+.shimmer-short { width: 55%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .shimmer-card { display: none; } }
+.found-head { display: flex; gap: 14px; align-items: flex-start; margin: 0 0 12px; }
+#found-photo { width: 72px; height: 72px; flex: none; border-radius: 12px; object-fit: cover; background: var(--rail); }
+.found-generic { display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; color: var(--muted); }
+.sheet .found-generic { margin: 0; }
+.link-btn { min-height: 48px; padding: 0 8px; background: transparent; color: var(--action); box-shadow: none; }
+.stepper-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  margin: 0 0 12px; }
+.stepper { display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 32px; background: var(--field);
+  box-shadow: inset 0 0 0 1px var(--line); }
+.stepper button { min-height: 56px; width: 56px; padding: 0; border-radius: 50%; }
+.stepper button .icon { width: 28px; height: 28px; }
+.stepper input { width: 3em; min-height: 56px; padding: 0; border: 0; background: transparent; text-align: center;
+  font-size: 1.625rem; font-weight: 750; font-variant-numeric: tabular-nums; appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.trip-rows { margin: 10px 0 4px; }
+.trip-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.sheet .trip-line .error { flex-basis: 100%; margin: 0; font-size: .9375rem; }
 
 /* Review and table editor: two equal buttons to finish; each step is a label and the chips it combines. */
 .form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0; }

@@ -1,41 +1,94 @@
 {% extends "base.html" %}
+{% from "_icon.html" import icon %}
 {% block title %}Scan{% endblock %}
-{% block heading %}<h1>Scan</h1>{% endblock %}
+{% block main_attrs %} class="scan"{% endblock %}
 {% block content %}
-<div class="segmented scan-mode" role="radiogroup" aria-label="What to do">
-  <label><input type="radio" name="scan-action" value="add" checked>Add to stock</label>
-  <label><input type="radio" name="scan-action" value="use">Use up</label>
-</div>
-<video id="scanner" playsinline muted></video>
-<p id="scan-status" class="muted" role="status">Point the camera at a barcode.</p>
-<div id="scan-result" class="card" hidden>
-  <h2 class="result-title breakable" id="result-title"></h2>
-  <p class="muted breakable" id="result-note"></p>
-  <div class="card-actions"><button class="btn" id="result-fix" type="button">Change what it counts as</button></div>
-</div>
-<div id="unknown" class="card" hidden>
-  <p>I don't know barcode <b id="unknown-code"></b>. Take a photo of the package and I'll work it out.</p>
-  <div class="card-actions"><label class="button btn-primary">Take photo<input id="photo" type="file" accept="image/*" capture="environment" hidden></label></div>
-</div>
-<form id="manual" class="card" hidden>
-  <p>AI is paused until the 1st, so tell me about <b id="manual-code"></b>.</p>
-  <label class="field"><span>Name</span><input name="name" required></label>
-  <label class="field"><span>Counts as</span><input name="generic" list="generics" required autocomplete="off"></label>
-  <p class="hint">Pick one you already have, or type a new one.</p>
-  <div class="fields pairs">
-    <label class="field"><span>Counted in</span><select name="stock_unit"><option value="g">Grams</option><option value="ml">Millilitres</option><option value="piece">Pieces</option></select></label>
-    <label class="field"><span>Package size</span><input name="package_amount" type="number" min="0" step="any" inputmode="decimal"></label>
-    <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == default_location %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
-    <label class="field"><span>Kind</span><select name="category"><option value="food">Food</option><option value="supply">Household supply</option></select></label>
+<section class="scan-stage" aria-labelledby="scan-title">
+  <h1 class="sr-only" id="scan-title">Scan</h1>
+  <video id="scanner" playsinline muted></video>
+  <div class="scan-frame" aria-hidden="true"></div>
+  <div class="scan-top">
+    <a class="scan-close" href="/inventory" aria-label="Close scanner">{{ icon("close") }}</a>
+    <button class="scan-trip" id="trip" type="button" hidden></button>
   </div>
-  <div class="card-actions"><button class="btn" type="button" id="manual-cancel">Cancel</button><button class="btn btn-primary">Save product</button></div>
-</form>
-<p class="scan-elsewhere"><a class="btn" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
-<dialog id="ask" aria-labelledby="ask-text">
-  <form method="dialog">
-    <label class="field"><span id="ask-text"></span><input id="ask-amount" name="amount" type="number" step="any" min="0" inputmode="decimal" required></label>
-    <div class="card-actions"><button class="btn btn-primary" value="ok">Save</button><button class="btn" value="cancel" formnovalidate>Skip</button></div>
+  <div class="scan-bottom">
+    <p id="scan-status" role="status">Point the camera at a barcode.</p>
+    <p class="scan-elsewhere" id="elsewhere" hidden><a class="button" href="/scan{{ '?' ~ request.url.query if request.url.query }}" target="_blank" rel="noopener">Open scanner in browser</a></p>
+    <div class="segmented scan-mode" role="radiogroup" aria-label="What to do">
+      <label><input type="radio" name="scan-action" value="add" checked>Add to stock</label>
+      <label><input type="radio" name="scan-action" value="use">Use up</label>
+    </div>
+  </div>
+</section>
+<dialog id="sheet" class="sheet" aria-labelledby="h-loading">
+  <section data-state="loading" role="status">
+    <h2 class="sheet-title" id="h-loading">Looking up…</h2>
+    <div class="shimmer-card" aria-hidden="true"><span class="shimmer shimmer-photo"></span><span class="shimmer"></span><span class="shimmer shimmer-short"></span></div>
+    <button class="btn sheet-wide" type="button" data-close data-focus>Cancel</button>
+  </section>
+  <form id="found" data-state="found" hidden>
+    <div class="found-head">
+      <img id="found-photo" alt="" hidden>
+      <div class="breakable">
+        <h2 class="sheet-title" id="h-found"></h2>
+        <p class="found-generic"><span id="found-generic"></span><button class="link-btn" id="found-change" type="button">Change</button></p>
+      </div>
+    </div>
+    <label class="field" id="place-field"><span>Place</span><select name="place"></select></label>
+    <div class="stepper-row" id="packs-field">
+      <span id="packs-label">How many</span>
+      <div class="stepper">
+        <button type="button" data-step="-1" aria-label="One less">{{ icon("minus") }}</button>
+        <input id="packs" name="packs" type="number" min="1" step="1" value="1" inputmode="numeric" aria-labelledby="packs-label">
+        <button type="button" data-step="1" aria-label="One more">{{ icon("plus") }}</button>
+      </div>
+    </div>
+    <div id="amount-field">
+      <label class="field"><span id="amount-label"></span><input name="amount" type="number" min="0" step="any" inputmode="decimal"></label>
+      <p class="hint" id="amount-hint">I'll remember the package size.</p>
+    </div>
+    <div id="min-field">
+      <label class="field"><span id="min-label">Keep at least</span><input name="min" type="number" min="0" step="any" inputmode="decimal"></label>
+      <p class="hint">It goes on Running low below this.</p>
+    </div>
+    <p class="error" id="found-error" role="alert" hidden></p>
+    <button class="btn-primary sheet-go" id="found-go" data-focus></button>
+    <button class="btn sheet-wide" type="button" data-close>Cancel</button>
   </form>
+  <section data-state="unknown" hidden>
+    <h2 class="sheet-title" id="h-unknown">I don't know this one yet</h2>
+    <p class="muted breakable">Barcode <span id="unknown-code"></span>. Take a photo and I'll work out what it is, or fill in the details yourself.</p>
+    <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+    <button class="btn-primary sheet-go" id="take-photo" type="button" data-focus>{{ icon("camera-outline") }}Take a photo of the package</button>
+    <button class="btn sheet-wide" id="to-manual" type="button">Fill in the details</button>
+    <button class="btn sheet-wide" type="button" data-close>Cancel</button>
+  </section>
+  <form id="manual" data-state="manual" hidden>
+    <h2 class="sheet-title" id="h-manual">Tell me about it</h2>
+    <p class="muted breakable" id="manual-note"></p>
+    <label class="field"><span>Name</span><input name="name" required data-focus></label>
+    <label class="field"><span>Counts as</span><input name="generic" list="generics" required autocomplete="off"></label>
+    <p class="hint">Pick one you already have, or type a new one.</p>
+    <div class="fields pairs">
+      <label class="field"><span>Counted in</span><select name="stock_unit"><option value="g">Grams</option><option value="ml">Millilitres</option><option value="piece">Pieces</option></select></label>
+      <label class="field"><span>Package size</span><input name="package_amount" type="number" min="0" step="any" inputmode="decimal"></label>
+      <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == default_location %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+      <label class="field"><span>Kind</span><select name="category"><option value="food">Food</option><option value="supply">Household supply</option></select></label>
+    </div>
+    <button class="btn-primary sheet-go">Save product</button>
+    <button class="btn sheet-wide" type="button" id="manual-cancel" data-close>Cancel</button>
+  </form>
+  <section data-state="error" hidden>
+    <h2 class="sheet-title" id="h-error">That didn't work</h2>
+    <p class="breakable" id="error-text"></p>
+    <button class="btn-primary sheet-go" id="retry" type="button" data-focus>Try again</button>
+    <button class="btn sheet-wide" type="button" data-close>Cancel</button>
+  </section>
+  <section data-state="trip" hidden>
+    <h2 class="sheet-title" id="h-trip">This trip</h2>
+    <ul class="rows trip-rows" id="trip-list"></ul>
+    <button class="btn sheet-wide" type="button" data-close data-focus>Done</button>
+  </section>
 </dialog>
 <dialog id="fix" aria-labelledby="fix-text">
   <form method="dialog">
