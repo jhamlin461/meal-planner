@@ -218,3 +218,20 @@ document.querySelectorAll("[data-cross-key]").forEach((wrap) => {
   document.getElementById("start-over")?.addEventListener("click", () => { done.clear(); save(); });
   show();
 });
+
+// Import drop zone: the input covers the zone; say which files were picked and light up while dragging over.
+document.querySelectorAll(".drop").forEach((zone) => {
+  const input = zone.querySelector("input"), names = zone.querySelector(".drop-files"), idle = names.textContent;
+  input.addEventListener("change", () => {
+    const n = input.files.length;
+    names.textContent = n === 0 ? idle : n === 1 ? input.files[0].name : `${n} PDFs: ${[...input.files].map((f) => f.name).join(", ")}`;
+  });
+  input.addEventListener("dragenter", () => zone.classList.add("over"));
+  ["dragleave", "drop"].forEach((t) => input.addEventListener(t, () => zone.classList.remove("over")));
+});
+
+// Import review: the source PDF is folded away on smaller screens and always open beside the review on wide ones.
+const wide = matchMedia("(min-width: 1280px)");
+const openWide = () => document.querySelectorAll("[data-open-wide]").forEach((d) => { if (wide.matches) d.open = true; });
+wide.addEventListener("change", openWide);
+openWide();

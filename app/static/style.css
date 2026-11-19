@@ -317,6 +317,38 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 .show-all span { border-color: transparent; background: transparent; color: var(--action); font-weight: 600; }
 .show-all input:checked + span { background: var(--line); }
 
+/* Import: one big drop zone for recipe PDFs; the file input covers it, so a drop anywhere lands in it. */
+.drop { position: relative; display: grid; place-items: center; min-height: 128px; margin: 0 0 12px; padding: 16px;
+  border: 2px dashed var(--muted); border-radius: 14px; background: var(--field); text-align: center; }
+.drop input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; opacity: 0;
+  cursor: pointer; }
+.drop-text { display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: none; min-width: 0;
+  overflow-wrap: anywhere; }
+.drop-text .icon { width: 36px; height: 36px; margin-bottom: 6px; color: var(--action); }
+.drop.over { border-color: var(--action); background: var(--line); }
+@media (hover: hover) { .drop:hover { border-color: var(--action); } }
+.drop:has(input:focus-visible) { outline: 3px solid var(--action); outline-offset: 2px; }
+@media (min-width: 900px) { .drop { min-height: 260px; } }
+
+/* Import review: the source (the PDF, or the website and its photo) above the review, folded away; on wide screens
+   it sits beside the review, each pane scrolling on its own, with Save always in view. */
+.review-source { margin: 0 0 12px; }
+.source-pdf iframe { display: block; width: 100%; height: 70vh; border: 0; border-radius: 14px; background: #fff; }
+.source-pdf p { margin: 8px 2px 12px; }
+@media (min-width: 900px) {
+  .review-main .form-actions { position: sticky; bottom: 0; z-index: 1; margin-bottom: 0; padding: 12px 0;
+    background: var(--bg); box-shadow: 0 -1px 0 var(--line); }
+}
+@media (min-width: 1280px) {
+  main.review { max-width: none; height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding-bottom: 0; }
+  .review-panes.two { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 32px; }
+  .review-panes.two > * { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px; }
+  .review-panes.two .review-source { margin: 0; }
+  .source-pdf summary { display: none; }
+  .source-pdf iframe { height: calc(100dvh - 150px); }
+}
+
 /* Recipe photos: cards on the list (two across on phones), a quiet tile where there is none. */
 .recipe-grid { list-style: none; padding: 0; margin: 16px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px 12px; }

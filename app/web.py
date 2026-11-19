@@ -874,6 +874,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
+                    pdf=store.pdf_path(p.id) is not None,
+                    source_url=p.source if p.source.startswith(("http://", "https://")) else None,
                     locations=LOCATIONS,
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
 
@@ -893,6 +895,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if f is None:
             raise HTTPException(404, "No photo")
         return FileResponse(f, media_type="image/jpeg")
+
+    @app.get("/import/{pid}/source")
+    def review_source(pid: str):
+        f = store.pdf_path(pid)  # the store only accepts its own ids, so no path tricks
+        if f is None:
+            raise HTTPException(404, "No PDF for this import")
+        return FileResponse(f, media_type="application/pdf", filename=f.name, content_disposition_type="inline")
 
     @app.post("/import/{pid}")
     async def review_post(request: Request, pid: str):

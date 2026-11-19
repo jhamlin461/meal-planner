@@ -1493,3 +1493,33 @@ def test_recipe_page_cross_off_hooks(env):
     c.post("/import", data={"urls": "https://example.com/soup"})
     review = c.get(f"/import/{store.all()[0].id}").text  # the review table is for checking, not cooking
     assert "data-cross" not in review and "Start over" not in review
+
+
+# ---- layouts that grow with the screen --------------------------------------------------------------------------
+def test_review_has_two_panes_and_serves_the_pdf_source(env):
+    g, ai, store, c, _ = env
+    ai.draft = soup_draft()
+    c.post("/import", data={"urls": "https://example.com/soup"},
+           files=[("files", ("soup.pdf", b"%PDF-1 soup", "application/pdf"))])
+    pdf = next(p for p in store.all() if p.source == "soup.pdf")
+    url = next(p for p in store.all() if p.source != "soup.pdf")
+    html = c.get(f"/import/{pdf.id}").text
+    assert 'class="review-panes two"' in html and "style=" not in html
+    src, main = html.index('class="review-source"'), html.index('class="review-main"')
+    assert src < main < html.index('name="product_0"') and html.index("Save recipe") > main
+    assert re.search(rf'<details class="source-pdf"[^>]*>\s*<summary>Show the source</summary>\s*'
+                     rf'<iframe[^>]*src="/import/{pdf.id}/source[#"]', html)
+    r = c.get(f"/import/{pdf.id}/source")
+    assert r.status_code == 200 and r.content == b"%PDF-1 soup"
+    assert r.headers["content-type"] == "application/pdf" and r.headers["content-disposition"].startswith("inline")
+    assert c.get(f"/import/{url.id}/source").status_code == 404  # a website has no file to show
+    assert c.get("/import/..%2Fpending%2Fx/source").status_code == 404
+    html = c.get(f"/import/{url.id}").text  # no PDF, no photo: one column, the website one click away
+    assert 'class="review-panes"' in html and "<iframe" not in html
+    assert re.search(r'<a class="btn"[^>]*href="https://example.com/soup"[^>]*target="_blank"', html)
+
+
+def test_import_page_has_a_drop_zone_for_pdfs(env):
+    html = env[3].get("/import").text
+    assert re.search(r'<label class="drop"[^>]*>.*?<input type="file" name="files" accept="application/pdf" multiple',
+                     html, re.S)

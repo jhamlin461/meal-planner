@@ -1,4 +1,7 @@
-"""Local demo for the visual check: the real app on FakeGrocy seed data. Run: uv run python -m tests.demo_server [port]"""
+"""Local demo for the visual check: the real app on FakeGrocy seed data. Run: uv run python -m tests.demo_server [port]
+DEMO_AI=economy or DEMO_AI=free shows the month's AI budget part or all used."""
+import io
+import os
 import socket
 import sys
 import tempfile
@@ -30,6 +33,20 @@ def dish(color=(92, 58, 40)) -> bytes:
     d.ellipse((200, 100, 1000, 850), fill=(230, 226, 218))
     d.ellipse((330, 230, 870, 720), fill=color)
     return to_jpeg(img)
+
+
+def recipe_card_pdf() -> bytes:
+    """A stand-in scanned recipe card, one page."""
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (850, 1100), (252, 250, 244))
+    d = ImageDraw.Draw(img)
+    lines = ["Soup with dragon eggs", "", "2 cups flour", "1 dragon egg", "", "Mix the flour and the egg.",
+             "Simmer for an hour, stirring now and then."]
+    for n, line in enumerate(lines):
+        d.text((80, 90 + n * 44), line, fill=(40, 40, 40), font_size=34 if n == 0 else 26)
+    buf = io.BytesIO()
+    img.save(buf, "PDF", resolution=100)
+    return buf.getvalue()
 
 
 def seed(data: Path, settings: Settings):
@@ -91,9 +108,14 @@ def main():
     ready = store.new("https://example.com/a-very-long-recipe-address/that-keeps-going/soup-with-dragon-eggs")
     store.save(ready.model_copy(update={"status": "ready", "draft": soup_draft()}))
     store.save_photo(ready.id, dish((170, 120, 40)))
+    card = store.new("grandmas-soup-card.pdf", pdf=recipe_card_pdf())
+    store.save(card.model_copy(update={"status": "ready", "draft": soup_draft()}))
     failed = store.new("grandmas-cards.pdf")
     store.save(failed.model_copy(update={"status": "failed", "error": "No recipe found in this PDF."}))
-    ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]))
+    mode = os.environ.get("DEMO_AI", "full")
+    if mode != "full":  # a month's AI spend that reaches economy, or the whole budget (free fallbacks)
+        house.add_ai_usage(datetime.now(), "recipe", "claude-opus-4-1", {}, 100.0 if mode == "free" else 85.5)
+    ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]), mode=mode)
     app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
                      settings, store, house=house, ha=ha)
     if len(sys.argv) > 1:
