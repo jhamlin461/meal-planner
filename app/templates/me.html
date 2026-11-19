@@ -11,6 +11,9 @@
       <button class="btn" name="theme" value="dark" aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}">Dark</button>
       <button class="btn" name="theme" value="light" aria-pressed="{{ 'true' if theme == 'light' else 'false' }}">Light</button>
     </span></form></li>
+  <li class="row"><span class="grow"><b>AI this month</b><br>${{ "%.2f"|format(ai_spent) }} of ${{ ai_budget|num }}<br>
+    <span class="muted">{{ {"full": "Full", "economy": "Economy — cheaper settings until the 1st",
+                             "free": "Paused until the 1st — using the free fallbacks"}[ai_mode] }}</span></span></li>
   <li class="row-link"><a href="/home/people"><b class="grow">People</b>{{ icon("chevron-right") }}</a></li>
 </ul>
 {% endblock %}

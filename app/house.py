@@ -60,6 +60,10 @@ class HouseStore:
                 CREATE TABLE IF NOT EXISTS reminders (key TEXT PRIMARY KEY, audience TEXT, remind_at TEXT, repeat_min INTEGER,
                     snooze_until TEXT, last_sent TEXT, sent_to TEXT, verb TEXT, sent_for TEXT);
                 CREATE TABLE IF NOT EXISTS flags (name TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE IF NOT EXISTS ai_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, month TEXT, kind TEXT,
+                    model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read INTEGER, cache_write_5m INTEGER,
+                    cache_write_1h INTEGER, batch INTEGER, cost REAL);
+                CREATE INDEX IF NOT EXISTS ai_usage_month ON ai_usage (month);
             """)
             if "sent_for" not in [c[1] for c in self._db.execute("PRAGMA table_info(reminders)")]:
                 self._db.execute("ALTER TABLE reminders ADD COLUMN sent_for TEXT")  # house.db from before sent_for
@@ -115,3 +119,16 @@ class HouseStore:
             self._q("DELETE FROM flags WHERE name=?", name)
         else:
             self._q("INSERT OR REPLACE INTO flags VALUES (?,?)", name, value)
+
+    # ---- the AI meter (app/ai.py prices each call) -----------------------------------------------------------------
+    def add_ai_usage(self, at: datetime, kind: str, model: str, tokens: dict, cost: float, batch: bool = False) -> None:
+        """tokens: input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h (missing ones are 0)."""
+        t = [int(tokens.get(k, 0)) for k in ("input_tokens", "output_tokens", "cache_read", "cache_write_5m",
+                                             "cache_write_1h")]
+        self._q("INSERT INTO ai_usage (at, month, kind, model, input_tokens, output_tokens, cache_read, cache_write_5m, "
+                "cache_write_1h, batch, cost) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                at.isoformat(), at.strftime("%Y-%m"), kind, model, *t, int(batch), cost)
+
+    def ai_spent(self, month: str) -> float:
+        """Dollars spent on Claude in `month` ('YYYY-MM')."""
+        return self._q("SELECT COALESCE(SUM(cost), 0) FROM ai_usage WHERE month=?", month)[0][0]

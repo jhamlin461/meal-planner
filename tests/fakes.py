@@ -244,9 +244,13 @@ def fake_grocy_with_week():
 class FakeAI:
     """Canned stand-in for app.ai.AI; set attributes per test, or set `error` to make every call raise."""
 
-    def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None):
+    def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None, mode="full"):
         self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
         self.error = error
+        self.mode_ = mode  # the budget mode app.ai.AI.mode() would report
+
+    def mode(self, now=None):
+        return self.mode_
 
     def _ret(self, value):
         if self.error:

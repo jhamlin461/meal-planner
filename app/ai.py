@@ -1,6 +1,8 @@
 """The single place the app calls Claude (structured outputs only)."""
 import base64
 import json
+import logging
+from datetime import datetime
 from typing import Literal
 
 import anthropic
@@ -11,6 +13,48 @@ from app.setup_grocy import HOME_LOCATIONS
 
 MODEL = "claude-opus-5-5"
 BETAS = ["server-side-fallback-2026-07-01"]
+log = logging.getLogger(__name__)
+
+# List prices in USD per million tokens, from the Pricing page fetched 2026-11-18 (Haiku: prompts up to 100k):
+# (input, output, cache read, 5-minute cache write, 1-hour cache write). The Batch API is half of every line.
+PRICES = {
+    "opus": (4, 20, 0.20, 5, 8),          # Opus 5.5
+    "sonnet": (2, 10, 0.10, 2.5, 4),      # Sonnet 5.5
+    "haiku": (0.10, 0.50, 0.01, 0.125, 0.20),  # Haiku 5.5
+}
+TOKENS = ("input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cache_write_1h")  # PRICES' order
+
+
+def _tokens(u) -> dict:
+    cc = getattr(u, "cache_creation", None)
+    w5, w1 = (getattr(cc, "ephemeral_5m_input_tokens", 0) or 0, getattr(cc, "ephemeral_1h_input_tokens", 0) or 0)         if cc else (0, 0)
+    if not (w5 or w1):  # no breakdown: count the writes at the 5-minute price (the default TTL)
+        w5 = getattr(u, "cache_creation_input_tokens", 0) or 0
+    return dict(zip(TOKENS, (getattr(u, "input_tokens", 0) or 0, getattr(u, "output_tokens", 0) or 0,
+                             getattr(u, "cache_read_input_tokens", 0) or 0, w5, w1)))
+
+
+def usage_parts(model: str, usage) -> list[tuple[str, dict]]:
+    """(model, token counts) per model that worked on a response: each server-side fallback iteration on its own."""
+    its = getattr(usage, "iterations", None)
+    return [(getattr(i, "model", None) or model, _tokens(i)) for i in its] if its else [(model, _tokens(usage))]
+
+
+def cost(parts: list[tuple[str, dict]], batch: bool = False) -> float:
+    total = 0.0
+    for model, t in parts:
+        price = next((v for k, v in PRICES.items() if k in model), PRICES["opus"])  # unknown: the dearest
+        total += sum(t[k] * p for k, p in zip(TOKENS, price)) / 1e6
+    return total / 2 if batch else total
+
+
+def month(now: datetime | None = None) -> str:
+    """The budget month, 'YYYY-MM' in local time."""
+    return (now or datetime.now()).strftime("%Y-%m")
+
+
+def budget_mode(spent: float, budget: float, economy_at: float) -> Literal["full", "economy", "free"]:
+    return "free" if spent >= budget else "economy" if spent >= economy_at else "full"
 
 
 class AIError(Exception):
@@ -113,18 +157,40 @@ def _image_block(data: bytes) -> dict:
 
 
 class AI:
-    def __init__(self, client: anthropic.Anthropic):
-        self.client = client
+    """house: a HouseStore that meters every call (None: no meter, always full mode)."""
 
-    def _parse(self, model_cls, effort: str, system: str, content: list[dict]):
+    def __init__(self, client: anthropic.Anthropic, house=None, budget: float = 100, economy_at: float = 80):
+        self.client, self.house, self.budget, self.economy_at = client, house, budget, economy_at
+
+    def spent(self, now: datetime | None = None) -> float:
+        return self.house.ai_spent(month(now)) if self.house else 0.0
+
+    def mode(self, now: datetime | None = None) -> Literal["full", "economy", "free"]:
+        return budget_mode(self.spent(now), self.budget, self.economy_at)
+
+    def _record(self, kind: str, resp, batch: bool = False) -> None:
+        """Meter a response; metering never fails a call."""
+        if self.house is None or getattr(resp, "usage", None) is None:
+            return
+        try:
+            model = getattr(resp, "model", None) or MODEL
+            parts = usage_parts(model, resp.usage)
+            tokens = {k: sum(t[k] for _, t in parts) for k in TOKENS}
+            self.house.add_ai_usage(datetime.now(), kind, model, tokens, cost(parts, batch), batch)
+        except Exception:
+            log.warning("could not record AI usage", exc_info=True)
+
+    def _parse(self, kind: str, model_cls, effort: str, system: str, content: list[dict]):
         try:
             resp = self.client.beta.messages.parse(
                 model=MODEL, max_tokens=16000, betas=BETAS, fallbacks="default",
                 output_format=model_cls, output_config={"effort": effort},
-                system=system, messages=[{"role": "user", "content": content}],
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": content}],
             )
         except anthropic.APIError as e:  # network, rate limit, auth: callers show AIError, never a 500
             raise AIError(f"Claude unavailable: {e}") from e
+        self._record(kind, resp)
         if resp.stop_reason == "refusal" or resp.parsed_output is None:
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
             raise AIError("Claude declined or returned no result" + (f" ({cat})" if cat else ""))
@@ -139,23 +205,23 @@ class AI:
         if image:
             content.append(_image_block(image))
         content.append({"type": "text", "text": text or "Structure the attached recipe."})
-        return self._parse(RecipeDraft, "high", CFE_PROMPT, content)
+        return self._parse("recipe", RecipeDraft, "high", CFE_PROMPT, content)
 
     def guess_product(self, info: dict, generics: list[dict], locations: list[str],
                       image: bytes | None = None) -> ProductGuess:
         content = [_image_block(image)] if image else []
         content.append({"type": "text", "text": json.dumps(
             {"info": info, "generics": generics, "locations": locations})})
-        return self._parse(ProductGuess, "low", PRODUCT_PROMPT, content)
+        return self._parse("product", ProductGuess, "low", PRODUCT_PROMPT, content)
 
     def guess_conversion(self, product_name: str, from_unit: str, to_unit: str) -> ConversionGuess:
         text = json.dumps({"product": product_name, "from_unit": from_unit, "to_unit": to_unit})
-        return self._parse(ConversionGuess, "low", CONVERSION_PROMPT, [{"type": "text", "text": text}])
+        return self._parse("conversion", ConversionGuess, "low", CONVERSION_PROMPT, [{"type": "text", "text": text}])
 
     def match_ingredients(self, names: list[str], products: list[dict]) -> Picks:
         text = json.dumps({"ingredients": list(enumerate(names)), "products": products})
-        return self._parse(Picks, "low", MATCH_PROMPT, [{"type": "text", "text": text}])
+        return self._parse("match", Picks, "low", MATCH_PROMPT, [{"type": "text", "text": text}])
 
     def suggest_week(self, context: dict) -> WeekSuggestions:
-        return self._parse(WeekSuggestions, "medium", WEEK_PROMPT,
+        return self._parse("week", WeekSuggestions, "medium", WEEK_PROMPT,
                            [{"type": "text", "text": json.dumps(context, default=str)}])

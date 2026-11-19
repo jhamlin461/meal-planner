@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ValidationError
 
-from app.ai import AI, AIError
+from app.ai import AI, AIError, budget_mode, month
 from app.barcode import Resolved, _generics, relink, resolve, resolve_from_photo
 from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
 from app.config import Settings, load_settings
@@ -498,7 +498,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/me")
     def me(request: Request):
-        return page(request, "me.html", who=current_who(request))
+        spent = house.ai_spent(month())
+        return page(request, "me.html", who=current_who(request), ai_spent=spent, ai_budget=settings.ai_monthly_budget,
+                    ai_mode=budget_mode(spent, settings.ai_monthly_budget, settings.ai_economy_at))
 
     # ---- household supplies (Grocy product group; keep-at-least is the generic's min stock amount, counting the stock
     # of every brand under it) ------------------------------------------------------------------------------------
@@ -1113,5 +1115,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 def main_app() -> FastAPI:
     """uvicorn app.web:main_app --factory"""
     s = load_settings()
-    return create_app(Grocy(s.grocy_url, s.grocy_api_key), AI(anthropic.Anthropic()), httpx.Client(timeout=20), s,
-                      PendingStore(s.data_dir / "pending"))
+    house = HouseStore(s.data_dir / "house.db")
+    ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
+    return create_app(Grocy(s.grocy_url, s.grocy_api_key), ai, httpx.Client(timeout=20), s,
+                      PendingStore(s.data_dir / "pending"), house=house)

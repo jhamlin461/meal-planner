@@ -18,6 +18,8 @@ class Settings:
     ha_token: str = ""
     hook_secret: str = ""
     quiet_hours: tuple[time, time] = (time(22), time(7))
+    ai_monthly_budget: float = 100  # dollars of Claude a calendar month; at this the app stops calling Claude
+    ai_economy_at: float = 80  # from here to the budget, cheaper settings
 
 
 def _quiet(v: str) -> tuple[time, time]:
@@ -40,4 +42,6 @@ def load_settings() -> Settings:
         ha_token=e("HA_TOKEN", ""),
         hook_secret=e("HOOK_SECRET", ""),
         quiet_hours=_quiet(e("QUIET_HOURS") or "22:00-07:00"),
+        ai_monthly_budget=float(e("AI_MONTHLY_BUDGET") or 100),
+        ai_economy_at=float(e("AI_ECONOMY_AT") or 80),
     )
