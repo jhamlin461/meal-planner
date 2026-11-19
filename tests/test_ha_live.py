@@ -8,6 +8,8 @@ from app import ha_live
 from app import reminders as rm
 from app.reminders import tick, washer_finished
 from app.setup_grocy import bootstrap
+from app.ha import HAError
+from tests.fakes import FakeHA
 from tests.test_reminders import CAT_PHONE, JOSH_PHONE, at, chore, world
 
 DONE, STATUS = "event.front_load_washer_notification", "sensor.front_load_washer_current_status"
@@ -18,8 +20,9 @@ class FakeConn:
     """A scripted HA WebSocket. Answers auth and every command; then plays `events` — (event type or entity id,
     payload) — on the matching subscription's id, and drops (raises) when they run out."""
 
-    def __init__(self, events=(), auth="auth_ok", results=None, on_drop=None):
+    def __init__(self, events=(), auth="auth_ok", results=None, on_drop=None, fail=(), silent=()):
         self.events, self.auth, self.results, self.on_drop = list(events), auth, results or {}, on_drop
+        self.fail, self.silent = set(fail), set(silent)  # command types HA rejects / never answers
         self.sent, self.inbox, self.subs, self.closed = [], [{"type": "auth_required"}], {}, False
 
     def send(self, text):
@@ -32,14 +35,20 @@ class FakeConn:
             self.subs[m["event_type"]] = m["id"]
         if m["type"] == "subscribe_trigger":
             self.subs[m["trigger"]["entity_id"]] = m["id"]
-        self.inbox.append({"id": m["id"], "type": "result", "success": True, "result": self.results.get(m["type"])})
+        if m["type"] in self.fail:
+            self.inbox.append({"id": m["id"], "type": "result", "success": False,
+                               "error": {"code": "unauthorized", "message": "Unauthorized"}})
+        elif m["type"] not in self.silent:
+            self.inbox.append({"id": m["id"], "type": "result", "success": True, "result": self.results.get(m["type"])})
 
-    def recv(self):
+    def recv(self, timeout=None):
         if self.inbox:
             return json.dumps(self.inbox.pop(0))
         if self.events:
             key, payload = self.events.pop(0)
             return json.dumps({"id": self.subs[key], "type": "event", "event": payload})
+        if timeout is not None:  # a command HA never answers
+            raise TimeoutError("timed out")
         if self.on_drop:
             self.on_drop()
         raise ConnectionError("closed")
@@ -138,7 +147,8 @@ def test_washer_finished_and_started(tmp_path):
     c = FakeConn([
         change(DONE, "unavailable", stamp, event_type="washing_is_complete"),  # HA restart rewrites the entity
         change(DONE, "unknown", stamp, event_type="washing_is_complete"),
-        change(DONE, None, stamp, event_type="washing_is_complete"),
+        change(DONE, None, stamp, event_type="washing_is_complete"),  # from_state null: a new entity
+        (DONE, {"variables": {}}), (DONE, {}),  # shapes we don't expect: ignored
         change(DONE, "2026-11-17T09:00:00.000+00:00", stamp, event_type="error"),
     ])
     run(g, house, ha, s, [c])
@@ -148,7 +158,7 @@ def test_washer_finished_and_started(tmp_path):
     run(g, house, ha, s, [c])
     (t,) = g.open_tasks()
     assert t["name"] == "Move the laundry" and house.flag("laundry") == f"task:{t['id']}"
-    c = FakeConn([change(STATUS, "unavailable", "initial"), change(STATUS, "unknown", "detecting"),
+    c = FakeConn([change(STATUS, None, "initial"), change(STATUS, "unavailable", "initial"), change(STATUS, "unknown", "detecting"),
                   change(STATUS, "end", "power_off"), change(STATUS, "initial", "initial")])
     run(g, house, ha, s, [c])
     assert g.open_tasks() and house.flag("laundry")
@@ -237,3 +247,92 @@ def test_a_write_wakes_the_loop(tmp_path):
     assert not rm.WAKE.is_set()
     c.post("/today/task/1/snooze")
     assert rm.WAKE.is_set()
+
+
+def test_a_rejected_washer_subscription_keeps_phone_taps(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    s = replace(s, washer_done_event=DONE, washer_status=STATUS)
+    cid = chore(g, house, audience="home")
+    tick(g, house, ha, s, at(18, 18))
+    seen, sleeps = [], []
+    c = FakeConn([tap(f"HM:done:chore:{cid}:{josh}")], fail={"subscribe_trigger"},
+                 on_drop=lambda: seen.append(house.flag("ha_error")))
+    run(g, house, ha, s, [OSError("refused"), OSError("refused"), c], sleeps, max_sleeps=3)
+    assert len(g.chore_log) == 1 and seen == [None] and sleeps == [5, 10, 5]  # connected: backoff reset
+    # the essential subscription rejected (not an admin token): not connected
+    sleeps.clear()
+    run(g, house, ha, s, [OSError("refused"), OSError("refused"), FakeConn(fail={"subscribe_events"})], sleeps,
+        max_sleeps=3)
+    assert sleeps == [5, 10, 20] and "Unauthorized" in house.flag("ha_error")
+
+
+def test_wake_only_when_a_handler_acted(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    s = replace(s, washer_done_event=DONE)
+    rm.WAKE.clear()
+    run(g, house, ha, s, [FakeConn([tap("SOMETHING_ELSE"), change(DONE, "unavailable", "x", event_type="x")])])
+    assert not rm.WAKE.is_set()
+
+
+def test_a_failing_flag_write_does_not_stop_the_loop(tmp_path, monkeypatch):
+    g, house, ha, s, josh, cat = world(tmp_path)
+
+    def broken(*a):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ha_live, "_down", broken)
+    sleeps = []
+    run(g, house, ha, s, [OSError("refused"), FakeConn()], sleeps, max_sleeps=3)
+    assert sleeps == [5, 5, 10]  # still running (and the connection that worked reset the backoff)
+
+
+def test_session_call_times_out():
+    c = FakeConn(silent={"get_states"})
+    sess = ha_live.Session(c, "tok")
+    with pytest.raises(HAError, match="no answer"):
+        sess.call(type="get_states")
+
+
+def test_colliding_sensor_names_get_the_person_id(tmp_path):
+    g, house, ha, s, josh, cat = world(tmp_path)
+    bootstrap(g)
+    a = house.save_person("Mary Ann", 5, "person.mary", "")
+    b = house.save_person("Mary-Ann", 6, "person.mary2", "")
+    ha_live.publish(g, house, ha, s, at(18, 13))
+    assert {f"sensor.house_mary_ann_{a}_needs_you_now", f"sensor.house_mary_ann_{b}_needs_you_now",
+            "sensor.house_josh_needs_you_now"} <= set(ha.pushed)
+
+
+class DeadCatHA(FakeHA):
+    """Cat's phone is gone (HA answers 404); Josh's phone fails `flaky` more times with no answer from HA."""
+
+    def __init__(self):
+        super().__init__()
+        self.flaky = 0
+
+    def notify(self, service, title, message, tag, actions):
+        if service == CAT_PHONE:
+            raise HAError("404 not found", 404)
+        if self.flaky:
+            self.flaky -= 1
+            raise HAError("timed out")
+        super().notify(service, title, message, tag, actions)
+
+
+def test_use_soon_note_never_rebuzzes(tmp_path):
+    g, house, _, s, josh, cat = world(tmp_path)
+    bootstrap(g)
+    ha = DeadCatHA()
+    ha.states = {"person.josh": "home", "person.cat": "home"}
+    pid = g.create("products", {"name": "Milk"})
+    g.volatile_result = {**g.volatile_result, "due_products": [{"product_id": pid, "best_before_date": "2026-11-20"}]}
+    for minute in range(3):
+        ha_live.publish(g, house, ha, s, at(18, 8, minute))
+    assert [m["service"] for m in ha.sent] == [JOSH_PHONE]  # Cat's 404 is given up, Josh is not re-buzzed
+    ha.flaky = 1  # next day Josh's first try gets no answer: retried on the next tick, once
+    for minute in range(3):
+        ha_live.publish(g, house, ha, s, at(19, 8, minute))
+    assert [m["service"] for m in ha.sent] == [JOSH_PHONE, JOSH_PHONE]
+    # only between 08:00 and 12:00
+    ha_live.publish(g, house, ha, s, at(20, 12))
+    assert len(ha.sent) == 2

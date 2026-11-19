@@ -7,6 +7,7 @@ import re
 import threading
 import time as clock
 import unicodedata
+from collections import Counter
 from datetime import datetime, time
 
 from websockets.sync.client import connect as ws_connect
@@ -17,7 +18,8 @@ from app.today import expiring, summary
 
 log = logging.getLogger(__name__)
 NOT_REAL = ("unavailable", "unknown")  # HA restarts and reloads rewrite entities from these: not a real change
-USE_SOON_AT = time(8)
+USE_SOON = (time(8), time(12))  # the morning note goes out in this window (after quiet hours)
+CALL_TIMEOUT = 15  # seconds HA gets to answer a command
 # get_states on a big HA is several MB; websockets' default cap is 1 MB
 CONNECT = functools.partial(ws_connect, max_size=2 ** 24, open_timeout=10)
 
@@ -37,23 +39,31 @@ class Session:
         if (m := self.recv()).get("type") != "auth_ok":
             raise HAError(f"Home Assistant refused the token: {m.get('message') or m.get('type')}", 401)
 
-    def recv(self) -> dict:
-        return json.loads(self.conn.recv())
+    def recv(self, timeout: float | None = None) -> dict:
+        return json.loads(self.conn.recv() if timeout is None else self.conn.recv(timeout=timeout))
 
     def call(self, **msg):
-        """Send a command and return its result; other messages arriving meanwhile are dropped."""
+        """Send a command and return its result (HAError when HA refuses or doesn't answer in CALL_TIMEOUT);
+        other messages arriving meanwhile are dropped."""
         self.n += 1
         self.conn.send(json.dumps({"id": self.n, **msg}))
-        while (m := self.recv()).get("id") != self.n or m.get("type") != "result":
-            pass
+        deadline = clock.monotonic() + CALL_TIMEOUT
+        try:
+            while (m := self.recv(max(0.0, deadline - clock.monotonic()))).get("id") != self.n \
+                    or m.get("type") != "result":
+                pass
+        except TimeoutError as e:
+            raise HAError(f"{msg['type']}: no answer from Home Assistant in {CALL_TIMEOUT} s") from e
         if not m.get("success"):
             raise HAError(f"{msg['type']}: {(m.get('error') or {}).get('message') or m}")
         return m.get("result")
 
 
 def _states(event: dict) -> tuple[dict, dict]:
-    """(from_state, to_state) of a subscribe_trigger state event; {} for a missing one."""
+    """(from_state, to_state) of a subscribe_trigger state event; {} for a missing (null) one."""
     t = (event.get("variables") or {}).get("trigger") or {}
+    if not t:
+        log.debug("unexpected trigger event: %s", event)
     return t.get("from_state") or {}, t.get("to_state") or {}
 
 
@@ -69,38 +79,53 @@ def washer_started(event: dict) -> bool:
             and old.get("state") != new.get("state"))
 
 
-def serve(s: Session, grocy, house, ha, settings, now=datetime.now) -> None:
-    """Subscribe, then handle events until the connection drops (recv raises)."""
+def subscribe(s: Session, grocy, house, ha, settings, now=datetime.now) -> dict:
+    """Subscribe to phone taps (essential: an HAError here means not connected) and, each in its own try, the
+    washer. Returns subscription id -> handler; a handler returns True when it acted."""
     def tapped(event):
         a = (event.get("data") or {}).get("action")
-        if isinstance(a, str) and a.startswith("HM:"):
-            log.info("phone action %s: %s", a, rm.action(grocy, house, ha, a, now()))
+        if not (isinstance(a, str) and a.startswith("HM:")):
+            return False
+        log.info("phone action %s: %s", a, rm.action(grocy, house, ha, a, now()))
+        return True
 
     def done(event):
         if washer_done(event):
             log.info("washer finished: %s", rm.washer_finished(grocy, house, now()))
+            return True
+        return False
 
     def started(event):
         if washer_started(event):
             log.info("washer started: %s", rm.washer_started(grocy, house, ha))
+            return True
+        return False
 
-    handlers = {}
     s.call(type="subscribe_events", event_type="mobile_app_notification_action")
-    handlers[s.n] = tapped
+    handlers = {s.n: tapped}
     for entity, fn in ((settings.washer_done_event, done), (settings.washer_status, started)):
         if entity:
-            s.call(type="subscribe_trigger", trigger={"platform": "state", "entity_id": entity})
-            handlers[s.n] = fn
+            try:
+                s.call(type="subscribe_trigger", trigger={"platform": "state", "entity_id": entity})
+                handlers[s.n] = fn
+            except HAError as e:  # phone taps still work; only laundry reminders are off
+                log.warning("Home Assistant refused to watch the washer (%s), so no laundry reminders: %s", entity, e)
+    return handlers
+
+
+def serve(s: Session, handlers: dict) -> None:
+    """Handle events until the connection drops (recv raises)."""
     while True:
         m = s.recv()
         fn = handlers.get(m.get("id")) if m.get("type") == "event" else None
         if fn is None:
+            log.debug("Home Assistant message ignored: %s", m)
             continue
         try:
-            fn(m.get("event") or {})
+            if fn(m.get("event") or {}):
+                rm.WAKE.set()  # push the sensors now
         except Exception:
             log.exception("Home Assistant event failed: %s", m)
-        rm.WAKE.set()
 
 
 def _down(house, msg: str | None) -> None:
@@ -118,14 +143,18 @@ def loop(grocy, house, ha, settings, connect=CONNECT, sleep=clock.sleep) -> None
             conn = connect(ws_url(settings.ha_url))
             try:
                 s = Session(conn, settings.ha_token)
+                handlers = subscribe(s, grocy, house, ha, settings)
                 connected = True
                 _down(house, None)
-                serve(s, grocy, house, ha, settings)
+                serve(s, handlers)
             finally:
                 conn.close()
         except Exception as e:
             log.warning("Home Assistant live connection: %s", e)
-            _down(house, f"Home Assistant live connection lost: {e}"[:200])
+            try:
+                _down(house, f"Home Assistant live connection lost: {e}"[:200])
+            except Exception:
+                log.exception("couldn't flag the Home Assistant outage")
         delay = 5 if connected else delay
         sleep(delay)
         delay = min(delay * 2, 60)
@@ -151,7 +180,9 @@ def slug(name: str) -> str:
 
 def sensors(summ: dict) -> dict[str, tuple[object, dict]]:
     """entity id -> (state, attributes)"""
-    out = {f"sensor.house_{slug(name)}_needs_you_now":
+    slugs = Counter(slug(name) for name in summ["people"])
+    ids = {name: slug(name) + (f"_{v['id']}" if slugs[slug(name)] > 1 else "") for name, v in summ["people"].items()}
+    out = {f"sensor.house_{ids[name]}_needs_you_now":
            (v["now"], {"titles": v["titles"], "friendly_name": f"House: {name} needs you now",
                        "icon": "mdi:account-alert"})
            for name, v in summ["people"].items()}
@@ -164,22 +195,26 @@ def sensors(summ: dict) -> dict[str, tuple[object, dict]]:
 
 
 def use_soon_note(grocy, house, ha, settings, now: datetime) -> None:
-    """From 08:00 (once quiet hours are over), once a day: what's expiring, to every phone. Tried again next tick
-    until every phone took it (the same tag replaces it on a phone that already has it)."""
-    day = now.date().isoformat()
-    if now.time() < USE_SOON_AT or rm.in_quiet(now, settings.quiet_hours) or house.flag("use_soon_sent") == day:
+    """Between 08:00 and 12:00 (outside quiet hours), once a day: what's expiring, to every phone. A phone HA
+    can't reach is tried again next tick; one that took it, or that HA no longer knows (4xx), isn't tried again."""
+    day, (start, end) = now.date().isoformat(), USE_SOON
+    if not start <= now.time() < end or rm.in_quiet(now, settings.quiet_hours):
+        return
+    st = json.loads(house.flag("use_soon") or "{}")
+    done = set(st.get("done") or []) if st.get("day") == day else set()
+    phones = {p.notify_service for p in house.people() if p.notify_service}
+    if phones <= done:
         return
     e = expiring(grocy, settings.expiry_warn_days)
-    ok = True
-    for p in house.people() if e["count"] else []:
-        if p.notify_service:
-            try:
-                ha.notify(p.notify_service, "Food to use soon", e["message"], "house:use-soon", [])
-            except HAError as err:
-                log.warning("Home Assistant: %s", err)
-                ok = False
-    if ok:
-        house.set_flag("use_soon_sent", day)
+    for service in sorted(phones - done) if e["count"] else []:
+        try:
+            ha.notify(service, "Food to use soon", e["message"], "house:use-soon", [])
+        except HAError as err:
+            log.warning("Home Assistant: %s", err)
+            if not (err.status and 400 <= err.status < 500):
+                continue
+        done.add(service)
+    house.set_flag("use_soon", json.dumps({"day": day, "done": sorted(done if e["count"] else phones)}))
 
 
 def publish(grocy, house, ha, settings, now: datetime) -> None:

@@ -141,7 +141,7 @@ def summary(grocy, house: HouseStore, ha, now: datetime, warn_days: int = 3) -> 
     people = {}
     for p in house.people():
         v = today_view(grocy, house, p, now, ha=shim, warn_days=warn_days)
-        people[p.name] = {"now": len(v["now_items"]), "titles": [i.title for i in v["now_items"]]}
+        people[p.name] = {"id": p.id, "now": len(v["now_items"]), "titles": [i.title for i in v["now_items"]]}
     vol = grocy.volatile(warn_days)
     use_soon = {int(r["product_id"]) for k in ("expired_products", "overdue_products", "due_products")
                 for r in vol.get(k) or []}

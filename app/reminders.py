@@ -188,6 +188,7 @@ def start_loop(app_state_fn, interval: int = 60, also=None) -> threading.Thread:
     as WAKE is set; failures are logged and the loop goes on."""
     def run():
         while True:
+            WAKE.clear()  # before the tick: a write while it runs wakes the next one
             for fn in (tick, also):
                 try:
                     if fn:
@@ -195,7 +196,6 @@ def start_loop(app_state_fn, interval: int = 60, also=None) -> threading.Thread:
                 except Exception:
                     log.exception("reminder loop: %s failed", getattr(fn, "__name__", fn))
             WAKE.wait(interval)
-            WAKE.clear()
 
     t = threading.Thread(target=run, name="reminders", daemon=True)
     t.start()
