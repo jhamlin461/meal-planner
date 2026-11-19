@@ -20,7 +20,7 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "8000:8000"   # LAN only (read-only /api/expiring, /api/summary); users go through `tailscale serve` (HTTPS)
+      - "127.0.0.1:8000:8000"   # this box only: everyone (HA's sidebar too) goes through `tailscale serve` (HTTPS)
     depends_on:
       - grocy
     restart: unless-stopped

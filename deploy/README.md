@@ -53,12 +53,12 @@ cd /root/meal-planner && git pull && cd deploy && docker compose up -d --build
 
 ## Always use the HTTPS URL
 
-Open the app at **`https://<lxc-hostname>.<tailnet>.ts.net`** (what `tailscale serve` prints), never at
-`http://<ip>:8000`. The camera barcode scanner (getUserMedia) and the iPad screen wake lock only work in a
-secure context, so over plain HTTP they silently fail.
+Open the app at **`https://<lxc-hostname>.<tailnet>.ts.net`** (what `tailscale serve` prints). That is the only way
+in: port 8000 is published on the LXC's localhost only (for `tailscale serve`), so `http://<ip>:8000` doesn't answer
+on the LAN. The camera barcode scanner (getUserMedia) and the iPad screen wake lock need that secure context anyway.
 
-Port 8000 stays published on the LAN only for the read-only `/api/expiring` and `/api/summary`. The app has no login of
-its own: the LAN plus your tailnet is the trust boundary. Do not forward ports 8000 or 9283 from your router.
+The app has no login of its own: your tailnet is the trust boundary. Do not forward port 9283 (Grocy, LAN only for
+HA's Grocy integration) from your router.
 
 ## 4. Backups
 
@@ -110,11 +110,14 @@ add Grocy from it, then Settings -> Devices & services: URL `http://<lxc-ip>`, p
 ### Moving from the YAML install
 
 An earlier version was set up in HA with YAML (`packages/house.yaml`, `packages/meal_planner.yaml` and a `packages:`
-line in `configuration.yaml`). Before running the new version, delete both package files from HA's
-`config/packages/` folder and restart HA (the `packages:` line can stay; `house_secret` can go from
-`secrets.yaml`). Otherwise phone taps are handled twice (harmless, but noisy) and the old REST sensors clash with
-the app's `sensor.house_*` ones. Then run `setup.sh`: it reuses the existing **House** dashboard (`house-manager`)
-and says so if it still sees the old YAML automations.
+line in `configuration.yaml`). In this order:
+
+1. Update the app: `cd /root/meal-planner && git pull && bash deploy/setup.sh`. It reuses the existing **House**
+   dashboard (`house-manager`) and says so if it still sees the old YAML automations. From now on the app is no
+   longer reachable from the LAN, so the old YAML sensors and REST commands stop working: that is expected.
+2. Delete both package files from HA's `config/packages/` folder and restart HA (the `packages:` line can stay;
+   `house_secret` can go from `secrets.yaml`). Until then phone taps are handled twice (harmless, but noisy) and the
+   old sensors clash with the app's `sensor.house_*` ones.
 
 ## First run checks
 
