@@ -94,9 +94,9 @@ def chore_fields(form, people: list[Person]) -> tuple[dict, dict]:
             amount = 0
         if not amount > 0 or amount == float("inf"):
             raise ValueError("Amount must be a number above 0")
-        row |= {"consume_product_on_chore_execution": 1, "product_id": int(pid), "product_amount": amount}
+        row |= {"consume_product_on_execution": 1, "product_id": int(pid), "product_amount": amount}
     else:
-        row |= {"consume_product_on_chore_execution": 0, "product_id": None}
+        row |= {"consume_product_on_execution": 0, "product_id": None}
     return row, {"audience": None, "remind_at": _time(form), "repeat_min": _repeat(form)}
 
 
@@ -157,13 +157,13 @@ def add_starters(grocy, house: HouseStore, people: list[Person]) -> int:
     for s in STARTER_CHORES:
         if s["name"] in have:
             continue
-        row = {"name": s["name"], "track_date_only": 1, **s["fields"], "consume_product_on_chore_execution": 0,
+        row = {"name": s["name"], "track_date_only": 1, **s["fields"], "consume_product_on_execution": 0,
                "assignment_type": "no-assignment"}
         if s["rotate"] and people:
             row |= rotation(people)
         match = next((p for p in products if any(w in p["name"].lower() for w in s.get("supply", ()))), None)
         if match:
-            row |= {"consume_product_on_chore_execution": 1, "product_id": match["id"], "product_amount": s["amount"]}
+            row |= {"consume_product_on_execution": 1, "product_id": match["id"], "product_amount": s["amount"]}
         save(grocy, house, "chores", "chore", row, {"audience": None, "remind_at": s["remind_at"], "repeat_min": None})
         added += 1
     return added

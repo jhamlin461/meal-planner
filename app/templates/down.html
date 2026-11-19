@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Grocy unavailable{% endblock %}
-{% block heading %}<h1>Grocy is down</h1>{% endblock %}
+{% block heading %}<h1>{{ "Grocy refused that" if refused else "Grocy is down" }}</h1>{% endblock %}
 {% block content %}
-<div class="card ha-warning" role="alert">{{ icon("alert-circle-outline") }}<p>Can't reach Grocy. What you just did may not have finished — check before trying again.</p></div>
+{% if refused %}<div class="card ha-warning" role="alert">{{ icon("alert-circle-outline") }}<p>Grocy is running but turned this change down, so nothing was saved. Trying again won't help; send this to whoever looks after the app.</p></div>
+<p class="muted breakable">Grocy said: {{ refused }}</p>
+{% else %}<div class="card ha-warning" role="alert">{{ icon("alert-circle-outline") }}<p>Can't reach Grocy. What you just did may not have finished — check before trying again.</p></div>{% endif %}
 <p><a class="btn" href="javascript:history.back()">Go back</a></p>
 {% endblock %}

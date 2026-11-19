@@ -580,6 +580,16 @@ def test_grocy_down_shows_503(tmp_path, exc):
     assert "nothing was saved" not in r.text  # Grocy can fail midway through a multi-write action
 
 
+def test_grocy_refusal_says_so_with_its_reason(tmp_path):
+    settings = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
+    exc = GrocyError("POST /objects/chores -> 400: {...}", 400, "table chores has no column named x")
+    app = create_app(DownGrocy(exc), FakeAI(), httpx.Client(transport=httpx.MockTransport(no_network)), settings,
+                     PendingStore(tmp_path / "pending"))
+    r = TestClient(app).get("/recipes")
+    assert r.status_code == 502 and "Grocy refused that" in r.text and "nothing was saved" in r.text
+    assert "Grocy said: table chores has no column named x" in r.text and "Grocy is down" not in r.text
+
+
 def test_review_packet_row_asks_for_amount_not_factor(env):
     g, ai, store, c, _ = env
     sour = product(g, "Sour cream")

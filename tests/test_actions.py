@@ -67,7 +67,7 @@ def trash(g, house, bags=5):
     pid = g.create("products", {"name": "Garbage bags"})
     g.add_stock(pid, bags, None, None)
     cid = g.create("chores", {"name": "Take out the trash", "period_type": "daily", "period_interval": 1,
-                              "assignment_type": "no-assignment", "consume_product_on_chore_execution": 1,
+                              "assignment_type": "no-assignment", "consume_product_on_execution": 1,
                               "product_id": pid, "product_amount": 1})
     house.save_reminder(Reminder(f"chore:{cid}", "home", "19:00"))
     return cid, pid

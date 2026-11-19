@@ -239,6 +239,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.exception_handler(GrocyError)
     @app.exception_handler(httpx.TransportError)  # refused, timed out, dropped mid-response
     async def grocy_down(request: Request, exc: Exception):
+        status = getattr(exc, "status", None)
+        if status is not None and 400 <= status < 500:  # Grocy answered and said no: nothing was saved
+            log.warning("Grocy refused: %s", exc)
+            return page(request, "down.html", 502, refused=getattr(exc, "reason", "") or str(exc))
         log.warning("Grocy unavailable: %s", exc)
         return page(request, "down.html", 503)
 

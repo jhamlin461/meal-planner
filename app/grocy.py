@@ -6,7 +6,17 @@ import httpx
 
 
 class GrocyError(Exception):
-    pass
+    """`status` is Grocy's HTTP status when it answered (a 4xx means it refused the request, not that it is down)."""
+    def __init__(self, message: str, status: int | None = None, reason: str = ""):
+        super().__init__(message)
+        self.status, self.reason = status, reason
+
+
+def _reason(r: httpx.Response) -> str:
+    try:
+        return str(r.json().get("error_message") or "")
+    except (ValueError, AttributeError):
+        return ""
 
 
 class Grocy:
@@ -23,7 +33,7 @@ class Grocy:
         if ok_400 and r.status_code == 400:
             return None
         if not r.is_success:
-            raise GrocyError(f"{method} {path} -> {r.status_code}: {r.text[:200]}")
+            raise GrocyError(f"{method} {path} -> {r.status_code}: {r.text[:200]}", r.status_code, _reason(r))
         return r.json() if r.content else None
 
     def objects(self, entity: str, **where) -> list[dict]:
@@ -35,7 +45,7 @@ class Grocy:
         if r.status_code == 404:
             return None
         if not r.is_success:
-            raise GrocyError(f"GET /objects/{entity}/{id} -> {r.status_code}")
+            raise GrocyError(f"GET /objects/{entity}/{id} -> {r.status_code}", r.status_code, _reason(r))
         return r.json()
 
     def create(self, entity: str, data: dict) -> int:

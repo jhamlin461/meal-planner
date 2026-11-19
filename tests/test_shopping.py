@@ -180,7 +180,7 @@ def test_trash_chore_drives_running_low(fake_grocy_with_week):
     g = fake_grocy_with_week
     bags = _supply(g, stock=3)
     chore = g.create("chores", {"name": "Take out the trash", "period_type": "weekly", "period_config": "sunday",
-                                "consume_product_on_chore_execution": 1, "product_id": bags, "product_amount": 1})
+                                "consume_product_on_execution": 1, "product_id": bags, "product_amount": 1})
     g.execute_chore(chore, None)  # 2 left: not below keep-at-least
     assert rebuild_running_low(g) == {} and _list(g, "Running low") == []
     g.execute_chore(chore, None)  # 1 left

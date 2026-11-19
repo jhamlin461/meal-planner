@@ -4,6 +4,21 @@ from datetime import date, timedelta
 import pytest
 
 
+# Real Grocy's chores columns (its migrations, v4.7): writing any other name is a 400, as on the live server.
+CHORE_COLUMNS = {"id", "name", "description", "period_type", "period_days", "period_config", "period_interval",
+                 "track_date_only", "rollover", "assignment_type", "assignment_config",
+                 "next_execution_assigned_to_user_id", "consume_product_on_execution", "product_id", "product_amount",
+                 "start_date", "rescheduled_date", "rescheduled_next_execution_assigned_to_user_id", "active",
+                 "row_created_timestamp"}
+
+
+def _columns(entity, data):
+    from app.grocy import GrocyError
+    bad = set(data) - CHORE_COLUMNS if entity == "chores" else set()
+    if bad:
+        raise GrocyError(f"chores has no column {sorted(bad)}", 400, f"table chores has no column named {min(bad)}")
+
+
 class FakeGrocy:
     """In-memory Grocy. entities: entity -> {id: row}; stock: product_id -> [entry dicts]."""
 
@@ -50,12 +65,14 @@ class FakeGrocy:
         return dict(row) if row else None
 
     def create(self, entity, data):
+        _columns(entity, data)
         id = self._next_id
         self._next_id += 1
         self._table(entity)[id] = {**data, "id": id}
         return id
 
     def update(self, entity, id, data):
+        _columns(entity, data)
         self._table(entity)[id].update(data)
 
     def delete(self, entity, id):
@@ -192,7 +209,7 @@ class FakeGrocy:
         c = self.get_object("chores", chore_id)
         self.chore_log.append({"chore_id": chore_id, "done_by": done_by, "skipped": skipped, "date": self.today})
         self._table("chores")[chore_id]["next_execution_assigned_to_user_id"] = self._assign(c)  # Grocy recalculates
-        if not skipped and int(c.get("consume_product_on_chore_execution") or 0) == 1:
+        if not skipped and int(c.get("consume_product_on_execution") or 0) == 1:
             pid, amt = int(c["product_id"]), float(c.get("product_amount") or 1)
             if self.stock_amounts().get(pid, 0) >= amt:  # real Grocy rejects a short consume entirely
                 self.consume(pid, amt)

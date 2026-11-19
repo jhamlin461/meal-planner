@@ -13,7 +13,7 @@ def test_fake_chore_consumes_supply():
     g = _g()
     g.add_stock(5, 4, None, None)
     c = g.create("chores", {"name": "Trash", "period_type": "daily", "period_interval": 1,
-                            "consume_product_on_chore_execution": 1, "product_id": 5, "product_amount": 1})
+                            "consume_product_on_execution": 1, "product_id": 5, "product_amount": 1})
     g.execute_chore(c, None)
     assert g.stock_amounts()[5] == 3
     g.execute_chore(c, None, skipped=True)
@@ -23,7 +23,7 @@ def test_fake_chore_consumes_supply():
 
 def test_fake_chore_with_no_stock_still_completes():
     g = _g()
-    c = g.create("chores", {"name": "Trash", "period_type": "daily", "consume_product_on_chore_execution": 1,
+    c = g.create("chores", {"name": "Trash", "period_type": "daily", "consume_product_on_execution": 1,
                             "product_id": 5, "product_amount": 1})
     g.add_stock(5, 0.5, None, None)
     g.execute_chore(c, None)

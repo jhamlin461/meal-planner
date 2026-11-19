@@ -158,7 +158,7 @@ def test_chore_execute_consumes_supply_and_moves_date(grocy, i, made):
     grocy.add_stock(pid, 4, None, i.location["Pantry"])
     cid = grocy.create("chores", {
         "name": f"zz-test-chore-{uuid.uuid4().hex[:8]}", "period_type": "daily", "period_interval": 1,
-        "consume_product_on_chore_execution": 1, "product_id": pid, "product_amount": 1})
+        "consume_product_on_execution": 1, "product_id": pid, "product_amount": 1})
     made.append(("chores", cid))  # after the product, so it is deleted first
     grocy.execute_chore(cid, None)
     assert grocy.stock_amounts()[pid] == pytest.approx(3)

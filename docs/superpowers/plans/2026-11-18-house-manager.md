@@ -174,7 +174,7 @@ REST API, pytest with fakes.
 - FakeGrocy: same methods. `execute_chore` records an execution, recomputes the next due date from
   `period_type` (`daily` / `dynamic-regular` with `period_interval` days / `weekly` with `period_config` weekday
   names / `monthly` with `period_days`), advances `who-least-did-first` assignment across `assignment_config`
-  user ids, and when `consume_product_on_chore_execution` is 1 calls `consume(product_id, product_amount)` —
+  user ids, and when `consume_product_on_execution` is 1 calls `consume(product_id, product_amount)` —
   ignoring a "not enough stock" failure (chore still completes). Skipped executions move the date but consume nothing.
 
 - [ ] **Step 1: Write failing tests:** `test_execute_chore_posts_done_by` (MockTransport body), `test_open_tasks_and_complete`,
@@ -211,7 +211,7 @@ REST API, pytest with fakes.
 
 - [ ] **Step 1: Write failing tests** (`tests/test_home.py`, TestClient with FakeGrocy/FakeHA/tmp HouseStore):
   `test_create_weekly_chore_with_supply` (POST form → Grocy chore `period_type=weekly`, `period_config="tuesday"`,
-  `consume_product_on_chore_execution=1`, `product_amount=1`; reminder `remind_at="19:00"`),
+  `consume_product_on_execution=1`, `product_amount=1`; reminder `remind_at="19:00"`),
   `test_take_turns_sets_who_least_did_first` (`assignment_config` = both people's grocy user ids),
   `test_task_whoever_home_stored_as_audience_home`, `test_done_credits_device_person`, `test_skip_moves_date_without_consuming`,
   `test_starters_added_once` (second POST adds 0), `test_starter_trash_links_garbage_bags_when_present`.

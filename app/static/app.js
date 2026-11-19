@@ -20,6 +20,7 @@ async function post(url, body) {
   const init = body instanceof FormData ? {method: "POST", body}
     : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
   const r = await fetch(url, init);
+  if (r.status === 502) throw new Error("Grocy turned that change down, so nothing was saved.");
   if (r.status === 503) throw new Error("Can't reach Grocy. What you just did may not have finished — check before trying again.");
   const data = await r.json().catch(() => null);
   if (!data || (!r.ok && !data.message)) throw new Error(`Something went wrong (${r.status}).`);

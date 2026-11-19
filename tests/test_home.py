@@ -46,7 +46,7 @@ def test_create_weekly_chore_with_supply(hv):
     assert r.status_code == 303 and r.headers["location"].startswith("/home")
     (ch,) = g.objects("chores")
     assert (ch["period_type"], ch["period_config"]) == ("weekly", "tuesday")
-    assert ch["consume_product_on_chore_execution"] == 1 and ch["product_amount"] == 1 and ch["product_id"] == pid
+    assert ch["consume_product_on_execution"] == 1 and ch["product_amount"] == 1 and ch["product_id"] == pid
     rem = house.reminder(f"chore:{ch['id']}")
     assert rem.remind_at == "19:00" and rem.repeat_min is None
 
@@ -143,7 +143,7 @@ def test_skip_moves_date_without_consuming(hv):
     pid = supply(g)
     g.add_stock(pid, 3, None, None)
     cid = g.create("chores", {"name": "Trash", "period_type": "daily", "period_interval": 1,
-                              "consume_product_on_chore_execution": 1, "product_id": pid, "product_amount": 1})
+                              "consume_product_on_execution": 1, "product_id": pid, "product_amount": 1})
     assert f'action="/home/chores/{cid}/skip"><input type="hidden" name="due" value="2026-11-18">' in c.get("/home").text
     c.post(f"/home/chores/{cid}/skip", data={"due": "2026-11-18"}, cookies={"who": str(pa)})
     assert g.stock_amounts()[pid] == 3 and g.chore_log[-1]["skipped"]
@@ -187,10 +187,10 @@ def test_starter_trash_links_garbage_bags_when_present(hv):
     pid = supply(g, "Garbage bags 30 ct")
     c.post("/home/starters")
     trash = next(x for x in g.objects("chores") if x["name"] == "Take out the trash")
-    assert trash["product_id"] == pid and trash["consume_product_on_chore_execution"] == 1
+    assert trash["product_id"] == pid and trash["consume_product_on_execution"] == 1
     assert house.reminder(f"chore:{trash['id']}").remind_at == "19:00"
     litter = next(x for x in g.objects("chores") if x["name"] == "Change the litter")
-    assert litter["period_type"] == "dynamic-regular" and litter["consume_product_on_chore_execution"] == 0
+    assert litter["period_type"] == "dynamic-regular" and litter["consume_product_on_execution"] == 0
 
 
 def test_forms_render_and_task_edit_round_trips(hv):
