@@ -3,9 +3,11 @@ import base64
 import json
 import logging
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Literal
 
 import anthropic
+from anthropic.lib._parse._transform import transform_schema  # the SDK's own pydantic -> strict JSON schema
 from pydantic import BaseModel
 
 from app.cfe import CfeTable
@@ -13,6 +15,11 @@ from app.setup_grocy import HOME_LOCATIONS
 
 MODEL = "claude-opus-5-5"
 BETAS = ["server-side-fallback-2026-07-01"]
+HAIKU = "claude-haiku-5-5"  # no server-side fallbacks: called without betas/fallbacks
+# Economy mode, per call type: (model, effort). Week suggestions are not listed: they stay as in full mode.
+ECONOMY = {"recipe": (MODEL, "medium"), "product": (HAIKU, "low"), "conversion": (HAIKU, "low"),
+           "match": (HAIKU, "low")}
+MATCH_LIMIT = 30  # economy: products sent with an ingredient list
 log = logging.getLogger(__name__)
 
 # List prices in USD per million tokens, from the Pricing page fetched 2026-11-18 (Haiku: prompts up to 100k):
@@ -156,6 +163,34 @@ def _image_block(data: bytes) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": mt, "data": _b64(data)}}
 
 
+def _system(text: str) -> list[dict]:
+    """The system prompt, cached: repeated instructions and schema are read at a tenth of the price."""
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
+
+def _recipe_content(text: str | None = None, pdf: bytes | None = None, image: bytes | None = None) -> list[dict]:
+    content: list[dict] = []
+    if pdf:
+        content.append({"type": "document", "source": {
+            "type": "base64", "media_type": "application/pdf", "data": _b64(pdf)}})
+    if image:
+        content.append(_image_block(image))
+    content.append({"type": "text", "text": text or "Structure the attached recipe."})
+    return content
+
+
+def shortlist(names: list[str], products: list[dict], n: int = MATCH_LIMIT) -> list[dict]:
+    """The n products whose names are most like any ingredient name (a local fuzzy match, no Claude).
+    ponytail: O(names x products) SequenceMatcher; fine for a household's few hundred generics."""
+    low = [x.lower() for x in names]
+
+    def score(p: dict) -> float:
+        a = p["name"].lower()
+        return max((SequenceMatcher(None, a, b).ratio() + bool(set(a.split()) & set(b.split())) for b in low),
+                   default=0)
+    return sorted(products, key=score, reverse=True)[:n]
+
+
 class AI:
     """house: a HouseStore that meters every call (None: no meter, always full mode)."""
 
@@ -181,13 +216,16 @@ class AI:
             log.warning("could not record AI usage", exc_info=True)
 
     def _parse(self, kind: str, model_cls, effort: str, system: str, content: list[dict]):
+        model = MODEL
+        if self.mode() == "economy":
+            model, effort = ECONOMY.get(kind, (model, effort))
+        kw = dict(model=model, max_tokens=16000, output_format=model_cls, output_config={"effort": effort},
+                  system=_system(system), messages=[{"role": "user", "content": content}])
         try:
-            resp = self.client.beta.messages.parse(
-                model=MODEL, max_tokens=16000, betas=BETAS, fallbacks="default",
-                output_format=model_cls, output_config={"effort": effort},
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": content}],
-            )
+            if model == MODEL:
+                resp = self.client.beta.messages.parse(**kw, betas=BETAS, fallbacks="default")
+            else:
+                resp = self.client.messages.parse(**kw)
         except anthropic.APIError as e:  # network, rate limit, auth: callers show AIError, never a 500
             raise AIError(f"Claude unavailable: {e}") from e
         self._record(kind, resp)
@@ -198,14 +236,42 @@ class AI:
 
     def structure_recipe(self, text: str | None = None, pdf: bytes | None = None,
                          image: bytes | None = None) -> RecipeDraft:
-        content: list[dict] = []
-        if pdf:
-            content.append({"type": "document", "source": {
-                "type": "base64", "media_type": "application/pdf", "data": _b64(pdf)}})
-        if image:
-            content.append(_image_block(image))
-        content.append({"type": "text", "text": text or "Structure the attached recipe."})
-        return self._parse("recipe", RecipeDraft, "high", CFE_PROMPT, content)
+        return self._parse("recipe", RecipeDraft, "high", CFE_PROMPT, _recipe_content(text, pdf, image))
+
+    def submit_recipe_batch(self, pdfs: dict[str, bytes]) -> str:
+        """Economy: read several PDFs through the Message Batches API at half price (results usually in minutes,
+        at most a day). Keys become custom_ids (pending ids). Returns the batch id."""
+        model, effort = ECONOMY["recipe"]
+        fmt = {"type": "json_schema", "schema": transform_schema(RecipeDraft)}
+        reqs = [{"custom_id": cid, "params": {
+            "model": model, "max_tokens": 16000, "output_config": {"effort": effort, "format": fmt},
+            "system": _system(CFE_PROMPT), "messages": [{"role": "user", "content": _recipe_content(pdf=pdf)}]}}
+            for cid, pdf in pdfs.items()]
+        try:
+            return self.client.messages.batches.create(requests=reqs).id
+        except anthropic.APIError as e:
+            raise AIError(f"Claude unavailable: {e}") from e
+
+    def recipe_batch_results(self, batch_id: str) -> dict[str, RecipeDraft | str] | None:
+        """None while the batch runs; then each custom_id's draft, or why there is none."""
+        try:
+            if self.client.messages.batches.retrieve(batch_id).processing_status != "ended":
+                return None
+            out: dict[str, RecipeDraft | str] = {}
+            for r in self.client.messages.batches.results(batch_id):
+                if r.result.type != "succeeded":
+                    out[r.custom_id] = f"Claude couldn't read it ({r.result.type})"
+                    continue
+                msg = r.result.message
+                self._record("recipe", msg, batch=True)
+                try:
+                    text = next(b.text for b in msg.content if b.type == "text")
+                    out[r.custom_id] = RecipeDraft.model_validate_json(text)
+                except (StopIteration, ValueError):  # a refusal, or JSON that isn't a draft
+                    out[r.custom_id] = "Claude declined or returned no result"
+            return out
+        except anthropic.APIError as e:
+            raise AIError(f"Claude unavailable: {e}") from e
 
     def guess_product(self, info: dict, generics: list[dict], locations: list[str],
                       image: bytes | None = None) -> ProductGuess:
@@ -219,6 +285,8 @@ class AI:
         return self._parse("conversion", ConversionGuess, "low", CONVERSION_PROMPT, [{"type": "text", "text": text}])
 
     def match_ingredients(self, names: list[str], products: list[dict]) -> Picks:
+        if len(products) > MATCH_LIMIT and self.mode() == "economy":
+            products = shortlist(names, products)
         text = json.dumps({"ingredients": list(enumerate(names)), "products": products})
         return self._parse("match", Picks, "low", MATCH_PROMPT, [{"type": "text", "text": text}])
 

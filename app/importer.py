@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -231,11 +232,13 @@ def fetch_photo(http, url: str | None) -> bytes | None:
 
 
 class Pending(BaseModel):
+    """status: processing (being read now), reading (in a Message Batch, batch_id), ready, failed."""
     id: str
-    status: Literal["processing", "ready", "failed"]
+    status: Literal["processing", "reading", "ready", "failed"]
     source: str
     draft: RecipeDraft | None = None
     error: str | None = None
+    batch_id: str | None = None
 
 
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -291,6 +294,17 @@ class PendingStore:
                 f.unlink(missing_ok=True)
 
 
+PAGE_CAP = 20_000  # economy: characters of a page without JSON-LD sent to Claude
+
+
+def recipe_part(text: str) -> str:
+    """A page's visible text from a little before its first "ingredient" line, capped at PAGE_CAP characters.
+    ponytail: a keyword heuristic; a page that never says "ingredient" is just capped."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines) if "ingredient" in line.lower()), 0)
+    return "\n".join(lines[max(0, start - 10):])[:PAGE_CAP]
+
+
 def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraft, bytes | None]:
     """The draft and the dish photo (None when there is none)."""
     if pdf:
@@ -299,7 +313,12 @@ def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraf
         raise ValueError("nothing to import: no URL or PDF")
     r = http.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
     r.raise_for_status()
-    draft = ai.structure_recipe(text=extract_jsonld_recipe(r.text) or page_text(r.text))
+    text = extract_jsonld_recipe(r.text)
+    if text is None:
+        text = page_text(r.text)
+        if ai.mode() == "economy":
+            text = recipe_part(text)
+    draft = ai.structure_recipe(text=text)
     return draft, fetch_photo(http, photo_url(r.text, str(r.url)))
 
 
@@ -310,17 +329,79 @@ def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf
         if p is None:
             return  # deleted while queued
         try:
-            draft, photo = _structure(ai, http, url, pdf)
-            if photo:
-                store.save_photo(p.id, photo)
-            if draft.servings is None:
-                draft.servings = 2
-            p.status, p.draft, p.error = "ready", draft, None
+            _ready(store, p, *_structure(ai, http, url, pdf))
         except Exception as e:  # AIError, HTTP, parse: all shown to the reviewer
             p.status, p.error = "failed", str(e) or type(e).__name__
         store.save(p)
     except Exception:
         log.exception("could not record result of import %s", pending_id)
+
+
+def _ready(store: PendingStore, p: Pending, draft: RecipeDraft, photo: bytes | None) -> None:
+    if photo:
+        store.save_photo(p.id, photo)
+    if draft.servings is None:
+        draft.servings = 2
+    p.status, p.draft, p.error, p.batch_id = "ready", draft, None, None
+
+
+BATCH_MIN = 3  # economy: this many PDFs imported at once go through one Message Batch
+
+
+def submit_batch(store: PendingStore, ai, pending: list[Pending]) -> bool:
+    """Economy: send these PDF imports as one Message Batch and mark them reading; False (nothing changed) when
+    Claude is unavailable, so the caller reads them one at a time."""
+    try:
+        bid = ai.submit_recipe_batch({p.id: store.pdf_path(p.id).read_bytes() for p in pending})
+    except AIError:
+        log.warning("batch import not accepted; reading one at a time", exc_info=True)
+        return False
+    for p in pending:
+        p.status, p.batch_id = "reading", bid
+        store.save(p)
+    return True
+
+
+def tick(store: PendingStore, ai, http) -> None:
+    """Background, every minute: collect finished batch reads into their pending imports."""
+    batches: dict[str, list[str]] = {}
+    for p in store.all():
+        if p.status == "reading" and p.batch_id:
+            batches.setdefault(p.batch_id, []).append(p.id)
+    for bid, pids in batches.items():
+        try:
+            results = ai.recipe_batch_results(bid)
+        except AIError:
+            log.warning("could not check batch %s", bid, exc_info=True)
+            continue
+        if results is None:
+            continue  # still running
+        for pid in pids:
+            p = store.get(pid)
+            if p is None:
+                continue  # discarded meanwhile
+            got = results.get(pid, "Claude returned no result")
+            if isinstance(got, str):
+                p.status, p.error, p.batch_id = "failed", got, None
+            else:
+                pdf = store.pdf_path(pid)
+                _ready(store, p, got, pdf_photo(pdf.read_bytes()) if pdf else None)
+            store.save(p)
+
+
+def start_worker(store: PendingStore, ai, http, interval: int = 60) -> threading.Thread:
+    """Daemon thread running tick() every `interval` seconds; failures are logged and it goes on."""
+    def run():
+        while True:
+            try:
+                tick(store, ai, http)
+            except Exception:
+                log.exception("import tick failed")
+            time.sleep(interval)
+
+    t = threading.Thread(target=run, name="imports", daemon=True)
+    t.start()
+    return t
 
 
 @dataclass

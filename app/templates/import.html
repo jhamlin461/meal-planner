@@ -13,7 +13,7 @@
 <ul class="rows">
 {% for p in pending %}<li class="row">
   <span class="grow breakable">{% if p.status == "ready" %}<a href="/import/{{ p.id }}">{{ p.draft.title }}</a>{% else %}{{ p.source }}{% endif %}
-    <br><small class="{{ 'error' if p.status == 'failed' else 'muted' }}">{% if p.status == "failed" %}Couldn't read it: {{ p.error }}{% elif p.status == "processing" %}Reading the recipe…{% else %}{{ p.source }}{% endif %}</small></span>
+    <br><small class="{{ 'error' if p.status == 'failed' else 'muted' }}">{% if p.status == "failed" %}Couldn't read it: {{ p.error }}{% elif p.status == "processing" %}Reading the recipe…{% elif p.status == "reading" %}Reading — usually a few minutes{% else %}{{ p.source }}{% endif %}</small></span>
   <form method="post" action="/import/{{ p.id }}/discard" onsubmit="return confirm('Discard this import?')"><button class="btn">Discard</button></form>
 </li>
 {% endfor %}</ul>

@@ -33,8 +33,9 @@ from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
-from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
-                          put_photo, save_recipe, stock_amount_for, to_jpeg)
+from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic, process,
+                          propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
+                          to_jpeg)
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
@@ -699,7 +700,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/recipes")
     def recipes(request: Request):
         rs = sorted(user_recipes(grocy), key=lambda r: r["name"].lower())
-        waiting = sum(p.status != "processing" for p in store.all())
+        waiting = sum(p.status in ("ready", "failed") for p in store.all())
         return page(request, "recipes.html", recipes=rs, waiting=waiting)
 
     @app.get("/recipes/{rid}")
@@ -794,14 +795,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/import")
     def import_list(request: Request):
         pend = store.all()
-        return page(request, "import.html", pending=pend, busy=any(p.status == "processing" for p in pend))
+        return page(request, "import.html", pending=pend,
+                    busy=any(p.status in ("processing", "reading") for p in pend))
 
     @app.post("/import")
     def import_post(bg: BackgroundTasks, files: list[UploadFile] = File(default=[]), urls: str = Form("")):
-        for f in files:
-            data = f.file.read()
-            if data:
-                p = store.new(f.filename or "upload.pdf", pdf=data)
+        pdfs = [(store.new(f.filename or "upload.pdf", pdf=data), data) for f in files if (data := f.file.read())]
+        if not (len(pdfs) >= BATCH_MIN and ai.mode() == "economy" and submit_batch(store, ai, [p for p, _ in pdfs])):
+            for p, data in pdfs:
                 bg.add_task(process, store, ai, http, p.id, None, data)
         for url in filter(None, (u.strip() for u in urls.splitlines())):
             p = store.new(url)
@@ -1117,5 +1118,6 @@ def main_app() -> FastAPI:
     s = load_settings()
     house = HouseStore(s.data_dir / "house.db")
     ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
-    return create_app(Grocy(s.grocy_url, s.grocy_api_key), ai, httpx.Client(timeout=20), s,
-                      PendingStore(s.data_dir / "pending"), house=house)
+    http, store = httpx.Client(timeout=20), PendingStore(s.data_dir / "pending")
+    start_worker(store, ai, http)  # collects batch reads (and, in free mode, reads queued imports after the 1st)
+    return create_app(Grocy(s.grocy_url, s.grocy_api_key), ai, http, s, store, house=house)
