@@ -1,7 +1,10 @@
 """Recipe import: fetch/parse sources, queue drafts for human review, save reviewed recipes to Grocy."""
+import base64
+import io
 import json
 import logging
 import re
+import secrets
 import shutil
 import uuid
 from dataclasses import dataclass
@@ -10,8 +13,11 @@ from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urljoin
 
+from PIL import Image, ImageOps
 from pydantic import BaseModel
+from pypdf import PdfReader
 
 from app.ai import AIError, RecipeDraft
 from app.barcode import _generics, _product_fields, generic_choices
@@ -33,13 +39,17 @@ class _Parser(HTMLParser):
         self.ld: list[str] = []
         self._skip: str | None = None
         self._ld: list[str] | None = None
+        self.og: str | None = None  # the first og:image
         self.feed(html)
         self.close()
 
     def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "meta" and self.og is None and "og:image" in (a.get("property"), a.get("name")) and a.get("content"):
+            self.og = a["content"].strip()
         if tag in ("script", "style"):
             self._skip = tag
-            if tag == "script" and (dict(attrs).get("type") or "").strip().lower() == "application/ld+json":
+            if tag == "script" and (a.get("type") or "").strip().lower() == "application/ld+json":
                 self._ld = []
 
     def handle_endtag(self, tag):
@@ -102,6 +112,81 @@ def page_text(html: str) -> str:
     return "\n".join(_Parser(html).text)
 
 
+def _image(node) -> str | None:
+    """A JSON-LD `image`: a URL string, an ImageObject, or a list of either (the first wins)."""
+    if isinstance(node, list):
+        return next(filter(None, map(_image, node)), None)
+    if isinstance(node, dict):
+        return _image(node.get("url") or node.get("contentUrl"))
+    return (node.strip() or None) if isinstance(node, str) else None
+
+
+def photo_url(html: str, base: str) -> str | None:
+    """The dish photo's absolute URL: the recipe JSON-LD `image`, else og:image."""
+    p = _Parser(html)
+    for body in p.ld:
+        try:
+            data = json.loads(body)
+        except ValueError:
+            continue
+        for r in _recipes(data):
+            if url := _image(r.get("image")):
+                return urljoin(base, url)
+    return urljoin(base, p.og) if p.og else None
+
+
+PHOTO_EDGE, PHOTO_MAX = 1600, 5 * 1024 * 1024
+
+
+def to_jpeg(data: bytes | Image.Image) -> bytes:
+    """Any image as a JPEG at most 1600 px on its long edge, upright, without EXIF (so no location).
+    Raises if it isn't an image."""
+    img = data if isinstance(data, Image.Image) else Image.open(io.BytesIO(data))
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    img.thumbnail((PHOTO_EDGE, PHOTO_EDGE))
+    out = io.BytesIO()
+    img.save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+
+def pdf_photo(pdf: bytes) -> bytes | None:
+    """The largest raster image (at least 200x200) on the first two pages, as a JPEG; None if there is none."""
+    best = None
+    try:
+        for page in PdfReader(io.BytesIO(pdf)).pages[:2]:
+            for f in page.images:
+                try:
+                    img = f.image
+                except Exception:  # an image pypdf can't decode is just skipped
+                    continue
+                w, h = img.size
+                if w >= 200 and h >= 200 and (best is None or w * h > best.size[0] * best.size[1]):
+                    best = img
+        return to_jpeg(best) if best else None
+    except Exception:
+        log.warning("no photo from the PDF", exc_info=True)
+        return None
+
+
+def fetch_photo(http, url: str | None) -> bytes | None:
+    """Download an image (image/* only, 5 MB cap) as a JPEG; any failure is just no photo."""
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+    try:
+        with http.stream("GET", url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20) as r:
+            if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+                return None
+            data = bytearray()
+            for chunk in r.iter_bytes():
+                data += chunk
+                if len(data) > PHOTO_MAX:
+                    return None
+        return to_jpeg(bytes(data))
+    except Exception:
+        log.warning("no photo from %s", url, exc_info=True)
+        return None
+
+
 class Pending(BaseModel):
     id: str
     status: Literal["processing", "ready", "failed"]
@@ -114,7 +199,8 @@ _ID = re.compile(r"[0-9a-f]{32}")
 
 
 class PendingStore:
-    """One `<id>.json` per unreviewed import, plus `<id>.pdf` when the source was a PDF."""
+    """One `<id>.json` per unreviewed import, plus `<id>.pdf` when the source was a PDF and `<id>.jpg` when a dish
+    photo was found."""
 
     def __init__(self, dir: Path):
         self.dir = Path(dir)
@@ -144,25 +230,34 @@ class PendingStore:
         f = self._file(id, ".pdf")
         return f if f and f.exists() else None
 
+    def photo_path(self, id: str) -> Path | None:
+        f = self._file(id, ".jpg")
+        return f if f and f.exists() else None
+
+    def save_photo(self, id: str, data: bytes) -> None:
+        self._file(id, ".jpg").write_bytes(data)
+
     def all(self) -> list[Pending]:
         files = sorted(self.dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
         return [Pending.model_validate_json(f.read_text(encoding="utf-8")) for f in files]
 
     def delete(self, id: str) -> None:
-        for ext in (".json", ".pdf"):
+        for ext in (".json", ".pdf", ".jpg"):
             f = self._file(id, ext)
             if f:
                 f.unlink(missing_ok=True)
 
 
-def _structure(ai, http, url: str | None, pdf: bytes | None) -> RecipeDraft:
+def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraft, bytes | None]:
+    """The draft and the dish photo (None when there is none)."""
     if pdf:
-        return ai.structure_recipe(pdf=pdf)
+        return ai.structure_recipe(pdf=pdf), pdf_photo(pdf)
     if not url:
         raise ValueError("nothing to import: no URL or PDF")
     r = http.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
     r.raise_for_status()
-    return ai.structure_recipe(text=extract_jsonld_recipe(r.text) or page_text(r.text))
+    draft = ai.structure_recipe(text=extract_jsonld_recipe(r.text) or page_text(r.text))
+    return draft, fetch_photo(http, photo_url(r.text, str(r.url)))
 
 
 def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf: bytes | None) -> None:
@@ -172,7 +267,9 @@ def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf
         if p is None:
             return  # deleted while queued
         try:
-            draft = _structure(ai, http, url, pdf)
+            draft, photo = _structure(ai, http, url, pdf)
+            if photo:
+                store.save_photo(p.id, photo)
             if draft.servings is None:
                 draft.servings = 2
             p.status, p.draft, p.error = "ready", draft, None
@@ -259,10 +356,21 @@ def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> Non
                      {"from_qu_id": qu, "to_qu_id": to, "factor": factor, "product_id": product_id})
 
 
+def put_photo(grocy, rid: int, jpeg: bytes) -> None:
+    """Store a JPEG as the recipe's Grocy picture, under a fresh name each time so cached copies never go stale."""
+    while True:
+        name = f"recipe-{rid}-{secrets.token_hex(4)}.jpg"
+        if "/" not in base64.b64encode(name.encode()).decode():  # Grocy's URLs carry the name in base64
+            break
+    grocy.put_recipe_picture(name, jpeg)
+    grocy.update("recipes", rid, {"picture_file_name": name})  # ponytail: a replaced picture's file stays in Grocy
+
+
 def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], source_url: str | None,
-                pdf_path: Path | None) -> int:
+                pdf_path: Path | None, photo: Path | None = None) -> int:
     """Create the reviewed recipe in Grocy. pdf_path is a PendingStore PDF (DATA_DIR/pending/<id>.pdf);
-    it is copied to its sibling DATA_DIR/sources/<recipe_id>.pdf and source_pdf = "sources/<recipe_id>.pdf"."""
+    it is copied to its sibling DATA_DIR/sources/<recipe_id>.pdf and source_pdf = "sources/<recipe_id>.pdf".
+    photo (a PendingStore JPEG) becomes the recipe's picture; if that fails the recipe is still saved."""
     ings = draft.table.ingredients
     by_index = {m.index: m for m in matches}
     bad = [i for i in range(len(ings))
@@ -307,6 +415,11 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
         except Exception:
             log.exception("could not roll back half-saved recipe %s", rid)
         raise
+    if photo:
+        try:
+            put_photo(grocy, rid, Path(photo).read_bytes())
+        except Exception:
+            log.exception("could not store the photo for recipe %s", rid)
     return rid
 
 

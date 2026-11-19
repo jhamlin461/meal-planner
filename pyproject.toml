@@ -10,6 +10,8 @@ dependencies = [
     "httpx",
     "anthropic>=1",
     "pydantic>=2",
+    "pypdf>=7.1.1",
+    "pillow>=13.0.0",
 ]
 
 [dependency-groups]

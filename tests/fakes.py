@@ -18,7 +18,14 @@ class FakeGrocy:
         self.today = date.today()  # tests may move this; schedule math is dates only
         self.chore_log: list[dict] = []
         self.battery_log: list[dict] = []
+        self.pictures: dict[str, bytes] = {}  # recipe pictures by file name
         self._next_id = 1
+
+    def put_recipe_picture(self, filename, data):
+        self.pictures[filename] = data
+
+    def recipe_picture(self, filename, width):
+        return self.pictures.get(filename)
 
     def users(self):
         return [dict(u) for u in self.user_rows]

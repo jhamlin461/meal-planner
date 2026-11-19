@@ -16,7 +16,7 @@ import anthropic
 import httpx
 import jinja2
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -33,7 +33,7 @@ from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
 from app.importer import (IngredientMatch, PendingStore, add_conversion, create_generic, process, propose_matches,
-                          save_recipe, stock_amount_for)
+                          put_photo, save_recipe, stock_amount_for, to_jpeg)
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
@@ -45,6 +45,7 @@ from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
 NEVER = "2999-12-31"  # Grocy's best-before for "never expires"
+UPLOAD_MAX = 10 * 1024 * 1024  # a recipe photo from the phone
 log = logging.getLogger(__name__)
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
@@ -712,6 +713,29 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat())
 
+    @app.get("/recipes/{rid}/photo")
+    def recipe_photo(rid: int, w: int = 800):
+        name = recipe_or_404(rid).get("picture_file_name")
+        data = grocy.recipe_picture(name, min(max(w, 200), 1600)) if name else None
+        if data is None:
+            raise HTTPException(404, "No photo")
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    @app.post("/recipes/{rid}/photo")
+    def recipe_photo_post(rid: int, photo: UploadFile = File()):
+        recipe_or_404(rid)
+        if not (photo.content_type or "").startswith("image/"):
+            raise HTTPException(400, "That file isn't a photo")
+        data = photo.file.read(UPLOAD_MAX + 1)
+        if len(data) > UPLOAD_MAX:
+            raise HTTPException(413, "That photo is over 10 MB")
+        try:
+            jpeg = to_jpeg(data)
+        except Exception:
+            raise HTTPException(400, "That file isn't a photo")
+        put_photo(grocy, rid, jpeg)
+        return back(f"/recipes/{rid}")
+
     @app.post("/recipes/{rid}/plan")
     def recipe_plan(rid: int, day: date = Form(), section: Literal["Lunch", "Dinner"] = Form("Dinner"),
                     servings: str = Form("")):
@@ -784,6 +808,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["packaging"] = is_packaging(row["unit"])
             row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
+                    photo=store.photo_path(p.id) is not None,
                     table_errors=_named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
@@ -795,6 +820,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                  "new_name": ing.name, "error": None, "note": None}
                 for m, ing in zip(propose_matches(grocy, ai, p.draft), p.draft.table.ingredients)]
         return review_page(request, p, p.draft.table, rows, [])
+
+    @app.get("/import/{pid}/photo")
+    def review_photo(pid: str):
+        f = store.photo_path(pid)
+        if f is None:
+            raise HTTPException(404, "No photo")
+        return FileResponse(f, media_type="image/jpeg")
 
     @app.post("/import/{pid}")
     async def review_post(request: Request, pid: str):
@@ -849,7 +881,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     return back("/recipes")  # the other tap already saved it
                 try:
                     rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
-                                                     for i, r in enumerate(rows)], source_url, store.pdf_path(pid))
+                                                     for i, r in enumerate(rows)], source_url, store.pdf_path(pid),
+                                      photo=store.photo_path(pid))
                 except ValueError as e:
                     errors.append(str(e))
                 else:

@@ -1359,3 +1359,60 @@ def test_tap_targets_are_at_least_48px():
     for sel in (".segmented > *", ".rail-sub a", ".stock-more summary"):
         rule = css[css.index(sel + " {"):]
         assert "min-height: 48px" in rule[:rule.index("}")], sel
+
+
+# ---- dish photos and the table-first recipe page -----------------------------------------------------------------
+def _png(w=300, h=200):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), "red").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_photo_upload_validates_and_serves(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    assert c.get(f"/recipes/{rid}/photo").status_code == 404  # no picture yet
+    assert "Add a photo" in c.get(f"/recipes/{rid}").text
+    r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.txt", b"hello", "text/plain")})
+    assert r.status_code == 400
+    r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", b"not really", "image/png")})
+    assert r.status_code == 400  # says image, isn't one
+    r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.jpg", b"x" * (10 * 1024 * 1024 + 1), "image/jpeg")})
+    assert r.status_code == 413
+    assert g.get_object("recipes", rid).get("picture_file_name") is None
+    r = c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", _png(), "image/png")}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/recipes/{rid}"
+    name = g.get_object("recipes", rid)["picture_file_name"]
+    r = c.get(f"/recipes/{rid}/photo?w=5000")
+    assert r.status_code == 200 and r.content[:2] == b"\xff\xd8" and "max-age=86400" in r.headers["cache-control"]
+    assert r.headers["content-type"] == "image/jpeg"
+    html = c.get(f"/recipes/{rid}").text
+    assert "Change photo" in html and name in c.get("/recipes").text  # the name busts caches when it changes
+    assert c.get("/recipes/999/photo").status_code == 404
+
+
+def test_recipes_list_shows_photo_cards(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    g.create("recipes", {"name": "Chili", "base_servings": 2})
+    c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", _png(), "image/png")})
+    html = c.get("/recipes").text
+    assert re.search(rf'<img[^>]*src="/recipes/{rid}/photo\?w=\d+[^"]*"[^>]*alt="Brownies"[^>]*loading="lazy"', html) \
+        or re.search(rf'<img[^>]*src="/recipes/{rid}/photo\?w=\d+[^"]*"[^>]*loading="lazy"[^>]*alt="Brownies"', html)
+    chili = next(li for li in html.split("<li>") if "Chili" in li)
+    assert 'class="photo-none"' in chili and "<img" not in chili
+
+
+def test_review_shows_found_photo(env):
+    g, ai, store, c, _ = env
+    ai.draft = soup_draft()
+    c.post("/import", data={"urls": "https://example.com/soup"})
+    p = store.all()[0]
+    assert "No photo found" in c.get(f"/import/{p.id}").text
+    assert c.get(f"/import/{p.id}/photo").status_code == 404
+    store.save_photo(p.id, _png())
+    html = c.get(f"/import/{p.id}").text
+    assert f'src="/import/{p.id}/photo"' in html and "No photo found" not in html
+    assert c.get(f"/import/{p.id}/photo").content == _png()

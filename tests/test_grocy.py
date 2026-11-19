@@ -147,3 +147,21 @@ def test_battery_charge():
     assert g.batteries_status() == [{"battery_id": 1}]
     g.charge_battery(1)
     assert calls[1][:2] == ("POST", "/api/batteries/1/charge") and "tracked_time" in calls[1][2]
+
+
+def test_recipe_picture_put_and_get():
+    import base64
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, req.url.path, dict(req.url.params), req.headers.get("content-type"), req.content))
+        return httpx.Response(404) if "missing" in base64.b64decode(req.url.path.rsplit("/", 1)[1]).decode() \
+            else httpx.Response(200 if req.method == "GET" else 204, content=b"JPEG" if req.method == "GET" else b"")
+
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    g.put_recipe_picture("recipe-1-ab.jpg", b"data")
+    b64 = base64.b64encode(b"recipe-1-ab.jpg").decode()
+    assert seen[0] == ("PUT", f"/api/files/recipepictures/{b64}", {}, "application/octet-stream", b"data")
+    assert g.recipe_picture("recipe-1-ab.jpg", 400) == b"JPEG"
+    assert seen[1][2] == {"force_serve_as": "picture", "best_fit_width": "400"}
+    assert g.recipe_picture("missing.jpg", 400) is None

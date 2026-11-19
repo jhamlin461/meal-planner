@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import httpx
@@ -308,3 +309,97 @@ def test_save_checks_every_product_before_creating_anything():
     with pytest.raises(ValueError, match="no longer exists"):
         save_recipe(g, d, [IngredientMatch(0, flour, 250), IngredientMatch(1, 999, 2)], None, None)
     assert g.objects("recipes") == []
+
+
+# ---- dish photos ---------------------------------------------------------------------------------------------------
+import io
+
+from PIL import Image
+
+from app.importer import fetch_photo, pdf_photo, photo_url, to_jpeg
+
+
+def png(w, h, color="red", fmt="PNG"):
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(buf, fmt)
+    return buf.getvalue()
+
+
+def ld(image):
+    import json
+    return f'<script type="application/ld+json">{json.dumps({"@type": "Recipe", "name": "S", "image": image})}</script>'
+
+
+def test_photo_url_from_jsonld_string_list_object_and_og():
+    assert photo_url(ld("https://x.com/a.jpg"), "https://x.com/r") == "https://x.com/a.jpg"
+    assert photo_url(ld(["/b.jpg", "/c.jpg"]), "https://x.com/r/1") == "https://x.com/b.jpg"  # relative resolved
+    assert photo_url(ld({"@type": "ImageObject", "url": "https://x.com/d.jpg"}), "https://x.com/") == "https://x.com/d.jpg"
+    assert photo_url(ld([{"url": "https://x.com/e.jpg"}]), "https://x.com/") == "https://x.com/e.jpg"
+    og = '<html><head><meta property="og:image" content="https://x.com/og.jpg"></head><body>Pie</body></html>'
+    assert photo_url(og, "https://x.com/") == "https://x.com/og.jpg"
+    assert photo_url(ld("https://x.com/a.jpg") + og, "https://x.com/") == "https://x.com/a.jpg"  # JSON-LD wins
+    assert photo_url("<p>no photo</p>", "https://x.com/") is None
+
+
+def test_to_jpeg_shrinks_long_edge():
+    img = Image.open(io.BytesIO(to_jpeg(png(3200, 1000))))
+    assert img.format == "JPEG" and img.size == (1600, 500)
+    assert Image.open(io.BytesIO(to_jpeg(png(300, 200)))).size == (300, 200)
+
+
+def test_pdf_photo_largest_image_on_first_two_pages():
+    pages = [Image.new("RGB", (150, 150), "green"), Image.new("RGB", (400, 300), "red"),  # small one is ignored
+             Image.new("RGB", (900, 900), "blue")]  # third page: never looked at
+    buf = io.BytesIO()
+    pages[0].save(buf, "PDF", save_all=True, append_images=pages[1:])
+    img = Image.open(io.BytesIO(pdf_photo(buf.getvalue())))
+    assert img.size == (400, 300) and img.getpixel((200, 150))[0] > 200
+    buf = io.BytesIO()
+    Image.new("RGB", (150, 150)).save(buf, "PDF")
+    assert pdf_photo(buf.getvalue()) is None and pdf_photo(b"not a pdf") is None
+
+
+def test_fetch_photo_checks_type_and_size():
+    big = b"x" * (5 * 1024 * 1024 + 1)
+
+    def handler(req):
+        return {"/ok.png": httpx.Response(200, content=png(300, 200), headers={"content-type": "image/png"}),
+                "/page": httpx.Response(200, text="<html>", headers={"content-type": "text/html"}),
+                "/big": httpx.Response(200, content=big, headers={"content-type": "image/jpeg"})
+                }.get(req.url.path, httpx.Response(404))
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert Image.open(io.BytesIO(fetch_photo(http, "https://x.com/ok.png"))).format == "JPEG"
+    for path in ("/page", "/big", "/gone"):
+        assert fetch_photo(http, f"https://x.com{path}") is None
+    assert fetch_photo(http, None) is None and fetch_photo(http, "file:///etc/passwd") is None
+
+
+def test_process_keeps_photo_and_save_puts_it_in_grocy(tmp_path):
+    page = ld("https://example.com/soup.png").replace('"name": "S"', '"name": "S", "recipeIngredient": ["1 egg"]')
+
+    def handler(req):
+        if req.url.path == "/soup.png":
+            return httpx.Response(200, content=png(300, 200), headers={"content-type": "image/png"})
+        return httpx.Response(200, text=page)
+
+    store = PendingStore(tmp_path / "pending")
+    p = store.new("https://example.com/soup")
+    process(store, FakeAI(draft=make_draft([(1, "", "egg")])), httpx.Client(transport=httpx.MockTransport(handler)),
+            p.id, "https://example.com/soup", None)
+    assert store.photo_path(p.id).read_bytes()[:2] == b"\xff\xd8"
+    q = store.new("https://example.com/nophoto")
+    process(store, FakeAI(draft=make_draft([(1, "", "egg")])),
+            httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<p>soup</p>"))),
+            q.id, "https://example.com/nophoto", None)
+    assert store.get(q.id).status == "ready" and store.photo_path(q.id) is None
+
+    g = grocy()
+    egg = product(g, "Egg", "piece")
+    rid = save_recipe(g, make_draft([(1, "", "egg")]), [IngredientMatch(0, egg, 1)], None, None,
+                      photo=store.photo_path(p.id))
+    name = g.get_object("recipes", rid)["picture_file_name"]
+    assert re.fullmatch(rf"recipe-{rid}-[0-9a-f]+\.jpg", name)
+    assert g.recipe_picture(name, 400) == store.photo_path(p.id).read_bytes()
+    store.delete(p.id)
+    assert not (tmp_path / "pending" / f"{p.id}.jpg").exists()

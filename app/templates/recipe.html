@@ -40,4 +40,8 @@
 </form>
 <p class="row"><a class="btn" href="/recipes/{{ r.id }}/table">{{ icon("pencil-outline") }}Edit table</a>
 {%- if source_url %}<a class="btn" href="{{ source_url }}" rel="noreferrer">Open the source</a>{% endif %}</p>
+<form class="photo-form" method="post" action="/recipes/{{ r.id }}/photo" enctype="multipart/form-data">
+  <input type="file" name="photo" accept="image/*" required aria-label="Photo of the dish">
+  <button class="btn">{{ icon("camera-outline") }}{{ "Change photo" if r.picture_file_name else "Add a photo" }}</button>
+</form>
 {% endblock %}

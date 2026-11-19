@@ -306,3 +306,19 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 .chips:not(:has(.chip.used)) .show-all { display: none; }
 .show-all span { border-color: transparent; background: transparent; color: var(--action); font-weight: 600; }
 .show-all input:checked + span { background: var(--line); }
+
+/* Recipe photos: cards on the list (two across on phones), a quiet tile where there is none. */
+.recipe-grid { list-style: none; padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 12px; }
+@media (min-width: 600px) { .recipe-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); } }
+.recipe-grid a { display: flex; flex-direction: column; gap: 8px; color: inherit; text-decoration: none; border-radius: 14px; }
+.recipe-grid img, .photo-none { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover;
+  border-radius: 14px; background: var(--surface); }
+.photo-none { display: grid; place-items: center; color: var(--muted); }
+.photo-none .icon { width: 32px; height: 32px; opacity: .6; }
+.recipe-name { font-weight: 600; line-height: 1.25; padding: 0 2px; }
+@media (hover: hover) { .recipe-grid a:hover .recipe-name { color: var(--action); } }
+.review-photo { display: block; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; object-fit: cover;
+  border-radius: 14px; margin: 0 0 12px; background: var(--surface); }
+.photo-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0; }
+.photo-form input[type=file] { flex: 1 1 14em; width: auto; min-width: 0; }

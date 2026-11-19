@@ -5,8 +5,11 @@
 {% block content %}
 <p class="row"><a class="btn btn-primary" href="/import">{{ icon("plus") }}Import recipes</a>
 {%- if waiting %}<a class="btn" href="/import">Review {{ waiting }} waiting</a>{% endif %}</p>
-{% if recipes %}<ul class="rows">
-{% for r in recipes %}<li class="row-link"><a href="/recipes/{{ r.id }}"><span class="grow breakable">{{ r.name }}</span>{{ icon("chevron-right") }}</a></li>
+{% if recipes %}<ul class="recipe-grid">
+{% for r in recipes %}<li><a href="/recipes/{{ r.id }}">
+{%- if r.picture_file_name %}<img src="/recipes/{{ r.id }}/photo?w=480&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" loading="lazy" width="480" height="360">
+{%- else %}<span class="photo-none">{{ icon("silverware-fork-knife") }}</span>{% endif -%}
+<span class="recipe-name breakable">{{ r.name }}</span></a></li>
 {% endfor %}</ul>
 {% else %}<p class="empty">No recipes yet. Import one from a recipe card PDF or a website.</p>{% endif %}
 {% endblock %}

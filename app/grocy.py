@@ -1,3 +1,4 @@
+import base64
 import secrets
 from datetime import date, datetime
 
@@ -63,6 +64,22 @@ class Grocy:
 
     def set_userfields(self, entity: str, id: int, data: dict) -> None:
         self._req("PUT", f"/userfields/{entity}/{id}", json=data)
+
+    @staticmethod
+    def _picture(filename: str) -> str:
+        return "/files/recipepictures/" + base64.b64encode(filename.encode()).decode()
+
+    def put_recipe_picture(self, filename: str, data: bytes) -> None:
+        self._req("PUT", self._picture(filename), content=data, headers={"Content-Type": "application/octet-stream"})
+
+    def recipe_picture(self, filename: str, width: int) -> bytes | None:
+        """The picture scaled to fit `width`, or None when Grocy has no such file."""
+        r = self._http.get(self._picture(filename), params={"force_serve_as": "picture", "best_fit_width": width})
+        if r.status_code == 404:
+            return None
+        if not r.is_success:
+            raise GrocyError(f"GET recipe picture -> {r.status_code}")
+        return r.content
 
     def product_by_barcode(self, code: str) -> dict | None:
         return self._req("GET", f"/stock/products/by-barcode/{code}", ok_400=True)
