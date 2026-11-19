@@ -43,9 +43,10 @@ def test_creates_the_dashboard_when_missing():
     assert {k: create[k] for k in ("url_path", "title", "icon", "show_in_sidebar", "require_admin", "mode")} == {
         "url_path": "house-manager", "title": "House", "icon": "mdi:home-heart", "show_in_sidebar": True,
         "require_admin": False, "mode": "storage"}
-    # what HA's own Webpage dashboard stores
+    # the panel view HA's Webpage dashboard builds, plus camera access for the scanner
     assert save["url_path"] == "house-manager"
-    assert save["config"] == {"strategy": {"type": "iframe", "url": "https://house.tail1.ts.net"}}
+    assert save["config"] == {"views": [{"type": "panel", "title": "House", "cards": [
+        {"type": "iframe", "url": "https://house.tail1.ts.net", "allow": "camera; fullscreen"}]}]}
     assert "Added" in out and "packages" not in out  # nothing to migrate
 
 

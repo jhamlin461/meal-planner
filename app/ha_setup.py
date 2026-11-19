@@ -23,15 +23,21 @@ def find_washer(states: list[dict]) -> tuple[list[str], list[str]]:
     return done, status
 
 
+def view(app_url: str) -> dict:
+    return {"views": [{"type": "panel", "title": "House",
+                       "cards": [{"type": "iframe", "url": app_url, "allow": "camera; fullscreen"}]}]}
+
+
 def dashboard(s: Session, app_url: str) -> str:
-    """Create or update the sidebar dashboard showing the app, stored as HA's own Webpage dashboard stores it.
-    "created" or "updated"."""
+    """Create or update the sidebar dashboard showing the app full screen; "created" or "updated".
+    HA's Webpage dashboard type builds this same panel view but passes only the url, so its frame gets the default
+    allow="fullscreen" and the barcode scanner can't open the camera; this view adds it."""
     old = next((d for d in s.call(type="lovelace/dashboards/list") or [] if d.get("url_path") == URL_PATH), None)
     if old:
         s.call(type="lovelace/dashboards/update", dashboard_id=old["id"], **DASHBOARD)
     else:
         s.call(type="lovelace/dashboards/create", url_path=URL_PATH, mode="storage", **DASHBOARD)
-    s.call(type="lovelace/config/save", url_path=URL_PATH, config={"strategy": {"type": "iframe", "url": app_url}})
+    s.call(type="lovelace/config/save", url_path=URL_PATH, config=view(app_url))
     return "updated" if old else "created"
 
 
