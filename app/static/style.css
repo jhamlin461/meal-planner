@@ -398,7 +398,7 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
     align-items: start; }
   .recipe-side > h2:first-child { margin-top: 24px; }
   .week-bar { grid-template-columns: repeat(3, minmax(0, 14em)); }
-  .week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; align-items: start; }
+  .week-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: start; }
   .week-grid .plan-day, .week-grid .plan-day.is-today + .plan-day { margin: 0; padding: 4px 10px 12px;
     border-top: 1px solid var(--line); border-radius: 0; }
   .week-grid .plan-day.is-today { border-top-color: transparent; border-radius: 14px; }
@@ -407,5 +407,11 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
   .week-grid :is(.plan-what, .plan-add select, .plan-add .inline-group) { flex-basis: 100%; }
   .week-grid .plan-actions { flex-basis: 100%; max-width: none; grid-auto-flow: row; }
   .week-grid .plan-add .inline-group { min-width: 0; flex-wrap: wrap; }
-  .week-grid .plan-add .inline-group > * { flex: 1 1 4.5em; }
+  .week-grid .plan-add .inline-group > * { flex: 1 1 5.5em; }  /* "Servings" fits, or the pair wraps */
+}
+/* A whole week across only where each day still fits "Choose a recipe"; 1280-1599 px gets four per row. */
+@media (min-width: 1600px) {
+  .week-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .week-grid .plan-day, .week-grid .plan-day.is-today + .plan-day { padding-inline: 8px; }
+  .week-grid .plan-add select { padding-inline: 6px 2px; }
 }

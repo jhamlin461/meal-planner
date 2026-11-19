@@ -1532,7 +1532,9 @@ def test_plan_week_is_a_seven_day_grid(env):
     assert grid.count('<section class="plan-day') == 7 and "style=" not in html
     css = c.get("/static/style.css").text
     wide = css[css.index("@media (min-width: 1280px)"):]
-    assert ".week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));" in wide
+    assert ".week-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));" in wide  # 1280-1599
+    widest = css[css.index("@media (min-width: 1600px)"):]  # all seven only where "Choose a recipe" still fits
+    assert ".week-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }" in widest
 
 
 def test_wide_pages_split_into_columns(env):
