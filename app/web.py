@@ -654,6 +654,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=list(places(grocy)),
                     default_location=default_place(grocy))
 
+    def is_supply(p: dict) -> bool:
+        return bool(p.get("product_group_id")) and str(p["product_group_id"]) == str(supplies_group(grocy))
+
+    def needs_min(r: Resolved, p: dict) -> bool:
+        """A new supply: its keep-at-least is asked once per generic, not per brand."""
+        return r.created and is_supply(p) and not float(generic_of(p).get("min_stock_amount") or 0)
+
     def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
         """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
         p = grocy.get_object("products", r.product_id) or {}
@@ -662,11 +669,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         known = _num(grocy.userfields("products", r.product_id).get("package_amount"))
         pkg = amount or known
         unit = unit_names().get(_int(p.get("qu_id_stock")), "")
-        supply = p.get("product_group_id") and str(p["product_group_id"]) == str(supplies_group(grocy))
-        if supply and action == "use":
+        if is_supply(p) and action == "use":
             pkg = 1.0  # supplies are used one at a time
-        if action == "add" and r.created and supply and not float(generic_of(p).get("min_stock_amount") or 0):
-            # a new supply: ask its keep-at-least once per generic, not per brand
+        if action == "add" and needs_min(r, p):
             return {"status": "need_min", **info, "unit": unit, "default": pkg or 1}
         if pkg is None:
             return {"status": "need_amount", **info, "unit": unit}
@@ -691,9 +696,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         action: Literal["add", "use"] = "add"
         amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # typed when the size is unknown
 
-    @app.post("/api/scan")
-    def api_scan(body: ScanIn):
-        code = body.code.strip()
+    def resolve_code(code: str) -> Resolved | dict:
+        """A scanned code's product, else what the page shows instead (unknown, the product form, an error)."""
         try:
             r = resolve(grocy, ai, http, code)
         except NeedsDetails as e:  # free mode: the scan screen's product form, name filled in
@@ -702,20 +706,106 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return {"status": "error", "message": str(e)}
         if r is None:
             return {"status": "manual", "code": code, "name": ""} if ai.mode() == "free" else {"status": "unknown"}
-        return apply_scan(r, body.action, body.amount)
+        return r
+
+    @app.post("/api/scan")
+    def api_scan(body: ScanIn):
+        r = resolve_code(body.code.strip())
+        return r if isinstance(r, dict) else apply_scan(r, body.action, body.amount)
+
+    def place_of(p: dict) -> str:
+        """The product's own place by name (the fallback place if its location is gone)."""
+        loc = _int(p.get("location_id"))
+        return next((n for n, i in places(grocy).items() if i == loc), default_place(grocy))
+
+    def found(r: Resolved) -> dict:
+        """What the scan sheet shows before anything is booked."""
+        p = product_or_404(r.product_id)
+        return {"status": "found", "product_id": r.product_id, "product": r.name, "generic": r.generic_name,
+                "unit": unit_names().get(_int(p.get("qu_id_stock")), ""),
+                "package": _num(grocy.userfields("products", r.product_id).get("package_amount")),
+                "place": place_of(p), "places": list(places(grocy)), "kind": "supply" if is_supply(p) else "food",
+                "in_stock": grocy.stock_amounts().get(r.product_id, 0.0), "photo": None, "created": r.created,
+                "need_min": needs_min(r, p)}
+
+    class LookupIn(BaseModel):
+        code: str
+
+    @app.post("/api/scan/lookup")
+    def api_scan_lookup(body: LookupIn):
+        r = resolve_code(body.code.strip())
+        return r if isinstance(r, dict) else found(r)
+
+    class ConfirmIn(BaseModel):
+        product_id: int
+        action: Literal["add", "use"]
+        packs: float = Field(default=1, gt=0, allow_inf_nan=False)
+        amount: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # stock units, when the size is unknown
+        place: str | None = None  # add only; the product's own place when not given
+        min: float | None = Field(default=None, gt=0, allow_inf_nan=False)  # a new supply's keep-at-least
+
+    @app.post("/api/scan/confirm")
+    def api_scan_confirm(body: ConfirmIn):
+        """Book what the sheet confirmed. The place applies to this booking only; supplies are used one at a time."""
+        pid = body.product_id
+        p = product_or_404(pid)
+        known = _num(grocy.userfields("products", pid).get("package_amount"))
+        if body.action == "use" and is_supply(p):
+            want = body.packs
+        else:
+            want = body.amount or (body.packs * known if known else None)
+        if not want:
+            return JSONResponse({"status": "error", "message": "Type how much."}, status_code=400)
+        have = places(grocy)
+        place, tid = None, None
+        if body.action == "add":
+            place = body.place or place_of(p)
+            if place not in have:
+                return JSONResponse({"status": "error", "message": f"There's no place called {place}."},
+                                    status_code=400)
+            if body.amount and not known:  # remember the answer for this product's next scan
+                grocy.set_userfields("products", pid, {"package_amount": body.amount})
+                gid = _int(p.get("parent_product_id"))  # and for its generic, which Running low and Bought use
+                if gid and not _num(grocy.userfields("products", gid).get("package_amount")):
+                    grocy.set_userfields("products", gid, {"package_amount": body.amount})
+            days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
+            tid = grocy.add_stock(pid, want, date.today() + timedelta(days=days) if days > 0 else None, have[place])
+            done = want
+        else:
+            done = min(want, grocy.stock_amounts().get(pid, 0.0))  # Grocy refuses more than is in stock
+            if done > 0:
+                tid = grocy.consume(pid, done)
+        if body.min:
+            set_min(pid, body.min)
+        return {"status": "ok", "action": body.action, "product": p["name"], "amount": done, "place": place,
+                "transaction_id": tid}
+
+    class UndoIn(BaseModel):
+        transaction_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")  # goes into Grocy's URL path
+
+    @app.post("/api/scan/undo")
+    def api_scan_undo(body: UndoIn):
+        """Reverse only the stock booking: a remembered size, keep-at-least or relink stays."""
+        try:
+            grocy.undo(body.transaction_id)
+        except GrocyError as e:
+            if e.status != 400:
+                raise
+            return {"status": "error", "message": "Can't undo: already used."}
+        return {"status": "ok"}
 
     @app.post("/api/scan/photo")
-    def api_scan_photo(code: str = Form(), image: UploadFile = File(), action: Literal["add", "use"] = Form("add")):
+    def api_scan_photo(code: str = Form(), image: UploadFile = File()):
         try:
             r = resolve_from_photo(grocy, ai, http, code.strip(), image.file.read())
         except NeedsDetails:
             return {"status": "manual", "code": code.strip(), "name": ""}
         except AIError as e:
             return {"status": "error", "message": str(e)}
-        return apply_scan(r, action)
+        return found(r)
 
     @app.post("/api/scan/manual")
-    def api_scan_manual(code: str = Form(), action: Literal["add", "use"] = Form("add"), name: str = Form(""),
+    def api_scan_manual(code: str = Form(), name: str = Form(""),
                         generic: str = Form(""), stock_unit: Literal["g", "ml", "piece"] = Form("g"),
                         package_amount: str = Form(""), location: str = Form(""),
                         category: Literal["food", "supply"] = Form("food")):
@@ -729,7 +819,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                                 status_code=400)
         r = create_manual(grocy, http, code.strip(), name.strip(), generic.strip(), stock_unit, _num(package_amount),
                           location, category)
-        return apply_scan(r, action)
+        return found(r)
 
     class RelinkIn(BaseModel):
         product_id: int

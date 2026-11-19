@@ -59,6 +59,18 @@ def test_consume_body_and_set_amount_and_add_stock():
     assert "2026-12-01" in calls[2][2] and calls[2][1] == "/api/stock/products/3/add"
 
 
+def test_bookings_return_transaction_id_and_undo_posts_it():
+    calls = []
+    def handler(req):
+        calls.append(req.url.path)
+        if req.url.path.endswith("/undo"):
+            return httpx.Response(204)
+        return httpx.Response(200, json=[{"id": 1, "transaction_id": "t-9"}, {"id": 2, "transaction_id": "t-9"}])
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    assert g.add_stock(3, 1, None, None) == "t-9" and g.consume(3, 1) == "t-9"
+    assert g.undo("t-9") is None and calls[-1] == "/api/stock/transactions/t-9/undo"
+
+
 def test_load_settings_defaults(monkeypatch):
     for k in ("GROCY_URL", "GROCY_API_KEY", "ANTHROPIC_API_KEY", "FDC_API_KEY", "WALMART_STORE_ID",
               "SHOPPING_WEEKDAY", "DATA_DIR", "EXPIRY_WARN_DAYS"):

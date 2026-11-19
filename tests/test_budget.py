@@ -468,10 +468,11 @@ def test_free_scan_asks_for_the_details_and_creates_the_product_like_the_ai_path
         "status": "manual", "code": "111", "name": "Great Value All Purpose Flour"}
     assert c.post("/api/scan", json={"code": "222"}).json()["status"] == "manual"  # in no database
     assert 'id="manual"' in c.get("/scan").text
-    form = {"code": "111", "action": "add", "name": "Great Value All Purpose Flour", "generic": "Flour",
+    form = {"code": "111", "name": "Great Value All Purpose Flour", "generic": "Flour",
             "stock_unit": "g", "package_amount": "2268", "location": "Pantry", "category": "food"}
     r = c.post("/api/scan/manual", data=form).json()
-    assert r["status"] == "ok" and r["created"] and r["generic"] == "Flour" and r["amount"] == 2268
+    assert r["status"] == "found" and r["created"] and r["generic"] == "Flour" and r["package"] == 2268
+    assert r["product_id"] not in g.stock  # the sheet confirms before anything is added
     child = g.get_object("products", r["product_id"])
     parent = g.get_object("products", child["parent_product_id"])
     assert parent["name"] == "Flour" and g.product_by_barcode("111")["product"]["id"] == r["product_id"]
@@ -693,7 +694,7 @@ def test_manual_product_needs_a_positive_package_size(tmp_path):
             "category": "food"}
     for bad in ("0", "-3", "lots"):
         assert c.post("/api/scan/manual", data={**form, "package_amount": bad}).status_code == 400
-    assert c.post("/api/scan/manual", data={**form, "package_amount": ""}).json()["status"] == "need_amount"
+    assert c.post("/api/scan/manual", data={**form, "package_amount": ""}).json()["package"] is None
     assert 'id="manual-cancel"' in c.get("/scan").text
 
 

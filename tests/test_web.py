@@ -344,15 +344,15 @@ def test_scan_unknown_returns_unknown(env):
     assert env[3].post("/api/scan", json={"code": "999", "action": "add"}).json() == {"status": "unknown"}
 
 
-def test_scan_photo_creates_and_adds(env):
+def test_scan_photo_creates_the_product(env):
     g, ai, _, c, _ = env
     ai.guess = ProductGuess(generic_name="Beans", is_new_generic=True, stock_unit="g", package_amount=400,
                             location="Pantry", best_before_days=700, g_per_unit=1)
-    r = c.post("/api/scan/photo", data={"code": "555", "action": "add"},
+    r = c.post("/api/scan/photo", data={"code": "555"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
-    assert r["status"] == "ok" and r["created"] and r["generic"] == "Beans" and r["amount"] == 400
+    assert r["status"] == "found" and r["created"] and r["generic"] == "Beans" and r["package"] == 400
     assert g.product_by_barcode("555")["product"]["id"] == r["product_id"]
-    assert g.stock[r["product_id"]][0]["amount"] == 400
+    assert r["product_id"] not in g.stock  # the sheet confirms before anything is added
 
 
 def test_relink(env):
@@ -1220,9 +1220,9 @@ def test_new_supply_asks_keep_at_least(env):
     g, ai, _, c, _ = env
     ai.guess = ProductGuess(generic_name="Trash bags", is_new_generic=True, stock_unit="piece", package_amount=40,
                             location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
-    r = c.post("/api/scan/photo", data={"code": "4242", "action": "add"},
+    r = c.post("/api/scan/photo", data={"code": "4242"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
-    assert r["status"] == "need_min" and r["unit"] == "piece" and r["default"] == 40 and r["action"] == "add"
+    assert r["status"] == "found" and r["need_min"] and r["unit"] == "piece" and r["package"] == 40
     pid = r["product_id"]
     assert pid not in g.stock
     for bad in (0, -1, "inf"):
@@ -1237,9 +1237,9 @@ def test_new_supply_asks_keep_at_least(env):
     assert g.stock[pid][0]["best_before_date"] is None  # never expires
     assert c.post("/api/scan", json={"code": "4242", "action": "add"}).json()["status"] == "ok"  # asked once only
     ai.guess = ai.guess.model_copy(update={"is_new_generic": False})  # a second brand of the same generic
-    r = c.post("/api/scan/photo", data={"code": "4343", "action": "add"},
+    r = c.post("/api/scan/photo", data={"code": "4343"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
-    assert r["status"] == "ok" and r["product_id"] != pid  # once per generic, not per brand
+    assert not r["need_min"] and r["product_id"] != pid  # once per generic, not per brand
 
 
 def test_running_low_in_walmart_cart(env):
@@ -1379,10 +1379,11 @@ def test_typed_pack_size_reaches_running_low_bought(env):
     bags = supply(g)  # keep at least 2, no package size
     ai.guess = ProductGuess(generic_name="Trash bags", is_new_generic=False, stock_unit="piece", package_amount=None,
                             location="Garage", best_before_days=-1, g_per_unit=20, category="supply")
-    r = c.post("/api/scan/photo", data={"code": "5151", "action": "add"},
+    r = c.post("/api/scan/photo", data={"code": "5151"},
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
-    assert r["status"] == "need_amount"
-    assert c.post("/api/scan", json={"code": "5151", "action": "add", "amount": 32}).json()["status"] == "ok"
+    assert r["package"] is None
+    assert c.post("/api/scan/confirm", json={"product_id": r["product_id"], "action": "add",
+                                             "amount": 32}).json()["status"] == "ok"
     assert g.userfields("products", bags)["package_amount"] == 32
     g.set_amount(r["product_id"], 1)  # used down to one: running low by 1
     c.get("/shopping")

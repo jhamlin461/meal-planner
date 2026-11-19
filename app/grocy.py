@@ -109,17 +109,28 @@ class Grocy:
     def stock_entries(self) -> list[dict]:
         return self.objects("stock")
 
-    def add_stock(self, product_id: int, amount: float, best_before: date | None, location_id: int | None) -> None:
+    @staticmethod
+    def _transaction(rows) -> str | None:
+        """A booking's id, from the stock log rows Grocy answers with (all rows of one booking share it)."""
+        return rows[0]["transaction_id"] if rows else None
+
+    def add_stock(self, product_id: int, amount: float, best_before: date | None,
+                  location_id: int | None) -> str | None:
         body: dict = {"amount": amount, "transaction_type": "purchase"}
         if best_before:
             body["best_before_date"] = best_before.isoformat()
         if location_id:
             body["location_id"] = location_id
-        self._req("POST", f"/stock/products/{product_id}/add", json=body)
+        return self._transaction(self._req("POST", f"/stock/products/{product_id}/add", json=body))
 
-    def consume(self, product_id: int, amount: float) -> None:
-        self._req("POST", f"/stock/products/{product_id}/consume",
-                  json={"amount": amount, "spoiled": False, "allow_subproduct_substitution": True})
+    def consume(self, product_id: int, amount: float) -> str | None:
+        return self._transaction(self._req("POST", f"/stock/products/{product_id}/consume",
+                                           json={"amount": amount, "spoiled": False,
+                                                 "allow_subproduct_substitution": True}))
+
+    def undo(self, transaction_id: str) -> None:
+        """Reverse one booking; a 400 GrocyError when it can't (an add whose stock was used since)."""
+        self._req("POST", f"/stock/transactions/{transaction_id}/undo")
 
     def transfer(self, product_id: int, amount: float, from_location: int, to_location: int) -> None:
         self._req("POST", f"/stock/products/{product_id}/transfer",

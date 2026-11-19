@@ -34,6 +34,7 @@ class FakeGrocy:
         self.chore_log: list[dict] = []
         self.battery_log: list[dict] = []
         self.pictures: dict[str, bytes] = {}  # recipe pictures by file name
+        self.bookings: dict[str, tuple] = {}  # transaction id -> ("add"|"consume", [(stock entry, amount)])
         self._next_id = 1
 
     def put_recipe_picture(self, filename, data):
@@ -101,15 +102,20 @@ class FakeGrocy:
     def stock_entries(self):
         return [dict(e) for es in self.stock.values() for e in es]
 
+    def _book(self, kind, rows):
+        tid = f"t{len(self.bookings) + 1}"
+        self.bookings[tid] = (kind, rows)
+        return tid
+
     def add_stock(self, product_id, amount, best_before: date | None, location_id):
-        self.stock.setdefault(product_id, []).append(
-            {"product_id": product_id, "amount": amount,
-             "best_before_date": best_before.isoformat() if best_before else None,
-             "location_id": location_id})
+        e = {"product_id": product_id, "amount": amount,
+             "best_before_date": best_before.isoformat() if best_before else None, "location_id": location_id}
+        self.stock.setdefault(product_id, []).append(e)
+        return self._book("add", [(e, amount)])
 
     def consume(self, product_id, amount):
         """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends)."""
-        left = amount
+        left, taken = amount, []
         kids = [p["id"] for p in self.objects("products") if p.get("parent_product_id") == product_id]
         for pid in [product_id, *kids]:
             entries = self.stock.get(pid, [])
@@ -117,8 +123,31 @@ class FakeGrocy:
                 take = min(left, entries[0]["amount"])
                 entries[0]["amount"] -= take
                 left -= take
+                taken.append((entries[0], take))
                 if entries[0]["amount"] <= 0:
                     entries.pop(0)
+        return self._book("consume", taken)
+
+    def undo(self, transaction_id):
+        """Grocy's booking undo: an add's stock comes off (refused once any of it was used), a use's goes back."""
+        from app.grocy import GrocyError
+        kind, rows = self.bookings.get(transaction_id, (None, []))
+        if kind == "add":
+            [(e, amount)] = rows
+            entries = self.stock.get(e["product_id"], [])
+            if not (any(x is e for x in entries) and e["amount"] >= amount):
+                kind = None  # some of it was used (or moved) since
+        if kind not in ("add", "consume"):  # unknown, already undone, or used since
+            raise GrocyError(f"undo {transaction_id} refused", 400, "This booking cannot be undone")
+        self.bookings[transaction_id] = ("undone", [])  # kept, so ids are never reused
+        if kind == "add":
+            entries[:] = [x for x in entries if x is not e]
+        for e, take in rows if kind == "consume" else []:
+            entries = self.stock.setdefault(e["product_id"], [])
+            if any(x is e for x in entries):
+                e["amount"] += take
+            else:
+                entries.append({**e, "amount": take})
 
     def transfer(self, product_id, amount, from_location, to_location):
         for e in self.stock.get(product_id, []):

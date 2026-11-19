@@ -101,7 +101,7 @@ def test_scan_manual_accepts_a_new_place(env):
     assert c.post("/api/scan/manual", data=form).status_code == 400
     add_place(g, "Basement")
     r = c.post("/api/scan/manual", data=form)
-    assert r.json()["status"] == "ok"
+    assert r.json()["status"] == "found" and r.json()["place"] == "Basement"
     assert g.get_object("products", r.json()["product_id"])["location_id"] == places(g)["Basement"]
     assert "Basement" in c.get("/scan").text
 
