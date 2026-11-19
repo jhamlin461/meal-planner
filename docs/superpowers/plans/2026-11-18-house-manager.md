@@ -18,6 +18,7 @@ REST API, pytest with fakes.
 ## Global Constraints
 
 - No new runtime dependencies; SQLite through stdlib `sqlite3`, the loop through `threading`.
+  (Exception: `pypdf` and `Pillow` were added for dish photos, owner-approved 2026-11-18.)
 - Theme tokens, verbatim: background `#383C45`, surface `#434954`, rail `#2E333A`, action `#5294E2`,
   needs-you-now `#E45E65`, due-soon `#F4B400`, text `#FFFFFF`, muted `rgba(255,255,255,.68)`. Midnight is the
   default; light theme is a per-device choice.
@@ -27,7 +28,8 @@ REST API, pytest with fakes.
   wraps inside the button. No all-caps labels; sentence case; buttons name their action ("Moved it", "Done").
 - Quiet hours default `22:00-07:00` (env `QUIET_HOURS`); default remind-at `09:00`; laundry repeats every 15 min,
   everything else every 120 min.
-- HA → app hooks require header `X-House-Secret: <HOOK_SECRET>`; wrong or missing → 403.
+- HA integration is the app's own WebSocket connection to HA plus states it pushes, with an admin long-lived
+  token; the `X-House-Secret` HA → app hooks were removed 2026-11-18.
 - Notification action ids: `HM:<done|snooze>:<kind>:<id>:<person_id>` with kind in `chore|task|battery`.
 - Reminder keys: `chore:<id>`, `task:<id>`, `battery:<id>`. Audience: `person:<id>` or `home`.
 - Grocy product group for supplies: `Household supplies`. Shopping lists: `Meal plan`, `Extras`, `Running low`.
