@@ -152,7 +152,8 @@ def web(tmp_path):
     return c, house, g
 
 
-@pytest.mark.parametrize("dollars,words", [(12.5, "Full, the best settings until $80 is used this month"),(83.2, "Economy — cheaper settings until the 1st"),
+@pytest.mark.parametrize("dollars,words", [(12.5, "Full, the best settings until $80 is used this month"),
+                                           (83.2, "Economy — cheaper settings until the 1st"),
                                            (100, "Paused until the 1st — using the free fallbacks")])
 def test_me_page_shows_this_months_ai_spend_and_mode(web, dollars, words):
     c, house, _ = web
