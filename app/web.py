@@ -736,11 +736,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return page(request, "recipes.html", recipes=rs, waiting=waiting)
 
     @app.get("/recipes/{rid}")
-    def recipe(request: Request, rid: int, servings: int | None = None):
-        return recipe_page(request, rid, servings)
+    def recipe(request: Request, rid: int, servings: int | None = None, made: str = ""):
+        note = "Made from the saved recipe text — the original page couldn't be reached." if made == "text" else None
+        return recipe_page(request, rid, servings, note=note)
 
     def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
-                    status_code: int = 200):
+                    status_code: int = 200, note: str | None = None):
         r = recipe_or_404(rid)
         base = float(r.get("base_servings") or 2)
         servings = max(1, servings or round(base))
@@ -757,12 +758,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat(),
-                    ai_free=ai_mode() == "free")
+                    ai_free=ai_mode() == "free", note=note)
 
     @app.post("/recipes/{rid}/make-table")
     def make_table_post(request: Request, rid: int):  # plain def: Claude takes a while, FastAPI threadpools it
         """Structure a recipe that has no table (its kept PDF, else its page, else its saved text) and save it."""
         r = recipe_or_404(rid)
+        if ai.mode() == "free":  # before fetching anything
+            return recipe_page(request, rid, error="The table can be made after the 1st.", status_code=409)
         uf = grocy.userfields("recipes", rid)
         pdf = settings.data_dir / "sources" / f"{rid}.pdf"  # where save_recipe keeps it; never a path from Grocy
         positions = grocy.objects("recipes_pos", recipe_id=rid)
@@ -772,14 +775,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         text = "\n".join([r["name"], "", "Ingredients:", *(f"- {x}" for x in lines), "", "Instructions:",
                           page_text(r.get("description") or "")])
         try:
-            table = make_table(ai, http, text, uf.get("source_url") or None,
+            table, fell_back = make_table(ai, http, text, uf.get("source_url") or None,
                                pdf.read_bytes() if uf.get("source_pdf") and pdf.is_file() else None)
         except AIPaused:
             return recipe_page(request, rid, error="The table can be made after the 1st.", status_code=409)
         except (AIError, ValueError) as e:
             return recipe_page(request, rid, error=f"Couldn't make the table: {e}", status_code=502)
         grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
-        return back(f"/recipes/{rid}")
+        return back(f"/recipes/{rid}" + ("?made=text" if fell_back else ""))
 
     @app.get("/recipes/{rid}/photo")
     def recipe_photo(rid: int, w: int = 800):

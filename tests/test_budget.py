@@ -721,3 +721,39 @@ def test_free_week_suggestions_count_brand_stock_toward_its_generic(fake_grocy_w
     g.add_stock(12, 1, date.today() + timedelta(days=1), None)
     picks = suggest(g, FakeAI(mode="free"), mon)
     assert picks[0].recipe_id == 2 and "Spinach" in picks[0].reason
+
+
+def table_app(tmp_path, ai, page=None):
+    """An app whose web fetches are recorded; `page` is served for every URL (None: the site is down)."""
+    g = FakeGrocy()
+    bootstrap(g)
+    fetched = []
+
+    def handler(r):
+        fetched.append(str(r.url))
+        return httpx.Response(200, text=page) if page else httpx.Response(503)
+    app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(handler)),
+                     Settings("", "", "", "KEY", None, 6, tmp_path, 3), PendingStore(tmp_path / "pending"),
+                     house=HouseStore(tmp_path / "house.db"))
+    rid = saved_recipe(g)
+    g.set_userfields("recipes", rid, {"source_url": "https://example.com/bread"})
+    return TestClient(app, cookies={"who": "kitchen"}), g, rid, fetched
+
+
+def test_make_the_table_in_free_mode_fetches_nothing(tmp_path):
+    c, g, rid, fetched = table_app(tmp_path, FakeAI(mode="free"), page="<p>Bread</p>")
+    r = c.post(f"/recipes/{rid}/make-table")
+    assert "The table can be made after the 1st" in r.text and fetched == []
+    assert g.userfields("recipes", rid)["cfe_table"] == ""
+
+
+def test_make_the_table_says_when_it_used_the_saved_text(tmp_path):
+    ai = FakeAI(draft=DRAFT.model_copy(update={"table": TABLE}))
+    c, g, rid, fetched = table_app(tmp_path, ai)
+    r = c.post(f"/recipes/{rid}/make-table")
+    assert fetched and "Bake it." in ai.seen_text and g.userfields("recipes", rid)["cfe_table"]
+    from html import unescape
+    assert "Made from the saved recipe text — the original page couldn't be reached." in unescape(r.text)
+    c2, g2, rid2, _ = table_app(tmp_path / "up", ai, page="<p>Bread from the page</p>")
+    r2 = c2.post(f"/recipes/{rid2}/make-table")
+    assert "Bread from the page" in ai.seen_text and "saved recipe text" not in r2.text

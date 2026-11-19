@@ -377,10 +377,11 @@ def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraf
     return draft, fetch_photo(http, photo_url(r.text, str(r.url))), tableless
 
 
-def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = None) -> CfeTable:
+def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = None) -> tuple[CfeTable, bool]:
     """"Make the table" for a saved recipe: read its kept PDF, else its web page, else `text` (its saved ingredients
-    and steps; also used when the page can't be fetched). Raises AIError (AIPaused in free mode), or ValueError when
-    Claude's table doesn't check out."""
+    and steps). Returns the table and whether `text` stood in for a page that couldn't be fetched. Raises AIError
+    (AIPaused in free mode), or ValueError when Claude's table doesn't check out."""
+    fell_back = False
     if pdf:
         draft = ai.structure_recipe(pdf=pdf)
     else:
@@ -389,10 +390,11 @@ def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = 
                 text = _recipe_text(ai, _get(http, url).text)
             except httpx.HTTPError:
                 log.warning("could not fetch %s; using the saved recipe", url, exc_info=True)
+                fell_back = True
         draft = ai.structure_recipe(text=text)
     if validate(draft.table):
         raise ValueError("the table Claude made doesn't check out; try again, or make it by hand with Edit table")
-    return draft.table
+    return draft.table, fell_back
 
 
 def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf: bytes | None) -> None:
