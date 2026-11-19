@@ -1,6 +1,7 @@
 """Today: what needs this person now, tonight's dinner, and what's coming up in the next few days."""
 from dataclasses import replace
 from datetime import date, datetime, time
+from types import SimpleNamespace
 from typing import Literal
 
 from app import reminders as rm
@@ -128,3 +129,42 @@ def today_view(grocy, house: HouseStore, who: Person | Literal["kitchen"], now: 
         note = "Nothing else is due in the next few days"
     return {"now_items": now_items, "tonight": _tonight(grocy, today), "coming": coming, "note": note,
             "ha_error": HA_WARNING if ha_down or house.flag("ha_error") else None}
+
+
+def summary(grocy, house: HouseStore, ha, now: datetime, warn_days: int = 3) -> dict:
+    """The numbers the Home Assistant sensors show (and /api/summary returns)."""
+    try:  # one HA call (2 s cap) for everyone, not one per person
+        home = ha.home_states(timeout=2) if ha is not None else None
+    except HAError:
+        home = None
+    shim = SimpleNamespace(home_states=lambda timeout=None: home) if home is not None else None
+    people = {}
+    for p in house.people():
+        v = today_view(grocy, house, p, now, ha=shim, warn_days=warn_days)
+        people[p.name] = {"now": len(v["now_items"]), "titles": [i.title for i in v["now_items"]]}
+    vol = grocy.volatile(warn_days)
+    use_soon = {int(r["product_id"]) for k in ("expired_products", "overdue_products", "due_products")
+                for r in vol.get(k) or []}
+    key = house.flag("laundry")
+    return {"people": people, "use_soon": len(use_soon), "running_low": len(vol.get("missing_products") or []),
+            "laundry_open": bool(key) and key in rm.open_items(grocy), "ha_ok": home is not None}
+
+
+def expiring(grocy, warn_days: int) -> dict:
+    """{"count", "message"}: expired and use-soon stock in one line ("Expired: …; Use soon: Milk (Thu)")."""
+    names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
+    vol = grocy.volatile(warn_days)
+
+    def label(r: dict, with_day: bool) -> str:
+        name = names.get(int(r["product_id"]), f"product {r['product_id']}")
+        try:
+            return name + (f" ({date.fromisoformat(str(r['best_before_date'])[:10]):%a})" if with_day else "")
+        except (KeyError, ValueError):
+            return name
+
+    expired = {int(r["product_id"]): label(r, False) for r in vol.get("expired_products") or []}
+    soon = {int(r["product_id"]): label(r, True)
+            for key in ("overdue_products", "due_products") for r in vol.get(key) or []
+            if int(r["product_id"]) not in expired}
+    msg = [f"{k}: {', '.join(v)}" for k, v in (("Expired", expired.values()), ("Use soon", soon.values())) if v]
+    return {"count": len(expired) + len(soon), "message": "; ".join(msg)}

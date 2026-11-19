@@ -54,6 +54,11 @@ class HA:
                      "channel": "House reminders", "ttl": 0, "priority": "high"},
         }, timeout=SEND_TIMEOUT)
 
+    def set_state(self, entity_id: str, state, attributes: dict) -> None:
+        """Create or update an entity's state (HA keeps it until restart; the app pushes it again every minute)."""
+        self._req("POST", f"/api/states/{entity_id}", json={"state": str(state), "attributes": attributes},
+                  timeout=SEND_TIMEOUT)
+
     def clear(self, service: str, tag: str) -> None:
         self._req("POST", f"/api/services/notify/{service}", json={"message": "clear_notification", "data": {"tag": tag}},
                   timeout=SEND_TIMEOUT)

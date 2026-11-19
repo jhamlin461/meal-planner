@@ -10,7 +10,6 @@ import threading
 from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Literal
 
 import anthropic
@@ -29,6 +28,7 @@ from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, va
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
+from app import ha_live
 from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
@@ -42,7 +42,7 @@ from app.nutrition import recipe_macros
 from app.setup_grocy import LOCATIONS, SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
-from app.today import _day, today_view
+from app.today import _day, expiring, summary, today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
@@ -205,7 +205,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     if ha is None and settings.ha_url:
         ha = HA(settings.ha_url, settings.ha_token)
     if settings.ha_url:
-        start_loop(lambda: (grocy, house, ha, settings))
+        start_loop(lambda: (grocy, house, ha, settings), also=ha_live.publish)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     env.filters["num"] = _fmt
@@ -222,7 +222,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         """No login, so refuse writes a browser says came from another site (a missing header is allowed: curl, HA)."""
         if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("sec-fetch-site") == "cross-site":
             return JSONResponse({"status": "error", "message": "cross-site request refused"}, status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method == "POST":
+            rm.WAKE.set()  # Done, Snooze, Bought, an edit: the reminder loop pushes HA's sensors now
+        return response
 
     def ai_mode() -> str:
         """This month's budget mode, from the meter (as app.ai.AI decides it)."""
@@ -1147,41 +1150,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/api/expiring")
     def api_expiring():
-        names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
-        vol = grocy.volatile(settings.expiry_warn_days)
-        def label(r: dict, with_day: bool) -> str:
-            name = names.get(int(r["product_id"]), f"product {r['product_id']}")
-            try:
-                return name + (f" ({date.fromisoformat(str(r['best_before_date'])[:10]):%a})" if with_day else "")
-            except (KeyError, ValueError):
-                return name
-
-        expired = {int(r["product_id"]): label(r, False) for r in vol.get("expired_products") or []}
-        soon = {int(r["product_id"]): label(r, True)
-                for key in ("overdue_products", "due_products") for r in vol.get(key) or []
-                if int(r["product_id"]) not in expired}
-        msg = [f"{k}: {', '.join(v)}" for k, v in (("Expired", expired.values()), ("Use soon", soon.values())) if v]
-        return {"count": len(expired) + len(soon), "message": "; ".join(msg)}
+        return expiring(grocy, settings.expiry_warn_days)
 
     @app.get("/api/summary")
     def api_summary():
-        """Read-only numbers for Home Assistant sensors (LAN only, like /api/expiring)."""
-        now = datetime.now()
-        try:  # one HA call (2 s cap) for everyone, not one per person
-            home = ha.home_states(timeout=2) if ha is not None else None
-        except HAError:
-            home = None
-        shim = SimpleNamespace(home_states=lambda timeout=None: home) if home is not None else None
-        people = {}
-        for p in house.people():
-            v = today_view(grocy, house, p, now, ha=shim, warn_days=settings.expiry_warn_days)
-            people[p.name] = {"now": len(v["now_items"]), "titles": [i.title for i in v["now_items"]]}
-        vol = grocy.volatile(settings.expiry_warn_days)
-        use_soon = {int(r["product_id"]) for k in ("expired_products", "overdue_products", "due_products")
-                    for r in vol.get(k) or []}
-        key = house.flag("laundry")
-        return {"people": people, "use_soon": len(use_soon), "running_low": len(vol.get("missing_products") or []),
-                "laundry_open": bool(key) and key in rm.open_items(grocy), "ha_ok": home is not None}
+        """Read-only numbers (what the app pushes to Home Assistant's sensor.house_* every minute)."""
+        return summary(grocy, house, ha, datetime.now(), settings.expiry_warn_days)
 
     return app
 
@@ -1193,4 +1167,7 @@ def main_app() -> FastAPI:
     ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
     http, store = httpx.Client(timeout=20), PendingStore(s.data_dir / "pending")
     start_worker(store, ai, http)  # collects batch reads (and, in free mode, reads queued imports after the 1st)
-    return create_app(Grocy(s.grocy_url, s.grocy_api_key), ai, http, s, store, house=house)
+    grocy, ha = Grocy(s.grocy_url, s.grocy_api_key), HA(s.ha_url, s.ha_token) if s.ha_url else None
+    if ha is not None:
+        ha_live.start(grocy, house, ha, s)  # phone taps and the washer, over HA's WebSocket
+    return create_app(grocy, ai, http, s, store, house=house, ha=ha)

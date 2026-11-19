@@ -290,6 +290,7 @@ class FakeHA:
         self.services: list[str] = []
         self.sent: list[dict] = []
         self.cleared: list[tuple] = []
+        self.pushed: dict[str, dict] = {}  # entity id -> {"state", "attributes"} set through the REST API
         self.down = False
 
     def _check(self):
@@ -320,3 +321,7 @@ class FakeHA:
     def clear(self, service, tag):
         self._check()
         self.cleared.append((service, tag))
+
+    def set_state(self, entity_id, state, attributes):
+        self._check()
+        self.pushed[entity_id] = {"state": str(state), "attributes": attributes}

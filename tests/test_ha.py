@@ -106,3 +106,17 @@ def test_notify_and_clear_wait_at_most_5_seconds():
     ha.clear("mobile_app_x", "chore:1")
     ha.home_states()
     assert asked == [5, 5, 15]
+
+
+def test_set_state_posts_state_and_attributes():
+    seen = {}
+
+    def h(req):
+        seen["path"], seen["body"] = req.url.path, json.loads(req.content)
+        return httpx.Response(201, json={})
+
+    make(h).set_state("sensor.house_use_soon", 3, {"friendly_name": "House: use soon"})
+    assert seen["path"] == "/api/states/sensor.house_use_soon"
+    assert seen["body"] == {"state": "3", "attributes": {"friendly_name": "House: use soon"}}
+    with pytest.raises(HAError):
+        make(lambda req: httpx.Response(401, text="no")).set_state("sensor.x", 1, {})

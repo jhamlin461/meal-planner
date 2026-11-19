@@ -17,6 +17,8 @@ class Settings:
     ha_url: str = ""
     ha_token: str = ""
     hook_secret: str = ""
+    washer_done_event: str = ""  # HA event entity whose event_type washing_is_complete means the load is done
+    washer_status: str = ""  # HA sensor whose change to initial/detecting means a new load started
     quiet_hours: tuple[time, time] = (time(22), time(7))
     ai_monthly_budget: float = 100  # dollars of Claude a calendar month; at this the app stops calling Claude
     ai_economy_at: float = 80  # from here to the budget, cheaper settings
@@ -41,6 +43,8 @@ def load_settings() -> Settings:
         ha_url=e("HA_URL", ""),
         ha_token=e("HA_TOKEN", ""),
         hook_secret=e("HOOK_SECRET", ""),
+        washer_done_event=e("WASHER_DONE_EVENT", ""),
+        washer_status=e("WASHER_STATUS", ""),
         quiet_hours=_quiet(e("QUIET_HOURS") or "22:00-07:00"),
         ai_monthly_budget=float(e("AI_MONTHLY_BUDGET") or 100),
         ai_economy_at=float(e("AI_ECONOMY_AT") or 80),

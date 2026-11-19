@@ -227,13 +227,13 @@ def test_create_app_starts_loop_only_with_ha_url(tmp_path, monkeypatch):
     from app.importer import PendingStore
     from tests.fakes import FakeAI
     started = []
-    monkeypatch.setattr(web, "start_loop", lambda fn: started.append(fn()))
+    monkeypatch.setattr(web, "start_loop", lambda fn, also: started.append((fn(), also)))
     g, house, ha, s, josh, cat = world(tmp_path)
     plain = Settings("", "", "", "KEY", None, 6, tmp_path, 3)
     web.create_app(g, FakeAI(), None, plain, PendingStore(tmp_path / "p"), house=house, ha=ha)
     assert started == []
     web.create_app(g, FakeAI(), None, s, PendingStore(tmp_path / "p"), house=house, ha=ha)
-    assert started == [(g, house, ha, s)]
+    assert started == [((g, house, ha, s), web.ha_live.publish)]
 
 
 class DeadCatHA(FakeHA):

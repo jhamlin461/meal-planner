@@ -2,7 +2,6 @@
 import logging
 import re
 import threading
-import time as clock
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -10,6 +9,7 @@ from app.ha import HAError
 from app.house import LOCK, HouseStore, Person, Reminder, by_grocy_user, gid
 
 log = logging.getLogger(__name__)
+WAKE = threading.Event()  # set after a write (Done, Snooze, Bought, a phone tap): the loop runs now, not in a minute
 ICONS = {"chore": "broom", "task": "calendar-check", "battery": "battery-sync-outline"}
 NAMED_ICONS = (("litter", "cat"), ("trash", "trash-can-outline"), ("laundry", "washing-machine"))
 
@@ -105,7 +105,8 @@ def tick(grocy, house: HouseStore, ha, settings, now: datetime) -> None:
 def _flag(house: HouseStore, errors: list[HAError]) -> None:
     for e in errors:
         log.warning("Home Assistant: %s", e)
-    house.set_flag("ha_error", f"Home Assistant unreachable: {errors[0]}"[:200] if errors else None)
+    # with the REST API fine, the live connection's own outage (ha_live) still counts
+    house.set_flag("ha_error", f"Home Assistant unreachable: {errors[0]}"[:200] if errors else house.flag("ha_live"))
 
 
 def _clear_finished(house: HouseStore, ha, keys: list[str], open_: dict) -> list[HAError]:
@@ -182,15 +183,19 @@ def _send_due(house: HouseStore, ha, open_: dict, home: dict[str, str], now: dat
     return errors
 
 
-def start_loop(app_state_fn, interval: int = 60) -> threading.Thread:
-    """Daemon thread: tick(*app_state_fn(), now) every `interval` seconds; failures are logged and the loop goes on."""
+def start_loop(app_state_fn, interval: int = 60, also=None) -> threading.Thread:
+    """Daemon thread: tick(*app_state_fn(), now), then also(*app_state_fn(), now), every `interval` seconds or as soon
+    as WAKE is set; failures are logged and the loop goes on."""
     def run():
         while True:
-            try:
-                tick(*app_state_fn(), datetime.now())
-            except Exception:
-                log.exception("reminder tick failed")
-            clock.sleep(interval)
+            for fn in (tick, also):
+                try:
+                    if fn:
+                        fn(*app_state_fn(), datetime.now())
+                except Exception:
+                    log.exception("reminder loop: %s failed", getattr(fn, "__name__", fn))
+            WAKE.wait(interval)
+            WAKE.clear()
 
     t = threading.Thread(target=run, name="reminders", daemon=True)
     t.start()
