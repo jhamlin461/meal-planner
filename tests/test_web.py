@@ -1447,6 +1447,10 @@ def test_recipe_page_leads_with_the_table(env):
     assert re.search(r'<img[^>]*alt="Brownies"', html)
     name = g.get_object("recipes", rid)["picture_file_name"]
     assert re.search(rf'<button class="recipe-thumb"[^>]*popovertarget="photo-full"', html)
+    # without popover support (iOS 16) the thumbnail opens the photo itself and the hidden copy stays hidden
+    assert re.search(rf'<button class="recipe-thumb"[^>]*data-href="/recipes/{rid}/photo[?]w=1600&amp;v={name}"', html)
+    css = c.get("/static/style.css").text
+    assert "[popover] { display: none; }" in css and "[popover]:popover-open { display: block; }" in css
     assert re.search(rf'<div id="photo-full" popover[^>]*>\s*<img src="/recipes/{rid}/photo\?w=1600&amp;v={name}"', html)
     assert html.index('class="recipe-thumb"') < html.index("<h1")  # the photo sits beside the name
     html = c.get(f"/recipes/{brownie_recipe(g)}").text  # no photo: no thumbnail, no broken image
@@ -1473,7 +1477,13 @@ def test_recipe_page_cross_off_hooks(env):
     g, ai, store, c, _ = env
     rid = brownie_recipe(g)
     html = c.get(f"/recipes/{rid}").text
-    assert f'data-cross-key="cross:{rid}"' in html
+    key = re.search(r'data-cross-key="(cross:\d+:[0-9a-f]{8})"', html)[1]
+    assert key.startswith(f"cross:{rid}:")
+    assert f'data-cross-key="{key}"' in c.get(f"/recipes/{rid}?servings=7").text  # same table, same crossings
+    form = chips(BROWNIE)
+    form["op_label"][0] = "brown"
+    c.post(f"/recipes/{rid}/table", data=form)
+    assert f'data-cross-key="{key}"' not in c.get(f"/recipes/{rid}").text  # an edited table starts clean
     cells = re.findall(r'<td class="cfe-(ingredient|op)"[^>]*data-cross="(\w+)"[^>]*>', html)
     assert len(cells) == 9 + 5 and ("ingredient", "i0") in cells and ("op", "o5") in cells
     for td in re.findall(r'<td class="cfe-(?:ingredient|op)"[^>]*>', html):

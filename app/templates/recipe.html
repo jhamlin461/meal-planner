@@ -3,7 +3,7 @@
 {% block title %}{{ r.name }}{% endblock %}
 {% block main_attrs %} class="wide" data-wakelock{% endblock %}
 {% block heading %}<div class="recipe-title">
-{%- if r.picture_file_name %}<button class="recipe-thumb" type="button" popovertarget="photo-full" aria-label="Show the photo larger"><img src="/recipes/{{ r.id }}/photo?w=200&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" width="64" height="64"></button>{% endif -%}
+{%- if r.picture_file_name %}<button class="recipe-thumb" type="button" popovertarget="photo-full" data-href="/recipes/{{ r.id }}/photo?w=1600&amp;v={{ r.picture_file_name }}" aria-label="Show the photo larger"><img src="/recipes/{{ r.id }}/photo?w=200&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" width="64" height="64"></button>{% endif -%}
 <h1 class="breakable">{{ r.name }}</h1></div>{% endblock %}
 {% block content %}
 {% if error %}<p class="card error" role="alert">{{ error }}</p>{% endif %}
@@ -18,7 +18,7 @@
   <span>servings</span>
 </form>
 {% if cfe %}
-{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols, cross="cross:" ~ r.id %}{% include "_cfe_table.html" %}{% endwith %}
+{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols, cross=cross %}{% include "_cfe_table.html" %}{% endwith %}
 <div class="cross-bar"><p class="muted">Tap a step or an ingredient to cross it off.</p><button class="btn" type="button" id="start-over">Start over</button></div>
 <details class="steps"><summary>Steps</summary><div class="prose">{{ (r.description or "")|safe }}</div></details>
 {% else %}

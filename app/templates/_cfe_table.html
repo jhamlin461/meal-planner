@@ -1,4 +1,4 @@
-{# `cross` (optional, a storage key): ingredient and step cells become toggles for crossing off while cooking (app.js) #}
+{# `cross` (optional, a storage key that changes when the table does): ingredient and step cells become toggles for crossing off while cooking (app.js) #}
 <div class="cfe-wrap" role="region" aria-label="Recipe table" tabindex="0"{% if cross %} data-cross-key="{{ cross }}"{% endif %}>
 <table class="cfe">
 {% for line in pre %}<tr><td class="cfe-pre" colspan="{{ ncols }}">{{ line }}</td></tr>

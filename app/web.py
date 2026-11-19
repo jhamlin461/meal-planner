@@ -1,4 +1,5 @@
 """Web UI: pantry, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
+import hashlib
 import hmac
 import itertools
 import logging
@@ -715,9 +716,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         info = {pid: {**grocy.userfields("products", pid), "name": products[pid]["name"]}
                 for pid in {int(p["product_id"]) for p in positions} if pid in products}
         cfe = _cfe(load_table(uf), scale)
+        table_hash = hashlib.sha1(uf.get("cfe_table", "").encode()).hexdigest()[:8]  # an edited table starts clean
         fallback = [] if cfe else [ingredient_text(i, scale) for i in position_ingredients(positions, products)]
         return page(request, "recipe.html", status_code, r=r, servings=servings, cfe=cfe, fallback=fallback,
-                    error=error,
+                    error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat())
 

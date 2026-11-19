@@ -168,6 +168,13 @@ document.querySelectorAll(".step-rows").forEach((list) => list.addEventListener(
   list.querySelectorAll(".chip input").forEach((b) => b.parentElement.classList.toggle("used", !b.checked && ticked.has(b.value)));
 }));
 
+// Recipe photo: without popover support the thumbnail opens the full photo itself.
+if (!HTMLElement.prototype.hasOwnProperty("popover")) {
+  document.querySelectorAll(".recipe-thumb[data-href]").forEach((b) => b.addEventListener("click", () => {
+    location.href = b.dataset.href;
+  }));
+}
+
 // Recipe table: tap (or Enter/Space on) a step or an ingredient to cross it off; kept per recipe on this device.
 // Storage may be missing (private mode): crossing off still works, it just isn't remembered.
 document.querySelectorAll("[data-cross-key]").forEach((wrap) => {
