@@ -2,8 +2,14 @@
 {% from "_icon.html" import icon %}
 {% block title %}{{ r.name }}{% endblock %}
 {% block main_attrs %} class="wide" data-wakelock{% endblock %}
-{% block heading %}<h1 class="breakable">{{ r.name }}</h1>{% endblock %}
+{% block heading %}<div class="recipe-title">
+{%- if r.picture_file_name %}<button class="recipe-thumb" type="button" popovertarget="photo-full" aria-label="Show the photo larger"><img src="/recipes/{{ r.id }}/photo?w=200&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" width="64" height="64"></button>{% endif -%}
+<h1 class="breakable">{{ r.name }}</h1></div>{% endblock %}
 {% block content %}
+{% if r.picture_file_name %}<div id="photo-full" popover class="photo-full">
+  <img src="/recipes/{{ r.id }}/photo?w=1600&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" loading="lazy">
+  <button class="btn" type="button" popovertarget="photo-full" popovertargetaction="hide">Close</button>
+</div>{% endif %}
 <form class="servings" method="get" aria-label="Servings">
   <a class="btn" href="?servings={{ [servings - 1, 1]|max }}" aria-label="Fewer servings">−</a>
   <input type="number" name="servings" min="1" value="{{ servings }}" inputmode="numeric" aria-label="Servings">

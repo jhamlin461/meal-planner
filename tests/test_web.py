@@ -1416,3 +1416,20 @@ def test_review_shows_found_photo(env):
     html = c.get(f"/import/{p.id}").text
     assert f'src="/import/{p.id}/photo"' in html and "No photo found" not in html
     assert c.get(f"/import/{p.id}/photo").content == _png()
+
+
+def test_recipe_page_leads_with_the_table(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    c.post(f"/recipes/{rid}/photo", files={"photo": ("a.png", _png(), "image/png")})
+    html = c.get(f"/recipes/{rid}").text
+    order = [html.index(s) for s in ('class="recipe-thumb"', 'class="servings"', 'class="cfe-wrap"', "Per serving",
+                                      "Add to plan", "Edit table", "Change photo")]
+    assert order == sorted(order), order
+    assert re.search(r'<img[^>]*alt="Brownies"', html)
+    name = g.get_object("recipes", rid)["picture_file_name"]
+    assert re.search(rf'<button class="recipe-thumb"[^>]*popovertarget="photo-full"', html)
+    assert re.search(rf'<div id="photo-full" popover[^>]*>\s*<img src="/recipes/{rid}/photo\?w=1600&amp;v={name}"', html)
+    assert html.index('class="recipe-thumb"') < html.index("<h1")  # the photo sits beside the name
+    html = c.get(f"/recipes/{brownie_recipe(g)}").text  # no photo: no thumbnail, no broken image
+    assert 'class="recipe-thumb"' not in html and "<img" not in html
