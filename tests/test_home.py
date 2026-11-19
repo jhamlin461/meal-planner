@@ -254,6 +254,7 @@ def test_delete_missing_is_404(hv):
 
 def test_home_sentences_and_no_middle_dot(hv):
     g, house, c, (pa, a), _ = hv
+    g.today = date.today()  # the app judges "due today" by the real clock; the fixture pins the fake to 2026-11-18
     g.create("chores", {"name": "Mop", "period_type": "daily", "next_execution_assigned_to_user_id": a})
     g.create("chores", {"name": "Dishes", "period_type": "daily", "assignment_type": "who-least-did-first",
                         "assignment_config": ""})
