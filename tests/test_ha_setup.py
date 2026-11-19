@@ -43,10 +43,9 @@ def test_creates_the_dashboard_when_missing():
     assert {k: create[k] for k in ("url_path", "title", "icon", "show_in_sidebar", "require_admin", "mode")} == {
         "url_path": "house-manager", "title": "House", "icon": "mdi:home-heart", "show_in_sidebar": True,
         "require_admin": False, "mode": "storage"}
+    # what HA's own Webpage dashboard stores
     assert save["url_path"] == "house-manager"
-    (view,) = save["config"]["views"]
-    assert view["type"] == "panel" and view["cards"][0]["type"] == "iframe"
-    assert view["cards"][0]["url"] == "https://house.tail1.ts.net"
+    assert save["config"] == {"strategy": {"type": "iframe", "url": "https://house.tail1.ts.net"}}
     assert "Added" in out and "packages" not in out  # nothing to migrate
 
 
@@ -62,6 +61,23 @@ def test_reuses_the_interim_dashboard_and_warns_about_the_yaml():
     assert upd["dashboard_id"] == "house_manager" and "url_path" not in upd and "mode" not in upd
     assert upd["title"] == "House" and upd["show_in_sidebar"] is True
     assert "Updated" in out and "packages/house.yaml" in out and "packages/meal_planner.yaml" in out
+    # the dashboard alone, or some other automation.house_*, is no sign of the YAML install
+    states = STATES + [{"entity_id": "automation.house_lights", "state": "on", "attributes": {}}]
+    code, out, _ = setup(FakeConn(results={"get_states": states, "lovelace/dashboards/list": [OLD]}))
+    assert code == 0 and "Updated" in out and "packages" not in out
+
+
+def test_a_dashboard_failure_still_reports_the_washer_and_the_yaml():
+    states = STATES + [{"entity_id": "sensor.meal_planner_expiring", "state": "0", "attributes": {}}]
+    c = FakeConn(results={"get_states": states, "lovelace/dashboards/list": []}, fail={"lovelace/dashboards/create"})
+    code, out, _ = setup(c)
+    assert code == 2 and f"WASHER_DONE_EVENT={DONE}" in out.splitlines()
+    assert "House sidebar" in out and "Unauthorized" in out and "packages/house.yaml" in out
+
+
+def test_no_answer_does_not_hang():
+    code, out, _ = setup(FakeConn(silent={"get_states"}))
+    assert code == 1 and "no answer" in out
 
 
 def test_no_app_url_skips_the_sidebar():

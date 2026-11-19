@@ -27,14 +27,15 @@ ask() {
   done
   put "$key" "$v"
 }
-# washer KEY "what": the one entity ha_setup found is used; none or several = ask (blank = no laundry reminders)
+# washer KEY "what": the one entity ha_setup found is used; none or several = ask ("none" = no laundry reminders)
 washer() {
   local found n
   found=$(grep "^$1=" <<<"$ha_out" | cut -d= -f2- || true)
   n=$(grep -c . <<<"$found" || true)
   if [[ $n == 1 ]]; then put "$1" "$found"; echo "$2: $found"; return; fi
   [[ $n == 0 ]] || echo "  Found several: $(tr '\n' ' ' <<<"$found")"
-  ask "$1" "$2 (blank = no laundry reminders)"
+  ask "$1" "$2 (none = no laundry reminders)"
+  [[ $(get "$1") != none ]] || put "$1" ""
 }
 ha_ok() { curl -fsS -o /dev/null -H "Authorization: Bearer $2" "${1%/}/api/"; }
 grocy_ok() { curl -fsS -o /dev/null -H "GROCY-API-KEY: $1" "$GROCY/api/system/info"; }
@@ -102,12 +103,11 @@ rc=0
 ha_out=$(docker compose run --rm -T -e APP_URL="${url:-}" mealplanner python -m app.ha_setup) || rc=$?
 ha_out=${ha_out//$'\r'/}
 grep -v '^WASHER_' <<<"$ha_out" | sed 's/^/  /' || true
-if (( rc == 0 )); then
+if (( rc == 0 || rc == 2 )); then   # 2: the washer search worked, only the sidebar dashboard failed
   washer WASHER_DONE_EVENT "Washer 'finished' event entity"
   washer WASHER_STATUS "Washer status sensor"
-else
-  echo "  Home Assistant setup didn't finish; fix that and re-run setup.sh."
 fi
+(( rc == 0 )) || echo "  Home Assistant setup didn't finish; fix that and re-run setup.sh."
 
 docker compose up -d --force-recreate mealplanner   # pick up the new .env
 docker compose run --rm mealplanner python -m app.setup_grocy

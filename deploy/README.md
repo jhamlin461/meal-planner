@@ -78,15 +78,16 @@ The app talks to Home Assistant itself, with the token `setup.sh` asks for: noth
 1. Both phones: install the HA Companion app, allow notifications, stay on Tailscale, and set the app's External URL
    to `https://homeassistant.<tailnet>.ts.net` (HA is also on http, port 80). Pushes arrive anywhere; Done and
    Snooze taps need HA reachable, so the External URL is what makes them work away from home.
-2. Create a long-lived access token for the app: in HA, open your profile (an admin user) -> **Security** ->
-   Long-lived access tokens -> Create.
+2. Create a long-lived access token for the app. **The token must belong to an admin user**: HA only lets admins
+   listen for phone taps, watch the washer, add dashboards and set sensors. Log in to HA as an admin, open your
+   profile -> **Security** -> Long-lived access tokens -> Create.
 3. Run `setup.sh` (re-run it if the app is already installed) and give it HA's URL and the token. After checking
    them it runs `python -m app.ha_setup` inside the app container (proving the container reaches HA), which:
    - finds the washer (an `event.*washer*` entity reporting `washing_is_complete`, and
      `sensor.*washer*current_status`) and stores them in `deploy/.env` as `WASHER_DONE_EVENT` / `WASHER_STATUS`;
-     when it finds none or several it asks (blank = no laundry reminders);
-   - adds **House** (`mdi:home-heart`) to HA's sidebar: a dashboard showing the app's HTTPS URL full screen
-     (updated, not duplicated, when it already exists).
+     when it finds none or several it asks (`none` = no laundry reminders);
+   - adds **House** (`mdi:home-heart`) to HA's sidebar: a Webpage dashboard showing the app's HTTPS URL (updated,
+     not duplicated, when it already exists). If only this step fails, the washer settings are still saved.
 4. In the app, open Me -> People and add each person (their Grocy user, HA person and phone).
 5. Test scanning inside the HA app. If the camera is blocked there, Scan's **Open scanner in browser** link opens
    it in the browser.
