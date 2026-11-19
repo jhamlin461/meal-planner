@@ -43,7 +43,7 @@ from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, 
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.qty import is_packaging, parse_qty
 from app.nutrition import recipe_macros
-from app.inventory import (add_place, best_before, clear_stock, default_place, kits, move_family, places,
+from app.inventory import (add_place, best_before, clear_stock, default_place, free_stock, kits, move_family, places,
                            own_free, remove_place, remove_product, rename_place, rows, set_total, stock_lines, use,
                            why_not_remove)
 from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
@@ -813,7 +813,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/scan")
     def scan(request: Request):
         return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=list(places(grocy)),
-                    default_location=default_place(grocy))
+                    default_location=default_place(grocy), ai_free=ai.mode() == "free")
 
     def is_supply(p: dict) -> bool:
         return bool(p.get("product_group_id")) and str(p["product_group_id"]) == str(supplies_group(grocy))
@@ -846,7 +846,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         p = product_or_404(r.product_id)
         m = msr.of(grocy, ai, p)
         package = _num(grocy.userfields("products", r.product_id).get("package_amount"))
-        left = grocy.stock_amounts().get(r.product_id, 0.0)
+        left = free_stock(grocy, house).get(r.product_id, 0.0)  # no meal kit's: what Inventory shows and Use takes
         return {"status": "found", "product_id": r.product_id, "product": r.name, "generic": r.generic_name,
                 "measure": m.word, "label": msr.label(m), "package": package,
                 "left": f"{msr.show(left, m)} left" if left > 0 else "None left",
@@ -946,16 +946,24 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                         generic: str = Form(""), stock_unit: Literal["g", "ml", "piece"] = Form("g"),
                         package_amount: str = Form(""), location: str = Form(""),
                         category: Literal["food", "supply"] = Form("food")):
-        """Free mode: a new product from the scan screen's form, created as Claude's guess would have been."""
+        """A new product from the scan screen's form. Free mode: as typed, created as Claude's guess would have been;
+        otherwise Claude estimates the stock unit, package size and measure from the name (any typed unit and size
+        are ignored)."""
         location = location or default_place(grocy)
         if not (code.strip() and name.strip() and generic.strip()) or location not in places(grocy):
             msg = "Fill in the name, what it counts as and where it's kept."
             return JSONResponse({"status": "error", "message": msg}, status_code=400)
-        if package_amount.strip() and _num(package_amount) is None:
+        free = ai.mode() == "free"
+        if free and package_amount.strip() and _num(package_amount) is None:
             return JSONResponse({"status": "error", "message": "The package size must be a number above 0."},
                                 status_code=400)
-        r = create_manual(grocy, http, code.strip(), name.strip(), generic.strip(), stock_unit, _num(package_amount),
-                          location, category)
+        try:
+            r = create_manual(grocy, http, code.strip(), name.strip(), generic.strip(), stock_unit,
+                              _num(package_amount), location, category, ai=None if free else ai)
+        except AIPaused:  # paused since the page opened: the form again, with the unit and size
+            return {"status": "manual", "code": code.strip(), "name": name.strip()}
+        except AIError as e:
+            return JSONResponse({"status": "error", "message": str(e)}, status_code=502)
         return found(r)
 
     class RelinkIn(BaseModel):
@@ -1190,19 +1198,27 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         """Rows whose amount the editor changed: their positions take it, in the stock unit through a known
         conversion, else saved without one for the estimate to fill in (importer.fill_estimates). A row finds its
         position by the line saved with it (save_recipe's note), never by order: Make the table may order rows
-        differently. A row no position or several match is left alone."""
+        differently (a recipe's first table read each note as written: "2 Tbsp. butter" is the row "2 tbsp butter").
+        A row no position or several match is left alone. Every matched position's note becomes its row's line, so
+        stock_lines keeps finding the row (its packets and card wording)."""
         positions = grocy.objects("recipes_pos", recipe_id=rid)
         for a, b in zip(old.ingredients, new.ingredients):
-            if (a.qty, a.unit) != (b.qty, b.unit):
-                same = [p for p in positions if p.get("note") == line_text(a, 1)]
-                if len(same) != 1:
-                    log.info("recipe %s: no single position for %r; its stock amount is left", rid, line_text(a, 1))
-                    continue
-                pos = same[0]
+            was, moved = line_text(a, 1), (a.qty, a.unit) != (b.qty, b.unit)
+            same = [p for p in positions if p.get("note") == was] or [
+                p for p in positions if p.get("note") and line_text(_ingredient(p["note"]), 1) == was]
+            if len(same) != 1:
+                if moved:
+                    log.info("recipe %s: no single position for %r; its stock amount is left", rid, was)
+                continue
+            pos, up = same[0], {}
+            if pos.get("note") != line_text(b, 1):
+                up["note"] = line_text(b, 1)
+            if moved:
                 amount = stock_amount_for(grocy, int(pos["product_id"]), b.qty, b.unit)
-                grocy.update("recipes_pos", int(pos["id"]), {
-                    "amount": amount or 0, "note": line_text(b, 1),
-                    "variable_amount": "" if amount is not None else needs_estimate(b).get("variable_amount", "")})
+                up |= {"amount": amount or 0,
+                       "variable_amount": "" if amount is not None else needs_estimate(b).get("variable_amount", "")}
+            if up:
+                grocy.update("recipes_pos", int(pos["id"]), up)
 
     # ---- import -------------------------------------------------------------------------------------------------
     @app.get("/import")
@@ -1531,11 +1547,14 @@ def main_app() -> FastAPI:
     ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
     http, store = httpx.Client(timeout=20), PendingStore(s.data_dir / "pending")
     grocy, ha = Grocy(s.grocy_url, s.grocy_api_key), HA(s.ha_url, s.ha_token) if s.ha_url else None
+    setup = None
     try:  # an update brings new userfields (Grocy refuses unknown ones); bootstrap only adds what is missing
         bootstrap(grocy)
     except Exception:
-        log.warning("could not set up Grocy; starting anyway (tried again on the next start)", exc_info=True)
-    start_worker(store, ai, http, grocy)  # batch reads, queued imports after the 1st, amounts saved without one
+        log.warning("could not set up Grocy; starting anyway (the worker tries again)", exc_info=True)
+        setup = lambda: bootstrap(grocy)  # noqa: E731
+    # batch reads, queued imports after the 1st, amounts saved without one; the setup until it succeeds
+    start_worker(store, ai, http, grocy, setup=setup)
     if ha is not None:
         ha_live.start(grocy, house, ha, s)  # phone taps and the washer, over HA's WebSocket
     return create_app(grocy, ai, http, s, store, house=house, ha=ha)

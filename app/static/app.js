@@ -282,6 +282,7 @@ if (video) {
   function openManual(name, paused) {
     manual.reset();
     manual.elements.namedItem("name").value = name || "";
+    $("manual-size").hidden = !paused;  // Claude estimates the unit and size unless AI is paused
     $("manual-note").textContent = paused ? `AI is paused until the 1st, so tell me about barcode ${code}.`
       : `Barcode ${code}.`;
     show("manual");

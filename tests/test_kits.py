@@ -233,6 +233,15 @@ def test_scan_use_takes_our_stock_not_the_kit_and_undoes(env):
     assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 2
 
 
+def test_scan_left_counts_our_stock_not_the_kit(env):
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    kit_and_ours(g, c, rid, p)
+    g.create("product_barcodes", {"product_id": p["chops"], "barcode": "777"})
+    r = c.post("/api/scan/lookup", json={"code": "777"}).json()
+    assert r["left"] == "2 left"  # as Inventory shows it, and as much as Use can take
+
+
 def test_set_total_leaves_the_kit_whole(env):
     """Review Focus 3 with a kit: our stock becomes what was typed; the kit's is not touched."""
     g, house, _, _, c = env

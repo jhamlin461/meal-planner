@@ -364,6 +364,18 @@ def test_recipe_without_a_table_shows_its_own_lines_or_measures(env):
         (2, "cup", "flour, sifted"), (0.5, "cup", "Sugar"), (None, "", "Salt"), (2, "tbsp", "Oil")]
 
 
+def test_first_table_save_brings_the_positions_lines_into_step(env):
+    """The editor reads a tableless recipe's lines as rows; saving keeps each position's note equal to its row's line,
+    so stock_lines still finds the row (its packets and card wording)."""
+    g, _, _, c, _ = env
+    butter = product(g, "Butter")
+    rid = g.create("recipes", {"name": "Toast", "base_servings": 1})
+    pos = g.create("recipes_pos", {"recipe_id": rid, "product_id": butter, "amount": 30, "note": "2 Tbsp. butter"})
+    c.post(f"/recipes/{rid}/table", data={"op_id": [""], "op_label": ["spread"], "op_in_0": ["i0"], "action": "save"})
+    assert g.get_object("recipes_pos", pos)["note"] == "2 tbsp butter"
+    assert g.get_object("recipes_pos", pos)["amount"] == 30  # the amount itself did not change
+
+
 def test_recipe_invalid_table_falls_back(env):
     g, _, _, c, _ = env
     rid = brownie_recipe(g)
@@ -2077,15 +2089,39 @@ def test_main_app_sets_up_grocy_before_the_worker_and_starts_without_it(monkeypa
     monkeypatch.setattr(web, "load_settings", lambda: Settings("http://grocy.invalid", "k", "", "", None, 6, tmp_path, 3))
     monkeypatch.setattr(web.anthropic, "Anthropic", lambda: None)
     monkeypatch.setattr(web, "bootstrap", lambda grocy: calls.append(("bootstrap", type(grocy).__name__)))
-    monkeypatch.setattr(web, "start_worker", lambda *a: calls.append(("worker",)))
+    monkeypatch.setattr(web, "start_worker", lambda *a, setup=None: calls.append(("worker", setup)))
     web.main_app()
-    assert calls == [("bootstrap", "Grocy"), ("worker",)]  # new userfields exist before anything writes them
+    assert calls == [("bootstrap", "Grocy"), ("worker", None)]  # new userfields exist before anything writes them
 
     def down(grocy):
+        calls.append(("down",))
         raise GrocyError("Grocy is down")
     monkeypatch.setattr(web, "bootstrap", down)
     calls.clear()
-    assert web.main_app() is not None and calls == [("worker",)]  # the app still starts
+    assert web.main_app() is not None and calls[0] == ("down",) and calls[1][0] == "worker"  # the app still starts
+    with pytest.raises(GrocyError):
+        calls[1][1]()  # the worker is handed the setup to try again
+    assert calls[2] == ("down",)
+
+
+def test_worker_retries_setup_until_it_succeeds_once(monkeypatch):
+    from app import importer
+    ticks, tries = [], []
+    done = threading.Event()
+
+    def tick(*a):
+        ticks.append(1)
+        if len(ticks) >= 5:
+            done.set()
+            threading.Event().wait()  # parked: the daemon thread never ticks again
+
+    def setup():
+        tries.append(1)
+        if len(tries) < 3:
+            raise GrocyError("Grocy is down")
+    monkeypatch.setattr(importer, "tick", tick)
+    importer.start_worker(None, None, None, None, interval=0, setup=setup)
+    assert done.wait(5) and len(tries) == 3  # failed twice, then done: never tried again
 
 
 def _rice(g, name="Rice", unit="g", **uf):

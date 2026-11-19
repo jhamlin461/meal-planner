@@ -171,18 +171,25 @@ def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -
 
 
 def create_manual(grocy, http: httpx.Client, code: str | None, name: str, generic: str, stock_unit: str,
-                  package_amount: float | None, location: str, category: str) -> Resolved:
-    """Free mode: the product a form describes (the scan screen's, or the import review's with no barcode),
-    created as resolve() would from Claude's guess (shelf life from the generic it joins, else a week; nutrition
-    from Open Food Facts when it has the code)."""
+                  package_amount: float | None, location: str, category: str, ai=None) -> Resolved:
+    """The product a form describes (the scan screen's, or the import review's with no barcode), created as
+    resolve() would from Claude's guess (shelf life from the generic it joins, else a week; nutrition from Open Food
+    Facts when it has the code). Free mode (`ai` None): the typed unit and size, the owner's. With `ai`: Claude
+    estimates the unit, size, measure and shelf life from the name; the form's generic, place and kind stand."""
     if code and grocy.product_by_barcode(code):  # scanned twice before saving
         return resolve(grocy, None, http, code)
     parent = _generic_named(grocy, generic)
+    nutrition = _nutrition(off_lookup(code, http) or {}) if code else {}
+    if ai is not None:
+        g = ai.guess_product({"name": name}, generic_choices(grocy), list(places(grocy)))
+        g = g.model_copy(update={"generic_name": parent["name"] if parent else generic,
+                                 "is_new_generic": parent is None, "location": location, "category": category})
+        return _create(grocy, g, name, code, nutrition, "estimate")
     days = int(float(parent.get("default_best_before_days") or 7)) if parent else 7
     g = ProductGuess.model_construct(generic_name=parent["name"] if parent else generic, is_new_generic=parent is None,
                                      stock_unit=stock_unit, package_amount=package_amount, location=location,
                                      best_before_days=days, g_per_unit=None, category=category)
-    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}) if code else {}, "owner")
+    return _create(grocy, g, name, code, nutrition, "owner")
 
 
 def relink(grocy, product_id: int, generic_name: str) -> None:

@@ -70,9 +70,12 @@
     <label class="field"><span>Name</span><input name="name" required data-focus></label>
     <label class="field"><span>Counts as</span><input name="generic" list="generics" required autocomplete="off"></label>
     <p class="hint">Pick one you already have, or type a new one.</p>
-    <div class="fields pairs">
+    {# AI paused only: what it's counted in and its size; otherwise Claude estimates them from the name #}
+    <div class="fields pairs" id="manual-size"{% if not ai_free %} hidden{% endif %}>
       <label class="field"><span>Counted in</span><select name="stock_unit"><option value="g">Grams</option><option value="ml">Millilitres</option><option value="piece">Pieces</option></select></label>
       <label class="field"><span>Package size</span><input name="package_amount" type="number" min="0" step="any" inputmode="decimal"></label>
+    </div>
+    <div class="fields pairs">
       <label class="field"><span>Kept in</span><select name="location">{% for l in locations %}<option{% if l == default_location %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
       <label class="field"><span>Kind</span><select name="category"><option value="food">Food</option><option value="supply">Household supply</option></select></label>
     </div>

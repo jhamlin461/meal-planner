@@ -186,8 +186,31 @@ def test_manual_and_photo_return_found_without_adding(env):
                files={"image": ("p.jpg", b"\xff\xd8jpeg", "image/jpeg")}).json()
     assert r["status"] == "found" and r["created"] and r["generic"] == "Beans" and r["package"] == 400
     assert r["place"] == "Pantry" and r["left"] == "None left" and r["product_id"] not in g.stock
+    ai.mode_ = "free"  # paused: the form says what it is counted in and its size
     form = {"code": "111", "name": "Jar of jam", "generic": "Jam", "stock_unit": "g", "package_amount": "300",
             "location": "Counter", "category": "food"}
     r = c.post("/api/scan/manual", data=form).json()
     assert r["status"] == "found" and r["created"] and r["package"] == 300 and r["place"] == "Counter"
     assert r["product_id"] not in g.stock
+    assert g.userfields("products", r["product_id"])["package_source"] == "owner"
+
+
+def test_manual_form_asks_claude_for_unit_size_and_measure_outside_free_mode(env):
+    g, ai, c = env
+    ai.guess = ProductGuess(generic_name="Preserves", is_new_generic=True, stock_unit="g", package_amount=340,
+                            location="Pantry", best_before_days=365, g_per_unit=1, category="food", measure="jars",
+                            measure_factor=340)
+    html = c.get("/scan").text
+    form = html[html.index('<form id="manual"'):html.index("</form>", html.index('<form id="manual"'))]
+    assert '<div class="fields pairs" id="manual-size" hidden>' in form  # not asked: Claude estimates them
+    assert all(f'name="{n}"' in form for n in ("name", "generic", "location", "category"))
+    r = c.post("/api/scan/manual", data={"code": "111", "name": "Jar of jam", "generic": "Jam",
+                                         "location": "Counter", "category": "food"}).json()
+    assert r["status"] == "found" and r["generic"] == "Jam" and r["place"] == "Counter" and r["package"] == 340
+    assert r["measure"] == "jars"
+    uf = g.userfields("products", r["product_id"])
+    assert (uf["package_source"], uf["measure_source"]) == ("estimate", "estimate")
+    ai.mode_ = "free"
+    html = c.get("/scan").text
+    form = html[html.index('<form id="manual"'):html.index("</form>", html.index('<form id="manual"'))]
+    assert '<div class="fields pairs" id="manual-size">' in form and 'name="package_amount"' in form

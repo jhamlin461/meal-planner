@@ -562,12 +562,20 @@ def _collect(store: PendingStore, ai, bid: str, pids: list[str]) -> None:
         store.save(p)
 
 
-def start_worker(store: PendingStore, ai, http, grocy=None, interval: int = 60) -> threading.Thread:
-    """Daemon thread running tick() every `interval` seconds; failures are logged and it goes on."""
+def start_worker(store: PendingStore, ai, http, grocy=None, interval: int = 60, setup=None) -> threading.Thread:
+    """Daemon thread running tick() every `interval` seconds; failures are logged and it goes on. `setup` (the
+    start's Grocy bootstrap, when it failed) is tried before each tick until it succeeds once."""
     tried: dict[str, float] = {}  # failed estimates, kept for this run of the app
 
     def run():
+        todo = setup
         while True:
+            if todo is not None:
+                try:
+                    todo()
+                    todo = None
+                except Exception:
+                    log.warning("could not set up Grocy; trying again", exc_info=True)
             try:
                 tick(store, ai, http, grocy, tried)
             except Exception:

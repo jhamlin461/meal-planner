@@ -433,7 +433,9 @@ def test_a_tableless_import_saves_ingredients_and_steps(tmp_path):
     assert len(grocy.objects("recipes_pos", recipe_id=rid)) == 3
     assert "<li>Melt the butter.</li>" in grocy.get_object("recipes", rid)["description"]
     html = c.get(f"/recipes/{rid}").text  # no conversions in free mode: the recipe's own amounts, never "0 g"
-    assert "1 can Tomatoes" in html and "2 tbsp Butter" in html and "1 Onion" in html and "0 g Butter" not in html
+    assert "<li>1 can crushed tomatoes</li>" in html and "<li>2 tbsp butter</li>" in html
+    assert "<li>1 onion, diced</li>" in html
+    assert "0 g" not in html.split("Per serving")[0]  # the recipe's own lines, never grams
 
 
 def test_free_matching_uses_plain_normalised_names():
