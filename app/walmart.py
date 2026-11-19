@@ -93,14 +93,15 @@ def refine(grocy, ai, http, pid: int, link: str, item_id: str) -> None:
         uf, stock = grocy.userfields("products", pid), stock_unit(grocy, p)
         r = ai.read_walmart(p["name"], stock, text)
         new = {}
-        if r.package_amount and r.package_amount > 0 and (not uf.get("package_amount") or uf.get("package_source") != "owner"):
+        mine = ("estimate", "link")  # a value with no recorded source predates sources: the owner's, so it stays
+        if r.package_amount and r.package_amount > 0 and (not uf.get("package_amount") or uf.get("package_source") in mine):
             new |= {"package_amount": r.package_amount, "package_source": "link"}
         if r.grams_per_piece and r.grams_per_piece > 0 and stock == "piece" and (
-                not uf.get("g_per_unit") or uf.get("package_source") != "owner"):
+                not uf.get("g_per_unit") or uf.get("package_source") in mine):
             new["g_per_unit"] = r.grams_per_piece
         m = fixed(uf.get("measure"), r.measure_factor, stock) if uf.get("measure") else None
         # fixed() keeps a kitchen measure's own constant: that is not the link's value, so no "link" stamp
-        if m and uf.get("measure_source") != "owner" and m.factor == float(r.measure_factor) and m.factor != _num(
+        if m and (not uf.get("measure_factor") or uf.get("measure_source") in mine) and m.factor == float(r.measure_factor) and m.factor != _num(
                 uf.get("measure_factor")):
             new |= {"measure_factor": m.factor, "measure_source": "link"}
         if new:

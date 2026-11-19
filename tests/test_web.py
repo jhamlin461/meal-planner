@@ -338,8 +338,30 @@ def test_recipe_macros_per_serving(env):
     html = c.get(f"/recipes/{rid}").text
     assert "364 kcal" in html and "these figures run low" not in html
     # no cfe_table userfield: fallback list + steps + edit link
-    assert "200 g Flour" in html and "<li>Knead</li>" in html and f'href="/recipes/{rid}/table"' in html
-    assert 'class="cfe"' not in html
+    assert "<li>Knead</li>" in html and f'href="/recipes/{rid}/table"' in html
+    assert 'class="cfe"' not in html and "200 g" not in html  # no measure yet: the name alone, never grams
+
+
+def test_recipe_without_a_table_shows_its_own_lines_or_measures(env):
+    g, _, _, c, _ = env
+    i = ids(g)
+    flour, sugar, salt, oil = (product(g, n) for n in ("Flour", "Sugar", "Salt", "Oil"))
+    g.set_userfields("products", sugar, {"measure": "cups", "measure_factor": 200})
+    rid = g.create("recipes", {"name": "Dough", "base_servings": 2})
+    for pid, amount, note, marker in ((flour, 250, "2 cup flour, sifted", ""), (sugar, 100, "", ""),
+                                      (salt, 0, "", ""), (oil, 0, "", "2 tbsp")):
+        g.create("recipes_pos", {"recipe_id": rid, "product_id": pid, "amount": amount, "qu_id": i.unit["g"],
+                                 "note": note, "variable_amount": marker})
+    html = c.get(f"/recipes/{rid}?servings=4").text
+    assert re.findall(r"<li>([^<]*)</li>", html[html.index("<h2>Ingredients"):])[:4] == \
+        ["4 cup flour, sifted", "1 cup Sugar", "Salt", "4 tbsp Oil"]
+    listed = html[html.index("<h2>Ingredients"):]
+    assert not re.search(r"\d g(?![a-z])", listed[:listed.index("</ul>")])
+    c.post(f"/recipes/{rid}/table", data={"op_id": [""], "op_label": ["mix"], "op_in_0": ["i0", "i1", "i2", "i3"],
+                                          "action": "save"})  # the editor starts from the same words
+    t = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    assert [(x.qty, x.unit, x.name) for x in t.ingredients] == [
+        (2, "cup", "flour, sifted"), (0.5, "cup", "Sugar"), (None, "", "Salt"), (2, "tbsp", "Oil")]
 
 
 def test_recipe_invalid_table_falls_back(env):
@@ -1782,7 +1804,7 @@ def test_recipe_page_reads_amount_markers_safely(env):
                       None, None, need_table=False)
     pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
     for p, mark in zip(pos, ("1/2 cup", "some", "3 cup")):  # hand-edited in Grocy; the egg has a real amount
-        g.update("recipes_pos", p["id"], {"variable_amount": mark})
+        g.update("recipes_pos", p["id"], {"variable_amount": mark, "note": ""})  # no line: the marker shows
     r = c.get(f"/recipes/{rid}")
     assert r.status_code == 200 and "1/2 cup Flour" in r.text and "2 Egg" in r.text
     assert "3 cup" not in r.text and "0 g Salt" not in r.text and "some" not in r.text
@@ -2023,6 +2045,22 @@ def test_a_packet_typed_as_the_unit_is_refused_on_the_row(env):
     assert g.userfields("recipes", rid)["doubts"]  # not saved
 
 
+def test_a_doubted_row_already_in_packets_saves_with_only_products_picked(env):
+    """Review Focus 1: the row's stored unit is posted back as shown; only a change to a packaging word is refused."""
+    g, ai, store, c, _ = env
+    d = soup_draft()
+    t = d.table.model_copy(update={"ingredients": [d.table.ingredients[0],
+                                                   Ingredient(qty=1, unit="packet", name="dragon egg")]})
+    p = store.new("https://example.com/soup")
+    store.save(p.model_copy(update={"status": "ready", "draft": d.model_copy(update={"table": t}), "doubts": DOUBTS}))
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    html = c.get(f"/import/{p.id}").text
+    r = c.post(f"/import/{p.id}", data=review_form(product_0=flour, product_1=egg, **amount_inputs(html)),
+               follow_redirects=False)
+    assert amount_inputs(html)["unit_1"] == "packet" and r.status_code == 303 and len(g.objects("recipes")) == 1
+
+
 @pytest.mark.parametrize("junk", ["{}", "[1, 2]", '[{"ref": 3}]', "not json"])
 def test_doubts_that_are_not_a_list_of_doubts_are_none(env, junk):
     g, ai, store, c, _ = env
@@ -2066,12 +2104,10 @@ def test_link_refines_estimated_package_and_measure(env):
     ai.walmart = WalmartRead(package_amount=907, grams_per_piece=None, measure_factor=190)
     pid = _rice(g, "Rice", package_amount=500, package_source="estimate", measure="cups", measure_factor=200,
                   measure_source="estimate")
-    blank = _rice(g, "Rice 2", measure="cups", measure_factor=200)  # no sources: counts as estimates
-    assert _link(c, pid).status_code == 200 and _link(c, blank).status_code == 200
+    assert _link(c, pid).status_code == 200
     uf = g.userfields("products", pid)
     assert (float(uf["package_amount"]), uf["package_source"], float(uf["measure_factor"]), uf["measure_source"],
             uf["measure"], uf["walmart_item_id"]) == (907, "link", 190, "link", "cups", "10450114")
-    assert float(g.userfields("products", blank)["measure_factor"]) == 190
     assert ai.walmart_reads[0] == ("Rice", "g", "Great Value Long Grain White Rice 32 oz")
     # a blank package size is filled, and grams per piece land in g_per_unit for a piece product
     ai.walmart = WalmartRead(package_amount=12, grams_per_piece=55, measure_factor=None)
@@ -2092,6 +2128,25 @@ def test_link_never_overwrites_owner_values(env):
     assert (float(uf["package_amount"]), uf["package_source"], float(uf["measure_factor"]), uf["measure_source"],
             float(uf["g_per_unit"])) == (500, "owner", 200, "owner", 50)
     assert uf["walmart_item_id"] == "10450114"
+
+
+def test_link_keeps_values_saved_before_sources_existed(env):
+    from app.ai import WalmartRead
+    g, ai, _, c, _ = env
+    ai.walmart = WalmartRead(package_amount=907, grams_per_piece=60, measure_factor=190)
+    pid = _rice(g, "Rice", package_amount=500, measure="cups", measure_factor=200)  # no sources: the owner's
+    eggs = _rice(g, "Eggs", unit="piece", package_amount=6, g_per_unit=50)
+    _link(c, pid), _link(c, eggs)
+    uf, ef = g.userfields("products", pid), g.userfields("products", eggs)
+    assert (float(uf["package_amount"]), float(uf["measure_factor"])) == (500, 200)
+    assert not uf.get("package_source") and not uf.get("measure_source")
+    assert (float(ef["package_amount"]), float(ef["g_per_unit"])) == (6, 50)
+    ai.walmart = WalmartRead(package_amount=907, measure_factor=190)  # a link's own value: a newer link replaces it
+    linked = _rice(g, "Rice 3", package_amount=500, package_source="link", measure="cups", measure_factor=200,
+                   measure_source="link")
+    _link(c, linked)
+    lf = g.userfields("products", linked)
+    assert (float(lf["package_amount"]), float(lf["measure_factor"])) == (907, 190)
 
 
 def test_link_saved_when_read_fails(env):

@@ -422,10 +422,10 @@ def _zero(grocy, pid: int) -> None:
         grocy.set_amount(pid, 0)
 
 
-def clear_stock(grocy, pid: int) -> None:
-    """Stock to 0 in every place, for a supply generic its brands' too; the product stays."""
+def clear_stock(grocy, house, pid: int) -> None:
+    """Stock no meal kit holds to 0 in every place, for a supply generic its brands' too; kits and the product stay."""
     for k in _family(grocy, pid):
-        _zero(grocy, k)
+        use(grocy, house, k, own_free(grocy, house, k))
 
 
 def why_not_remove(grocy, pid: int) -> str:

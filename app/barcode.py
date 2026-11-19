@@ -66,7 +66,7 @@ def generic_choices(grocy) -> list[dict]:
 
 
 UNIT_FIELDS = ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price")
-MEASURE = ("measure", "measure_factor", "measure_source")
+MEASURE = ("measure", "measure_factor", "measure_source", "measure_count", "measure_count_factor")
 
 
 def _generic_named(grocy, name: str) -> dict | None:

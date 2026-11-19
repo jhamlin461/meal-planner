@@ -35,7 +35,8 @@ from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
-from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, add_conversion, create_generic,
+from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, _ingredient, add_conversion,
+                          create_generic,
                           estimate_amount, estimate_key, make_table, needs_estimate, page_text, process,
                           propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
                           to_jpeg)
@@ -150,9 +151,11 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
 PACKET_UNIT = "Use a measure like tbsp or cup; packets go in the packets box."
 
 
-def _packet_units(form, n: int) -> list[int]:
-    """Rows whose amount field names a packaging unit: refused (a packet is no measure; the packets box counts them)."""
-    return [i for i in range(n) if is_packaging(str(form.get(f"unit_{i}") or ""))]
+def _packet_units(form, old: CfeTable) -> list[int]:
+    """Rows whose amount field was changed to a packaging unit: refused (a packet is no measure; the packets box
+    counts them). A unit stored that way already is only posted back as shown, so it stands."""
+    return [i for i, g in enumerate(old.ingredients)
+            if is_packaging(u := str(form.get(f"unit_{i}") or "")) and u.strip() != g.unit]
 
 
 def _shown(x: float | None) -> str:
@@ -333,15 +336,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return None
 
     def position_ingredients(positions: list[dict], products: dict[int, dict]) -> list[Ingredient]:
-        units = unit_names()
+        """A recipe without a table, row by row in words people cook with, never the stock unit: the recipe's own
+        line (save_recipe's note) when it has an amount; else the stored amount in the product's household measure;
+        else the amount waiting for an estimate (variable_amount); else the name alone (to taste, or no measure yet)."""
         out = []
-        for p in positions:  # one waiting for an estimate shows the recipe's own amount; 0 alone is to taste
-            qty, unit = float(p["amount"]) or None, units.get(_int(p.get("qu_id")), "")
+        for p in positions:
+            note = str(p.get("note") or "").strip()
+            if note and (ing := _ingredient(note)).qty is not None:
+                out.append(ing)
+                continue
+            prod = products.get(_int(p.get("product_id")))
+            qty, unit, amount = None, "", float(p.get("amount") or 0)
+            m = msr.of(grocy, None, prod) if prod and amount > 0 else None
+            if m and m.word not in msr.STOCK_WORDS:
+                qty = float(msr.value(amount, m))
+                unit = "piece" if m.word == "piece" else msr.label(m, qty)
             q, _, u = str(p.get("variable_amount") or "").partition(" ")
-            if qty is None and parse_qty(q) is not None:  # a marker edited in Grocy may not parse: shown as to taste
+            if qty is None and amount <= 0 and parse_qty(q) is not None:  # a marker edited in Grocy may not parse
                 qty, unit = parse_qty(q), u
-            out.append(Ingredient(qty=qty, unit=unit, name=products.get(int(p["product_id"]), {}).get(
-                "name", f"product {p['product_id']}")))
+            out.append(Ingredient(qty=qty, unit=unit,
+                                  name=note or (prod or {}).get("name", f"product {p.get('product_id')}")))
         return out
 
     @app.get("/")
@@ -747,7 +761,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def inventory_clear(pid: int, place: int | None = Form(None)):
         p = product_or_404(pid)
         with plan_lock:
-            clear_stock(grocy, pid)
+            clear_stock(grocy, house, pid)
             rebuild()
         return inventory_back(place, f"Cleared {p['name']}.")
 
@@ -1162,7 +1176,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         table = _table_from_form(form, old)
         action = str(form.get("action") or "")
         editing = action == "addop" or action.startswith("remove:")  # re-render only
-        errors = [f"{table.ingredients[i].name}: {PACKET_UNIT}" for i in _packet_units(form, len(table.ingredients))]
+        errors = [f"{table.ingredients[i].name}: {PACKET_UNIT}" for i in _packet_units(form, old)]
         errors += [] if editing else _named(validate(table), table)
         if editing or errors:
             stored = _recipe_doubts(grocy.userfields("recipes", rid))
@@ -1289,7 +1303,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return back(f"/import/{pid}")
         action = form.get("action") or "save"
         table = _table_from_form(form, p.draft.table)
-        refused = _packet_units(form, len(table.ingredients))
+        refused = _packet_units(form, p.draft.table)
         rows: list[dict] = []
         for i, ing in enumerate(table.ingredients):
             f = lambda k: str(form.get(f"{k}_{i}") or "").strip()  # noqa: E731

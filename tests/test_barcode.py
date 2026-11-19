@@ -5,7 +5,7 @@ import httpx
 
 from app.ai import ProductGuess
 from app.barcode import relink, resolve, resolve_from_photo
-from app.setup_grocy import bootstrap
+from app.setup_grocy import bootstrap, ids
 from tests.fakes import FakeAI, FakeGrocy
 
 OFF = json.loads((Path(__file__).parent / "fixtures" / "off_flour.json").read_text())
@@ -234,6 +234,23 @@ def test_relink_to_generic_with_other_unit_aligns_units():
     assert all(child[k] == piece for k in ("qu_id_stock", "qu_id_purchase", "qu_id_consume", "qu_id_price"))
     uf = g.userfields("products", r.product_id)
     assert not uf.get("package_amount") and float(uf["g_per_unit"]) == 40  # Grocy clears a userfield with ""
+
+
+def test_relink_to_another_unit_drops_the_kept_count_measure():
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)  # flour child in g
+    g.set_userfields("products", r.product_id, {"measure": "cups", "measure_factor": 125, "measure_count": "bags",
+                                                 "measure_count_factor": 2268})
+    tortillas(g, measure="tortillas", measure_factor=1, measure_count="packs", measure_count_factor=10)
+    relink(g, r.product_id, "Tortillas")
+    uf = g.userfields("products", r.product_id)
+    assert (uf["measure"], uf["measure_count"], float(uf["measure_count_factor"])) == ("tortillas", "packs", 10)
+    r2 = resolve(g, FakeAI(guess=guess()), http(off=OFF), "555")
+    g.set_userfields("products", r2.product_id, {"measure_count": "bags", "measure_count_factor": 2268})
+    g.create("products", {"name": "Wraps", "qu_id_stock": ids(g).unit["piece"]})
+    relink(g, r2.product_id, "Wraps")  # a generic with no count word: the brand's is cleared, not kept in grams
+    uf = g.userfields("products", r2.product_id)
+    assert not uf.get("measure_count") and not uf.get("measure_count_factor")
 
 
 def test_relink_with_stock_in_another_unit_is_refused():

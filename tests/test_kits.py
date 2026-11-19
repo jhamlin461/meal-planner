@@ -253,6 +253,15 @@ def test_general_use_leaves_a_kit_entry_dated_sooner(env):
     assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 1
 
 
+def test_clear_stock_on_the_general_row_leaves_the_kit(env):
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    kit_and_ours(g, c, rid, p)
+    c.post(f"/inventory/{p['chops']}/clear")
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 0
+    assert g.stock_amounts()[p["chops"]] == 2
+
+
 def test_add_ingredients_failing_part_way_keeps_what_was_added(env):
     from app.grocy import GrocyError
     g, house, _, _, c = env
