@@ -1,11 +1,14 @@
 """Recipe import: fetch/parse sources, queue drafts for human review, save reviewed recipes to Grocy."""
 import base64
 import io
+import ipaddress
 import json
 import logging
 import re
 import secrets
 import shutil
+import socket
+import time
 import uuid
 from dataclasses import dataclass
 from difflib import get_close_matches
@@ -15,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urljoin
 
+import httpx
 from PIL import Image, ImageOps
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -135,53 +139,92 @@ def photo_url(html: str, base: str) -> str | None:
     return urljoin(base, p.og) if p.og else None
 
 
-PHOTO_EDGE, PHOTO_MAX = 1600, 5 * 1024 * 1024
+PHOTO_EDGE, PHOTO_MAX, PHOTO_SECONDS = 1600, 5 * 1024 * 1024, 15
+MAX_PIXELS = 40_000_000  # bigger than any real photo; decoding more is how a tiny file eats the memory
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS  # past twice this Pillow refuses even to open it
 
 
 def to_jpeg(data: bytes | Image.Image) -> bytes:
     """Any image as a JPEG at most 1600 px on its long edge, upright, without EXIF (so no location).
-    Raises if it isn't an image."""
+    Raises if it isn't an image or has more than MAX_PIXELS (checked from the header, before decoding)."""
     img = data if isinstance(data, Image.Image) else Image.open(io.BytesIO(data))
-    img = ImageOps.exif_transpose(img).convert("RGB")
+    if img.width * img.height > MAX_PIXELS:
+        raise ValueError(f"image too large: {img.width}x{img.height}")
+    img.draft("RGB", (PHOTO_EDGE, PHOTO_EDGE))  # a JPEG decodes straight at a smaller scale
     img.thumbnail((PHOTO_EDGE, PHOTO_EDGE))
+    img = ImageOps.exif_transpose(img).convert("RGB")
     out = io.BytesIO()
     img.save(out, "JPEG", quality=85)
     return out.getvalue()
 
 
 def pdf_photo(pdf: bytes) -> bytes | None:
-    """The largest raster image (at least 200x200) on the first two pages, as a JPEG; None if there is none."""
-    best = None
+    """The largest raster image (200x200 up to MAX_PIXELS) on the first two pages, as a JPEG; None if there is none.
+    Sizes come from the image dictionaries, so only the chosen image is ever decoded."""
     try:
+        found = []  # (pixels, page, image name)
         for page in PdfReader(io.BytesIO(pdf)).pages[:2]:
-            for f in page.images:
+            res = page["/Resources"] if "/Resources" in page else {}
+            xobjs = res["/XObject"] if "/XObject" in res else {}
+            for name in xobjs:
                 try:
-                    img = f.image
-                except Exception:  # an image pypdf can't decode is just skipped
+                    o = xobjs[name]
+                    w, h = int(o["/Width"]), int(o["/Height"])
+                except Exception:  # a form, or a broken entry
                     continue
-                w, h = img.size
-                if w >= 200 and h >= 200 and (best is None or w * h > best.size[0] * best.size[1]):
-                    best = img
-        return to_jpeg(best) if best else None
+                if o.get("/Subtype") == "/Image" and w >= 200 and h >= 200 and w * h <= MAX_PIXELS:
+                    found.append((w * h, page, name))
+        for _, page, name in sorted(found, key=lambda f: -f[0]):
+            try:
+                return to_jpeg(page.images[name].image)
+            except Exception:  # one pypdf can't decode: try the next largest
+                continue
     except Exception:
         log.warning("no photo from the PDF", exc_info=True)
-        return None
+    return None
+
+
+def _resolve(host: str) -> list[str]:
+    return [a[4][0] for a in socket.getaddrinfo(host, None)]
+
+
+def _public(url: httpx.URL) -> bool:
+    """True when every address the host resolves to is on the public internet (not the LAN, a tailnet, or this box)."""
+    if url.scheme not in ("http", "https") or not url.host:
+        return False
+    try:
+        addrs = _resolve(url.host)
+        return bool(addrs) and all(ipaddress.ip_address(a).is_global for a in addrs)
+    except (OSError, ValueError):
+        return False
 
 
 def fetch_photo(http, url: str | None) -> bytes | None:
-    """Download an image (image/* only, 5 MB cap) as a JPEG; any failure is just no photo."""
-    if not url or not url.startswith(("http://", "https://")):
+    """Download an image as a JPEG; any failure is just no photo. The URL comes from someone else's page, so: public
+    hosts only (checked again on each of at most 3 redirects), image/* only, 5 MB and 15 s at most.
+    ponytail: the check and httpx resolve the name separately; pin the address if DNS rebinding ever matters here."""
+    if not url:
         return None
+    deadline = time.monotonic() + PHOTO_SECONDS
     try:
-        with http.stream("GET", url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20) as r:
-            if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
+        target = httpx.URL(url)
+        for _ in range(4):  # the URL and up to 3 redirects
+            if not _public(target):
                 return None
-            data = bytearray()
-            for chunk in r.iter_bytes():
-                data += chunk
-                if len(data) > PHOTO_MAX:
+            with http.stream("GET", target, headers={"User-Agent": UA}, follow_redirects=False,
+                             timeout=PHOTO_SECONDS) as r:
+                if r.is_redirect:
+                    target = target.join(r.headers["location"])
+                    continue
+                if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image/"):
                     return None
-        return to_jpeg(bytes(data))
+                data = bytearray()
+                for chunk in r.iter_bytes():
+                    data += chunk
+                    if len(data) > PHOTO_MAX or time.monotonic() > deadline:
+                        return None
+                return to_jpeg(bytes(data))
+        return None
     except Exception:
         log.warning("no photo from %s", url, exc_info=True)
         return None

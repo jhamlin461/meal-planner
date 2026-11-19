@@ -316,7 +316,22 @@ import io
 
 from PIL import Image
 
+import app.importer as importer
 from app.importer import fetch_photo, pdf_photo, photo_url, to_jpeg
+
+DNS = {"x.com": ["93.184.216.34"], "example.com": ["93.184.216.34", "2606:2800:220:1::1"],
+       "nas.lan": ["192.168.1.20"], "box.tailnet": ["100.101.102.103"], "localhost": ["127.0.0.1", "::1"],
+       "mixed.com": ["93.184.216.34", "10.0.0.5"]}
+
+
+@pytest.fixture(autouse=True)
+def fake_dns(monkeypatch):
+    """Tests never touch real DNS: hosts resolve from DNS (unknown ones fail like a real lookup)."""
+    def resolve(host):
+        if host not in DNS:
+            raise OSError(f"no such host {host}")
+        return DNS[host]
+    monkeypatch.setattr(importer, "_resolve", resolve)
 
 
 def png(w, h, color="red", fmt="PNG"):
@@ -373,6 +388,60 @@ def test_fetch_photo_checks_type_and_size():
     for path in ("/page", "/big", "/gone"):
         assert fetch_photo(http, f"https://x.com{path}") is None
     assert fetch_photo(http, None) is None and fetch_photo(http, "file:///etc/passwd") is None
+
+
+def test_fetch_photo_stays_on_the_public_internet():
+    asked = []
+
+    def handler(req):
+        asked.append(req.url.host)
+        if req.url.path == "/hop":
+            return httpx.Response(302, headers={"Location": "http://nas.lan/secret.png"})
+        if req.url.path == "/loop":
+            return httpx.Response(302, headers={"Location": "/loop"})
+        return httpx.Response(200, content=png(300, 200), headers={"content-type": "image/png"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    for url in ("http://192.168.1.20/a.png", "http://nas.lan/a.png", "http://box.tailnet/a.png",
+                "http://100.64.0.1/a.png", "http://localhost/a.png", "http://127.0.0.1/a.png", "http://[::1]/a.png",
+                "http://mixed.com/a.png", "http://unknown.example/a.png"):
+        assert fetch_photo(http, url) is None, url
+    assert asked == []  # none of those was even asked
+    assert fetch_photo(http, "https://x.com/hop") is None and asked == ["x.com"]  # redirect to the LAN: refused
+    asked.clear()
+    assert fetch_photo(http, "https://x.com/loop") is None and len(asked) == 4  # the URL and 3 redirects at most
+    assert fetch_photo(http, "https://example.com/a.png") is not None  # public, IPv6 too
+
+
+def test_fetch_photo_gives_up_after_its_deadline(monkeypatch):
+    clock = iter(range(0, 10000, 20))  # every look at the clock is 20 s later
+    monkeypatch.setattr(importer.time, "monotonic", lambda: next(clock))
+
+    def handler(req):
+        return httpx.Response(200, content=httpx.ByteStream(png(300, 200)), headers={"content-type": "image/png"})
+
+    assert fetch_photo(httpx.Client(transport=httpx.MockTransport(handler)), "https://x.com/slow.png") is None
+
+
+def _png_header(w, h):
+    """Just a PNG's signature and size header: enough to open, far too big to decode."""
+    import struct
+    import zlib
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    signature = bytes([0x89]) + b"PNG" + bytes([13, 10, 26, 10])
+    return signature + struct.pack(">I", 13) + b"IHDR" + ihdr + struct.pack(">I", zlib.crc32(b"IHDR" + ihdr))
+
+
+def test_huge_images_are_refused_before_decoding():
+    with pytest.raises(Exception):
+        to_jpeg(_png_header(7000, 7000))  # 49M pixels
+    with pytest.raises(Exception):
+        to_jpeg(_png_header(40000, 40000))
+    pages = [Image.new("RGB", (1000, 1000), "blue"), Image.new("RGB", (400, 300), "red")]
+    buf = io.BytesIO()
+    pages[0].save(buf, "PDF", save_all=True, append_images=pages[1:])
+    pdf = buf.getvalue().replace(b"/Width 1000", b"/Width 9000").replace(b"/Height 1000", b"/Height 9000")
+    assert Image.open(io.BytesIO(pdf_photo(pdf))).size == (400, 300)  # the 81M-pixel one is skipped
 
 
 def test_process_keeps_photo_and_save_puts_it_in_grocy(tmp_path):
