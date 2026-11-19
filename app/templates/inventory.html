@@ -14,9 +14,19 @@
       </span>
     </form>
 {%- endmacro %}
+{% macro wipe(r) %}
+    <form class="inline" method="post" action="/inventory/{{ r.pid }}/clear">{{ keep() }}
+      <p class="muted">Sets what's in stock to none. The item stays on your list.</p>
+      <button class="btn">Clear stock</button>
+    </form>
+    <form class="inline" method="post" action="/inventory/{{ r.pid }}/remove" onsubmit="return confirm({{ ("Remove %s? Its stock, barcode and details are deleted. This can't be undone." % r.name)|tojson|forceescape }})">{{ keep() }}
+      <button class="btn danger">Remove item</button>
+    </form>
+{%- endmacro %}
 {% block heading %}<h1>Inventory</h1>{% endblock %}
 {% block content %}
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+{% if err %}<p class="card error" role="alert">{{ err }}</p>{% endif %}
 {% if groups %}
 <nav class="place-chips" aria-label="Places">
 <a href="/inventory"{% if not place %} aria-current="page"{% endif %}>All</a>
@@ -59,6 +69,7 @@
       </span>
     </form>
     {{ move(r, "/pantry/%s/move" % r.pid) }}
+    {{ wipe(r) }}
   </details>
   </div>
 {%- else %}{% set split = r.total != r.amount %}
@@ -75,6 +86,7 @@
         <button class="btn">Save</button>
       </span>
     </form>
+    {{ wipe(r) }}
   </details>
   </div>
 {%- endif %}

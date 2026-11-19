@@ -288,3 +288,82 @@ def test_inventory_no_inline_styles_and_scan_action(env):
     assert "style=" not in html and "Nothing here yet" not in html
     for url in ("/plan", "/home", "/scan", "/inventory/places"):
         assert "title-action" not in c.get(url).text, url
+
+
+def uses(g, pid, recipe=None, chore=None, consume=1):
+    if recipe:
+        g.create("recipes_pos", {"recipe_id": g.create("recipes", {"name": recipe}), "product_id": pid})
+    if chore:
+        g.create("chores", {"name": chore, "product_id": pid, "consume_product_on_execution": consume})
+
+
+def test_clear_stock_keeps_product(env):
+    g, c = env
+    bags = supply(g, "Trash bags", "Garage")
+    hefty = supply(g, "Hefty bags", "Closet", 4, parent_product_id=bags)
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    r = c.post(f"/inventory/{yogurt}/clear", follow_redirects=False)
+    assert r.headers["location"] == "/inventory?msg=Cleared+Greek+yogurt."
+    assert g.stock_amounts().get(yogurt, 0) == 0 and g.get_object("products", yogurt)
+    c.post(f"/inventory/{bags}/clear")
+    assert g.stock_amounts().get(bags, 0) == 0 and g.get_object("products", hefty)
+
+
+def test_remove_product_deletes_product_barcodes_and_list_rows(env):
+    g, c = env
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    other = food(g, "Milk", "Fridge", 1)
+    for pid in (yogurt, other):
+        g.create("product_barcodes", {"product_id": pid, "barcode": f"c{pid}"})
+        g.create("shopping_list", {"product_id": pid, "amount": 1})
+    r = c.post(f"/inventory/{yogurt}/remove", follow_redirects=False)
+    assert r.headers["location"] == "/inventory?msg=Removed+Greek+yogurt."
+    assert g.get_object("products", yogurt) is None and g.stock_amounts().get(yogurt, 0) == 0
+    assert [b["product_id"] for b in g.objects("product_barcodes")] == [other]
+    assert [b["product_id"] for b in g.objects("shopping_list")] == [other]
+
+
+def test_remove_refused_when_recipe_or_chore_uses_it(env):
+    g, c = env
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    uses(g, yogurt, recipe="Fudgy brownies", chore="Change the litter")
+    uses(g, yogurt, chore="Water plants", consume=0)  # does not use it up
+    g.create("product_barcodes", {"product_id": yogurt, "barcode": "x"})
+    r = c.post(f"/inventory/{yogurt}/remove", follow_redirects=True)
+    assert r.status_code == 200
+    assert "Fudgy brownies and Change the litter use this. Change them first, or use Clear stock." in r.text
+    assert 'role="alert"' in r.text and "Water plants" not in r.text
+    assert g.get_object("products", yogurt) and g.stock_amounts()[yogurt] == 500 and g.objects("product_barcodes")
+
+
+def test_remove_brand_ignores_generic_users(env):
+    g, c = env
+    bags = supply(g, "Trash bags", "Garage")
+    hefty = supply(g, "Hefty bags", "Closet", 4, parent_product_id=bags)
+    uses(g, bags, recipe="Bag lunch")
+    c.post(f"/inventory/{hefty}/remove")
+    assert g.get_object("products", hefty) is None and g.get_object("products", bags)
+
+
+def test_remove_generic_with_brands_refused(env):
+    g, c = env
+    bags = supply(g, "Trash bags", "Garage")
+    hefty = supply(g, "Hefty bags", "Closet", 4, parent_product_id=bags)
+    uses(g, hefty, chore="Take out trash")
+    assert "Take out trash uses this." in c.post(f"/inventory/{bags}/remove", follow_redirects=True).text
+    assert g.get_object("products", hefty) and g.get_object("products", bags) and g.stock_amounts()[hefty] == 4
+    g.delete("chores", g.objects("chores")[0]["id"])
+    c.post(f"/inventory/{bags}/remove")
+    assert not g.objects("products", name="Hefty bags") and not g.objects("products", name="Trash bags")
+    assert g.stock_amounts().get(hefty, 0) == 0
+
+
+def test_inventory_more_has_clear_and_remove(env):
+    g, c = env
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    bags = supply(g, "Trash bags", "Garage")
+    html = c.get("/inventory").text
+    for pid in (yogurt, bags):
+        assert f'action="/inventory/{pid}/clear"' in html and f'action="/inventory/{pid}/remove"' in html
+    assert r"Remove Greek yogurt? Its stock, barcode and details are deleted. This can0027t be undone." in html
+    assert 'class="btn danger"' in html and "style=" not in html

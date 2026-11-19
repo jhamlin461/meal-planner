@@ -38,7 +38,8 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
-from app.inventory import add_place, default_place, move_family, places, remove_place, rename_place, rows
+from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
+                           rename_place, rows)
 from app.setup_grocy import SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
@@ -511,8 +512,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         with plan_lock:
             rebuild_running_low(grocy)
 
-    def inventory_back(place: int | None, msg: str = "") -> RedirectResponse:
-        q = urlencode({k: v for k, v in (("place", place), ("msg", msg)) if v})
+    def inventory_back(place: int | None, msg: str = "", err: str = "") -> RedirectResponse:
+        q = urlencode({k: v for k, v in (("place", place), ("msg", msg), ("err", err)) if v})
         return back("/inventory" + (f"?{q}" if q else ""))
 
     @app.get("/home/supplies")
@@ -566,13 +567,13 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return inventory_back(None, msg)
 
     @app.get("/inventory")
-    def inventory(request: Request, place: int | None = None, msg: str = ""):
+    def inventory(request: Request, place: int | None = None, msg: str = "", err: str = ""):
         inv, have = rows(grocy, settings, date.today()), places(grocy)
         chips = {n: have[n] for n in inv.groups if n in have}  # places holding something, in places() order
         place = place if place in chips.values() else None  # an empty or unknown place shows everything
         groups = {n: r for n, r in inv.groups.items() if place is None or chips.get(n) == place}
         return page(request, "inventory.html", soon=inv.soon if place is None else [], groups=groups,
-                    totals=inv.totals, chips=chips, place=place, locations=have, msg=msg)
+                    totals=inv.totals, chips=chips, place=place, locations=have, msg=msg, err=err)
 
     @app.post("/pantry/{pid}/consume")
     def pantry_consume(pid: int, amount: float = Form(gt=0), place: int | None = Form(None)):
@@ -590,6 +591,25 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if from_location != to_location:
             grocy.transfer(pid, amount, from_location, to_location)
         return inventory_back(place)
+
+    @app.post("/inventory/{pid}/clear")
+    def inventory_clear(pid: int, place: int | None = Form(None)):
+        p = product_or_404(pid)
+        with plan_lock:
+            clear_stock(grocy, pid)
+            rebuild_running_low(grocy)
+        return inventory_back(place, f"Cleared {p['name']}.")
+
+    @app.post("/inventory/{pid}/remove")
+    def inventory_remove(pid: int, place: int | None = Form(None)):
+        p = product_or_404(pid)
+        try:
+            with plan_lock:
+                remove_product(grocy, pid)
+                rebuild_running_low(grocy)
+        except ValueError as e:
+            return inventory_back(place, err=str(e))
+        return inventory_back(place, f"Removed {p['name']}.")
 
     # ---- places -------------------------------------------------------------------------------------------------
     def places_page(request: Request, status_code: int = 200, error: str | None = None):
