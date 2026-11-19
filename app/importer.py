@@ -29,7 +29,8 @@ from app.barcode import _generic_named, _generics, _product_fields, create_manua
 from app.cfe import CfeTable, Ingredient, ingredient_text, validate
 from app.nutrition import fill_missing_nutrition
 from app.qty import is_packaging, normalize_unit, parse_qty, to_stock_amount
-from app.setup_grocy import LOCATIONS, ids
+from app.inventory import places
+from app.setup_grocy import ids
 
 UA = "MealPlanner/1.0"
 log = logging.getLogger(__name__)
@@ -701,7 +702,7 @@ def create_generic(grocy, ai, http, settings, name: str, details: dict | None = 
     hit = next((p for p in generics if p["name"].lower() == name.lower()), None)
     if hit:
         return int(hit["id"])
-    g = ai.guess_product({"name": name}, generic_choices(grocy), LOCATIONS)
+    g = ai.guess_product({"name": name}, generic_choices(grocy), list(places(grocy)))
     fields, uf = _product_fields(grocy, g)
     pid = grocy.create("products", {"name": name, **fields})
     grocy.set_userfields("products", pid, uf)

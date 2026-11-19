@@ -49,7 +49,8 @@ def _ensure_named(grocy, entity, names, extra=lambda i, n: {}):
 
 def bootstrap(grocy) -> None:
     _ensure_named(grocy, "quantity_units", UNITS, lambda i, n: {"name_plural": n})
-    _ensure_named(grocy, "locations", LOCATIONS)
+    if not grocy.objects("locations"):  # only a fresh Grocy gets the starting places; after that they are the household's
+        _ensure_named(grocy, "locations", LOCATIONS)
     _ensure_named(grocy, "meal_plan_sections", SECTIONS, lambda i, n: {"sort_number": i + 1})
     _ensure_named(grocy, "shopping_lists", LISTS)
     _ensure_named(grocy, "task_categories", ["Household"])

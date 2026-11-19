@@ -3,7 +3,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.ai import AIPaused, ProductGuess
-from app.setup_grocy import LOCATIONS, ids, supplies_group
+from app.inventory import default_place, places
+from app.setup_grocy import ids, supplies_group
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{}.json"
 UPC_URL = "https://api.upcitemdb.com/prod/trial/lookup"
@@ -105,7 +106,7 @@ def _product_fields(grocy, g) -> tuple[dict, dict]:
     """(product columns, userfields) for a product described by a ProductGuess."""
     i = ids(grocy)
     unit = i.unit[g.stock_unit]
-    loc = i.location[g.location if g.location in LOCATIONS else "Pantry"]
+    loc = i.location[g.location if g.location in i.location else default_place(grocy)]
     fields = {"location_id": loc, "qu_id_stock": unit, "qu_id_purchase": unit, "qu_id_consume": unit,
               "qu_id_price": unit, "default_best_before_days": g.best_before_days}
     if g.category == "supply":  # household supplies never expire
@@ -148,7 +149,7 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
     if not info or not info.get("name"):
         return None
     try:
-        g = ai.guess_product(info, generic_choices(grocy), LOCATIONS)
+        g = ai.guess_product(info, generic_choices(grocy), list(places(grocy)))
     except AIPaused as e:
         raise NeedsDetails(info["name"]) from e
     return _create(grocy, g, info["name"], code, _nutrition(info))
@@ -156,7 +157,7 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
 
 def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -> Resolved:
     try:
-        g = ai.guess_product({"barcode": code}, generic_choices(grocy), LOCATIONS, image=image)
+        g = ai.guess_product({"barcode": code}, generic_choices(grocy), list(places(grocy)), image=image)
     except AIPaused as e:
         raise NeedsDetails() from e
     return _create(grocy, g, f"{g.generic_name} (scanned)", code, {})

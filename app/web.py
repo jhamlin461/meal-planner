@@ -38,7 +38,8 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
-from app.setup_grocy import LOCATIONS, SECTIONS, ids, supplies_group
+from app.inventory import add_place, places, remove_place, rename_place
+from app.setup_grocy import SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import _day, expiring, summary, today_view
@@ -594,9 +595,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             if row["amount"] > 0:
                 row["when"], row["past"] = when(row["bb"], "Best before") if row["bb"] != NEVER else ("", False)
                 groups.setdefault(locs.get(row["loc"], "Other"), []).append(row)
-        order = {n: k for k, n in enumerate(LOCATIONS)}
+        order = {n: k for k, n in enumerate(places(grocy))}
         groups = dict(sorted(groups.items(), key=lambda kv: order.get(kv[0], len(order))))
-        return page(request, "pantry.html", soon=soon, groups=groups, totals=totals, locations=i.location)
+        return page(request, "pantry.html", soon=soon, groups=groups, totals=totals, locations=places(grocy))
 
     @app.post("/pantry/{pid}/consume")
     def pantry_consume(pid: int, amount: float = Form(gt=0)):
@@ -614,10 +615,37 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             grocy.transfer(pid, amount, from_location, to_location)
         return back("/pantry")
 
+    # ---- places -------------------------------------------------------------------------------------------------
+    def places_page(request: Request, status_code: int = 200, error: str | None = None):
+        return page(request, "places.html", status_code, places=places(grocy), error=error)
+
+    @app.get("/inventory/places")
+    def places_get(request: Request):
+        return places_page(request)
+
+    def place_change(request: Request, change):
+        try:
+            change()
+        except ValueError as e:
+            return places_page(request, 400, str(e))
+        return back("/inventory/places")
+
+    @app.post("/inventory/places")
+    def places_add(request: Request, name: str = Form("")):
+        return place_change(request, lambda: add_place(grocy, name))
+
+    @app.post("/inventory/places/{pid}/rename")
+    def places_rename(request: Request, pid: int, name: str = Form("")):
+        return place_change(request, lambda: rename_place(grocy, pid, name))
+
+    @app.post("/inventory/places/{pid}/remove")
+    def places_remove(request: Request, pid: int, move_to: int = Form()):
+        return place_change(request, lambda: remove_place(grocy, pid, move_to))
+
     # ---- scanning -----------------------------------------------------------------------------------------------
     @app.get("/scan")
     def scan(request: Request):
-        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=LOCATIONS)
+        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=list(places(grocy)))
 
     def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
         """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
@@ -685,7 +713,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                         package_amount: str = Form(""), location: str = Form("Pantry"),
                         category: Literal["food", "supply"] = Form("food")):
         """Free mode: a new product from the scan screen's form, created as Claude's guess would have been."""
-        if not (code.strip() and name.strip() and generic.strip()) or location not in LOCATIONS:
+        if not (code.strip() and name.strip() and generic.strip()) or location not in places(grocy):
             msg = "Fill in the name, what it counts as and where it's kept."
             return JSONResponse({"status": "error", "message": msg}, status_code=400)
         if package_amount.strip() and _num(package_amount) is None:
@@ -852,7 +880,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def manual_details(m: dict) -> dict:
         """The review row's new-product fields (free mode), checked like the scan screen's."""
-        if m["stock_unit"] not in ("g", "ml", "piece") or m["location"] not in LOCATIONS \
+        if m["stock_unit"] not in ("g", "ml", "piece") or m["location"] not in places(grocy) \
                 or m["category"] not in ("food", "supply"):
             raise ValueError("Pick how it's counted, where it's kept and what kind it is.")
         if m["package"] and _num(m["package"]) is None:
@@ -885,7 +913,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
                     pdf=store.pdf_path(p.id) is not None,
                     source_url=p.source if p.source.startswith(("http://", "https://")) else None,
-                    locations=LOCATIONS,
+                    locations=list(places(grocy)),
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
