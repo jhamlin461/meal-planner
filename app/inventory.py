@@ -1,6 +1,6 @@
 """Inventory: food and household supplies by place. Places are Grocy's own locations; nothing here caches them."""
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from pydantic import ValidationError
 
@@ -246,17 +246,19 @@ def free_stock(grocy, house, recipes=()) -> dict[int, float]:
     return {pid: max(0.0, a - held.get(pid, 0.0)) for pid, a in grocy.stock_amounts().items()}
 
 
-def use(grocy, house, pid: int, amount: float, recipe_id: int | None = None) -> float:
-    """Take up to `amount` of a product out of stock; returns what was taken. `recipe_id`'s meal kit first, then
-    stock no kit holds (its own before its brands', soonest date first), never another recipe's kit. A product no
-    kit holds is left to Grocy's own order, as before kits."""
+def use(grocy, house, pid: int, amount: float, recipe_id: int | None = None) -> tuple[float, list[str]]:
+    """Take up to `amount` of a product out of stock, every removal by hand or by cooking: what was taken and the
+    Grocy bookings that took it (each one undoable). Stock no kit holds (its own before its brands', soonest date
+    first); a meal kit's only when it is `recipe_id`'s (cooking it, or its own row on Inventory), and then first.
+    A product no kit holds is left to Grocy's own order, as before kits."""
     entries = grocy.stock_entries()
     holds = [(k, have) for k, have in _holds(house, entries) if int(k["product_id"]) == pid]
     if not holds:
         take = min(amount, grocy.stock_amounts().get(pid, 0.0))
-        if take > 1e-9:
-            grocy.consume(pid, take)
-        return max(take, 0.0)
+        if take <= 1e-9:
+            return 0.0, []
+        tid = grocy.consume(pid, take)
+        return take, [tid] if tid else []
     family = {pid} | {int(p["id"]) for p in grocy.objects("products") if _int(p.get("parent_product_id")) == pid}
     total: dict[str, float] = {}
     owner: dict[str, tuple[bool, str, int]] = {}  # stock_id -> (a brand's?, soonest best-before, product)
@@ -268,14 +270,15 @@ def use(grocy, house, pid: int, amount: float, recipe_id: int | None = None) -> 
     held: dict[str, float] = {}
     for k, have in holds:
         held[k["stock_id"]] = held.get(k["stock_id"], 0.0) + have
-    left = amount
+    left, tids = amount, []
 
     def take(sid: str, avail: float) -> float:
         nonlocal left
         t = min(left, avail)
         if t <= 1e-9:
             return 0.0
-        grocy.consume(owner[sid][2], t, stock_entry_id=sid)
+        tid = grocy.consume(owner[sid][2], t, stock_entry_id=sid)
+        tids.extend([tid] if tid else [])
         left -= t
         total[sid] -= t
         return t
@@ -285,7 +288,32 @@ def use(grocy, house, pid: int, amount: float, recipe_id: int | None = None) -> 
             held[k["stock_id"]] -= take(k["stock_id"], have)
     for sid in sorted(total, key=lambda s: (owner[s], s)):
         take(sid, total[sid] - held.get(sid, 0.0))
-    return amount - left
+    return amount - left, tids
+
+
+def own_free(grocy, house, pid: int) -> float:
+    """A product's own stock (not its brands') that no meal kit holds: the total Inventory shows and Set total sets."""
+    own = sum(float(e["amount"]) for e in grocy.stock_entries() if int(e["product_id"]) == pid)
+    return max(0.0, own - reserved(grocy, house).get(pid, 0.0))
+
+
+def set_total(grocy, house, p: dict, new: float) -> None:
+    """A product's own stock no kit holds becomes `new`: less is used (inventory.use, so no kit is touched), more is
+    added at its place with its best-before. Not Grocy's inventory booking, which removes stock in its own order."""
+    pid = int(p["id"])
+    own = own_free(grocy, house, pid)
+    if new < own - 1e-9:
+        use(grocy, house, pid, own - new)
+    elif new > own + 1e-9:
+        loc = _int(p.get("location_id"))
+        loc = loc if loc in places(grocy).values() else places(grocy).get(default_place(grocy))
+        grocy.add_stock(pid, new - own, best_before(p), loc)
+
+
+def best_before(p: dict, today: date | None = None) -> date | None:
+    """The product's default best-before from today; None (Grocy's own) for never or none."""
+    days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
+    return (today or date.today()) + timedelta(days=days) if days > 0 else None
 
 
 def _counted_in_packets(p: dict, stock: str, m: measure.Measure) -> bool:

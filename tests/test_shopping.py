@@ -86,7 +86,7 @@ def test_rebuild_survives_free_text_row_and_bad_base_servings(fake_grocy_with_we
     g.create("shopping_list", {"shopping_list_id": ids(g).list["Meal plan"], "product_id": None,
                                "amount": 1, "done": 1, "note": "free text"})
     g.update("recipes", 1, {"base_servings": ""})
-    assert rebuild_lists(g, TODAY, 6) == {10: 500}  # 150*4/1 - 100
+    assert rebuild_lists(g, TODAY, 6) == {10: 200}  # 150*4/2 - 100: no base servings reads as 2, as everywhere
 
 
 def test_walmart_items_skips_missing_product(fake_grocy_with_week):

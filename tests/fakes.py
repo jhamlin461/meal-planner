@@ -130,8 +130,9 @@ class FakeGrocy:
         return self._book("add", [(e, amount)]), [(e["stock_id"], amount)]
 
     def consume(self, product_id, amount, stock_entry_id=None):
-        """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends);
-        with `stock_entry_id`, only that entry's rows (a split keeps the stock_id), and never more than they hold."""
+        """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends), each
+        in Grocy's default order (soonest best-before first); with `stock_entry_id`, only that entry's rows (a split
+        keeps the stock_id), and never more than they hold."""
         from app.grocy import GrocyError
         left, taken = amount, []
         kids = [p["id"] for p in self.objects("products") if p.get("parent_product_id") == product_id]
@@ -141,7 +142,8 @@ class FakeGrocy:
                                                                        "amount of this stock entry")
         for pid in [product_id] if stock_entry_id else [product_id, *kids]:
             entries = self.stock.get(pid, [])
-            for e in [e for e in entries if not stock_entry_id or e.get("stock_id") == stock_entry_id]:
+            for e in sorted((e for e in entries if not stock_entry_id or e.get("stock_id") == stock_entry_id),
+                            key=lambda e: e.get("best_before_date") or "2999-12-31"):
                 if left <= 1e-12:
                     break
                 take = min(left, e["amount"])
@@ -184,9 +186,21 @@ class FakeGrocy:
                 amount -= take
 
     def set_amount(self, product_id, new_amount):
-        self.stock[product_id] = ([{"product_id": product_id, "amount": new_amount, "stock_id": self._stock_id(),
-                                    "best_before_date": None, "location_id": None}]
-                                  if new_amount > 0 else [])
+        """Grocy's inventory booking: the product's own stock becomes new_amount, the difference used in Grocy's
+        default order or added at the product's place."""
+        own = sum(e["amount"] for e in self.stock.get(product_id, []))
+        if new_amount < own:
+            kids = [p for p in self._table("products").values() if p.get("parent_product_id") == product_id]
+            for k in kids:  # its own stock only, as Grocy's correction does
+                k["parent_product_id"], k["_was"] = None, product_id
+            try:
+                self.consume(product_id, own - new_amount)
+            finally:
+                for k in kids:
+                    k["parent_product_id"] = k.pop("_was")
+        elif new_amount > own:
+            self.add_stock(product_id, new_amount - own, None,
+                           (self.get_object("products", product_id) or {}).get("location_id"))
 
     def volatile(self, days):
         """The fixed result tests set; once any product has a min stock amount, missing_products is computed

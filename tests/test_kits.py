@@ -208,3 +208,88 @@ def test_packets_shown_only_with_a_kit_and_switch_overrides(env):
     html = c.get(f"/recipes/{rid}?kit=0").text
     assert 'class="packet"' not in html and current(html) == ["Our pantry"]
     assert ' style="' not in html
+
+
+# ---- review round 1 ----------------------------------------------------------------------------------------------
+def kit_and_ours(g, c, rid, p):
+    """The kit's 2 chops (best before in 5 days, sooner) and 2 of our own (in 9 days)."""
+    add_kit(c, rid, 2)
+    g.add_stock(p["chops"], 2, date.today() + timedelta(days=9), ids(g).location["Fridge"])
+
+
+def ours(g, house, pid):
+    return round(free_stock(g, house).get(pid, 0), 6)
+
+
+def test_scan_use_takes_our_stock_not_the_kit_and_undoes(env):
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    kit_and_ours(g, c, rid, p)
+    r = c.post("/api/scan/confirm", json={"product_id": p["chops"], "action": "use", "amount": 1}).json()
+    assert r["status"] == "ok" and r["amount"] == 1 and r["transaction_id"]
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 1  # the kit stays whole
+    assert c.post("/api/scan/undo", json={"transaction_id": r["transaction_id"], "action": "use"}).json() == \
+        {"status": "ok"}
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 2
+
+
+def test_set_total_leaves_the_kit_whole(env):
+    """Review Focus 3 with a kit: our stock becomes what was typed; the kit's is not touched."""
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    kit_and_ours(g, c, rid, p)
+    c.post(f"/pantry/{p['chops']}/amount", data={"amount": 1})
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 1
+    c.post(f"/pantry/{p['chops']}/amount", data={"amount": 3})
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 3
+    assert g.stock_amounts()[p["chops"]] == 5
+
+
+def test_general_use_leaves_a_kit_entry_dated_sooner(env):
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    kit_and_ours(g, c, rid, p)
+    c.post(f"/pantry/{p['chops']}/consume", data={"amount": 1})  # a Fridge row's Use, no kit
+    assert kits(g, house)[rid][p["chops"]] == 2 and ours(g, house, p["chops"]) == 1
+
+
+def test_add_ingredients_failing_part_way_keeps_what_was_added(env):
+    from app.grocy import GrocyError
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    real, calls = g.add_stock_entries, []
+
+    def flaky(*a):
+        calls.append(a)
+        if len(calls) == 2:
+            raise GrocyError("POST /stock/products/x/add -> 500", 500)
+        return real(*a)
+
+    g.add_stock_entries = flaky
+    r = add_kit(c, rid, 2)
+    q = parse_qs(urlsplit(r.headers["location"]).query)
+    assert len(q["undo"]) == 1 and "Added 1 ingredient." in q["msg"][0]
+    assert "Sour cream packet" in q["msg"][0] and "Pork chops" in q["msg"][0]  # what wasn't added, by name
+    assert kits(g, house) == {rid: {p["sauce"]: 30}}
+
+
+def test_one_base_servings_default_everywhere(env):
+    g, house, _, _, c = env
+    bread = product(g, "Bread", "piece")
+    rid = g.create("recipes", {"name": "Toast"})  # no base servings: 2, as the recipe page reads it
+    g.create("recipes_pos", {"recipe_id": rid, "product_id": bread, "amount": 2, "qu_id": ids(g).unit["piece"],
+                             "note": "2 bread"})
+    s = type("S", (), {"shopping_weekday": 6})
+    eid = plan_meal(g, date.today(), "Lunch", rid, 4, s, house=house)
+    assert rebuild_lists(g, date.today(), 6, house) == {bread: 4}
+    g.add_stock(bread, 10, None, ids(g).location["Pantry"])
+    assert cook(g, eid, house) == [] and g.stock_amounts()[bread] == 6
+    assert "2</span> Bread" in c.get(f"/recipes/{rid}/stock").text  # 2 servings: the amount as stored
+
+
+def test_shopping_buys_what_cooking_takes(env):
+    g, house, _, _, c = env
+    rid, p = chops_recipe(g)
+    plan_meal(g, date.today(), "Lunch", rid, 2, type("S", (), {"shopping_weekday": 6}), house=house)
+    need = rebuild_lists(g, date.today(), 6, house)
+    assert need[p["sour"]] == 1 and need[p["chops"]] == 2 and p["salt"] not in need  # a packet each; to taste: none

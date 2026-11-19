@@ -6,7 +6,7 @@ import httpx
 
 from app.grocy import GrocyError
 from app.setup_grocy import ids
-from app.shopping import rebuild_lists
+from app.shopping import base_servings, rebuild_lists
 
 LEFTOVER_PREFIX = "Leftovers: "
 log = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ def cook(grocy, entry_id: int, house=None) -> list[str]:
         return []
     rid = int(entry["recipe_id"])
     recipe = grocy.get_object("recipes", rid) or {}
-    factor = float(entry["recipe_servings"]) / (float(recipe.get("base_servings") or 0) or 1.0)
+    factor = float(entry["recipe_servings"]) / base_servings(recipe)
     names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
     needs: dict[int, float] = {}
     for line in stock_lines(grocy, rid, factor)[0]:  # what adding it to inventory books; a product can repeat
@@ -79,7 +79,7 @@ def cook(grocy, entry_id: int, house=None) -> list[str]:
     short = []
     for pid, need in needs.items():
         try:
-            took, failed = use(grocy, house, pid, need, rid), False
+            took, failed = use(grocy, house, pid, need, rid)[0], False
         except (GrocyError, httpx.HTTPError):
             log.warning("cook %s: consume of product %s failed", entry_id, pid, exc_info=True)
             took, failed = 0.0, True

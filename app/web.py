@@ -42,10 +42,11 @@ from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, 
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.qty import is_packaging, parse_qty
 from app.nutrition import recipe_macros
-from app.inventory import (add_place, clear_stock, default_place, kits, move_family, places, remove_place,
-                           remove_product, rename_place, reserved, rows, stock_lines, use, why_not_remove)
+from app.inventory import (add_place, best_before, clear_stock, default_place, kits, move_family, places,
+                           own_free, remove_place, remove_product, rename_place, rows, set_total, stock_lines, use,
+                           why_not_remove)
 from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
-from app.shopping import rebuild_lists, walmart_items
+from app.shopping import base_servings, rebuild_lists, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import expiring, summary, today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, refine, search_url
@@ -616,11 +617,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         refuses that)."""
         p = product_or_404(pid)  # a generic: Grocy takes the stock from its brands
         with plan_lock:
-            use = min(msr.of(grocy, None, p).factor, grocy.stock_amounts().get(pid, 0.0))
-            if use > 0:
-                grocy.consume(pid, use)
+            took = use(grocy, house, pid, msr.of(grocy, None, p).factor)[0]
             rebuild()
-        return inventory_back(place, f"Used one {p['name']}." if use > 0 else f"No {p['name']} left to use.")
+        return inventory_back(place, f"Used one {p['name']}." if took > 0 else f"No {p['name']} left to use.")
 
     GONE = "That place no longer exists."
 
@@ -718,9 +717,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             m = typed(product_or_404(pid), word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
-        held = reserved(grocy, house).get(pid, 0.0)  # the total shown and typed leaves meal kits out
-        own = sum(float(e["amount"]) for e in grocy.stock_entries() if int(e["product_id"]) == pid) - held
-        grocy.set_amount(pid, msr.from_field(amount, m, own) + held)
+        p = product_or_404(pid)
+        with plan_lock:  # the total shown and typed leaves meal kits out, and so does the change
+            set_total(grocy, house, p, msr.from_field(amount, m, own_free(grocy, house, pid)))
         return inventory_back(place)
 
     @app.post("/inventory/{pid}/measure")
@@ -821,11 +820,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return {"status": "manual", "code": code, "name": ""} if ai.mode() == "free" else {"status": "unknown"}
         return r
 
-    def best_before(p: dict) -> date | None:
-        """The product's default best-before from today; None (Grocy's own) for never or none."""
-        days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
-        return date.today() + timedelta(days=days) if days > 0 else None
-
     def place_of(p: dict) -> str:
         """The product's own place by name (the fallback place if its location is gone)."""
         loc = _int(p.get("location_id"))
@@ -897,24 +891,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     grocy.set_userfields("products", gid, size)
             tid = grocy.add_stock(pid, want, best_before(p), have[place])
             done = want
-        else:
-            done = min(want, grocy.stock_amounts().get(pid, 0.0))  # Grocy refuses more than is in stock
-            if done > 0:
-                tid = grocy.consume(pid, done)
+        else:  # never more than is in stock (Grocy refuses that), nor a meal kit's
+            with plan_lock:
+                done, tids = use(grocy, house, pid, want)
+            tid = ",".join(tids) or None  # one trip line, one Undo
         if body.min:
             set_min(pid, msr.from_field(body.min, m, known) if known else msr.to_stock(body.min, m))  # keep: 1 package
         return {"status": "ok", "action": body.action, "product": p["name"], "amount": done, "place": place,
                 "transaction_id": tid, "shown": msr.show(done, m), "short": done < want}
 
     class UndoIn(BaseModel):
-        transaction_id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")  # goes into Grocy's URL path
+        transaction_id: str = Field(pattern=r"^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$")  # each goes into Grocy's URL path
         action: Literal["add", "use"]  # the trip line's, to word a refusal
 
     @app.post("/api/scan/undo")
     def api_scan_undo(body: UndoIn):
-        """Reverse only the stock booking: a remembered size, keep-at-least or relink stays."""
+        """Reverse only the stock booking (a use may be several, comma-joined): a remembered size, keep-at-least or
+        relink stays."""
         try:
-            grocy.undo(body.transaction_id)
+            for t in body.transaction_id.split(","):
+                grocy.undo(t)
         except GrocyError as e:
             if e.status != 400:
                 raise
@@ -980,7 +976,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
                     status_code: int = 200, note: str | None = None, kit: int | None = None, undo: list[str] = ()):
         r = recipe_or_404(rid)
-        base = float(r.get("base_servings") or 2)
+        base = base_servings(r)
         servings = max(1, servings or round(base))
         scale = servings / base
         uf = grocy.userfields("recipes", rid)
@@ -1066,7 +1062,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     # ---- a recipe's ingredients added to inventory, as its meal kit ----------------------------------------------
     def kit_scale(r: dict, servings: int | None) -> tuple[int, float]:
-        base = float(r.get("base_servings") or 2)  # as the recipe page reads it
+        base = base_servings(r)
         servings = max(1, servings or round(base))
         return servings, servings / base
 
@@ -1081,21 +1077,35 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/recipes/{rid}/stock")
     def recipe_stock_post(rid: int, servings: int = Form(ge=1)):
         """Book each ingredient on its product, in its place with its best-before, kept as the recipe's meal kit
-        (added again: it joins the same kit). Each booking is kept as soon as it is made, so a failure part way
-        leaves every booked one in the kit and its Undo."""
+        (added again: it joins the same kit). Each booking is kept as soon as it is made; when Grocy fails part way,
+        the page still gets the Undo for those, and names the ones not added (a retry would add the rest and the
+        first ones again)."""
         r = recipe_or_404(rid)
         servings, scale = kit_scale(r, servings)
         products = {int(p["id"]): p for p in grocy.objects("products")}
-        tids = []
+        tids, lines = [], stock_lines(grocy, rid, scale)[0]
         with plan_lock:
-            for line in stock_lines(grocy, rid, scale)[0]:
-                tid, entries = grocy.add_stock_entries(line["pid"], line["amount"], best_before(products[line["pid"]]),
-                                                       line["loc"])
+            for n, line in enumerate(lines):
+                try:
+                    tid, entries = grocy.add_stock_entries(line["pid"], line["amount"],
+                                                           best_before(products[line["pid"]]), line["loc"])
+                except (GrocyError, httpx.HTTPError):
+                    log.warning("recipe %s: adding product %s failed", rid, line["pid"], exc_info=True)
+                    break
                 house.add_kit(rid, line["pid"], tid, entries)
                 tids += [tid] if tid else []
-            rebuild()
-        n = len(tids)
-        msg = f"Added {n} ingredient{'s' if n != 1 else ''}." if n else "Nothing to add."
+            else:
+                n = len(lines)
+            try:
+                rebuild()
+            except (GrocyError, httpx.HTTPError):
+                log.warning("recipe %s: shopping lists not rebuilt", rid, exc_info=True)
+        k = len(tids)
+        msg = f"Added {k} ingredient{'s' if k != 1 else ''}." if k else "Nothing to add."
+        if n < len(lines):
+            names = list(dict.fromkeys(products[line["pid"]]["name"] for line in lines[n:]))
+            which = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+            msg = (msg + " " if k else "") + f"Grocy didn't take {which}; add those by hand."
         return back(f"/recipes/{rid}?" + urlencode([("servings", servings), ("msg", msg)] + [("undo", t) for t in tids]))
 
     @app.post("/recipes/{rid}/stock/undo")

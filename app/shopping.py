@@ -4,6 +4,12 @@ from app.setup_grocy import ids
 from app.walmart import packages_needed
 
 
+def base_servings(recipe: dict) -> float:
+    """A recipe's base servings; 2 when Grocy has none (the recipe page, shopping, cooking and meal kits all read it
+    so)."""
+    return float(recipe.get("base_servings") or 0) or 2.0
+
+
 def shopping_window(today: date, shopping_weekday: int) -> tuple[date, date]:
     next_shop = today + timedelta(days=(shopping_weekday - today.weekday()) % 7)
     return today, next_shop + timedelta(days=7)
@@ -48,12 +54,12 @@ def rebuild_lists(grocy, today: date, shopping_weekday: int, house=None) -> dict
     start, end = shopping_window(today, shopping_weekday)
     entries = [e for e in grocy.objects("meal_plan")
                if e.get("day") and start <= date.fromisoformat(str(e["day"])[:10]) <= end]
-    base = {int(r["id"]): (float(r.get("base_servings") or 0) or 1.0) for r in grocy.objects("recipes")}
-    positions: dict[int, list[dict]] = {}
-    for p in grocy.objects("recipes_pos"):
-        positions.setdefault(int(p["recipe_id"]), []).append(p)
+    from app.inventory import free_stock, stock_lines  # inventory -> today -> mealplan -> shopping
+    base = {int(r["id"]): base_servings(r) for r in grocy.objects("recipes")}
+    planned = {int(e["recipe_id"]) for e in entries if e.get("type") == "recipe" and e.get("recipe_id")}
+    positions = {rid: [{"product_id": line["pid"], "amount": line["amount"]} for line in stock_lines(grocy, rid, 1.0)[0]]
+                 for rid in planned if rid in base}  # what cooking takes (mealplan.cook), so that is what is bought
     needs = week_needs(entries, positions, base)
-    from app.inventory import free_stock  # inventory -> today -> mealplan -> shopping
     stock = free_stock(grocy, house, {int(e["recipe_id"]) for e in entries if e.get("type") == "recipe"
                                       and not _done(e)})
     staples = {pid for pid in needs if stock.get(pid, 0) > 0 and str(grocy.userfields("products", pid).get("staple")) == "1"}
