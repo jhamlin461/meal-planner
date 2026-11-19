@@ -2181,3 +2181,14 @@ def test_product_on_both_lists_shown_once_with_combined_amount(env):
 def test_combined_need():
     from app.shopping import combined_need
     assert combined_need({1: 300, 2: 50}, {1: 100, 2: 100, 3: 1}, {1: 150, 3: 3}) == {1: 350, 3: 2}
+
+
+def test_plan_has_cook_from_stock_action(env):
+    g, ai, _, c, _ = env
+    _, rid = flour_recipe(g, stock=1000)
+    monday = _monday(date.today() + timedelta(days=7))
+    html = c.get(f"/plan?week={monday.isoformat()}").text
+    assert 'action="/plan/suggest"' in html and 'name="from_stock" value="1"' in html and "Cook from what we have" in html
+    ai.mode_ = "free"
+    r = c.post("/plan/suggest", data={"week": monday.isoformat(), "from_stock": "1"})
+    assert "Accept" in r.text and "You have everything" in r.text and ' style="' not in r.text

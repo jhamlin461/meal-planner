@@ -1405,10 +1405,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return back("/plan?" + urlencode([("week", week)] + [("short", n) for n in short]))
 
     @app.post("/plan/suggest")
-    def plan_suggest(request: Request, week: date = Form()):  # plain def: Claude takes seconds, FastAPI threadpools it
+    def plan_suggest(request: Request, week: date = Form(), from_stock: bool = Form(False)):  # plain def: Claude takes seconds, FastAPI threadpools it
         monday = _monday(week)
         try:
-            picks = suggest(grocy, ai, monday)
+            picks = suggest(grocy, ai, monday, from_stock, house)
         except AIError as e:
             return plan_page(request, monday, error=str(e))
         names = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}

@@ -225,6 +225,12 @@ Suggest Lunch and Dinner items using only recipe_ids from the context, with day 
 Follow the household rules and constraints in the context (servings, leftovers, expiring stock, recent meals).
 Give a short reason for each pick."""
 
+STOCK_WEEK_PROMPT = WEEK_PROMPT + """
+Plan from what the household already has: fill the slots from fully stocked recipes first (a recipe with kit true has
+its meal kit in the house: use it first), then the most stocked (fulfillment), then recipes that use expiring stock.
+Never repeat a recipe in the week. Avoid recipes cooked in the last 3 weeks (recent_recipes) unless nothing else is
+fully stocked."""
+
 
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
@@ -398,6 +404,6 @@ class AI:
         text = json.dumps({"ingredients": list(enumerate(names)), "products": products})
         return self._parse("match", Picks, "low", MATCH_PROMPT, [{"type": "text", "text": text}])
 
-    def suggest_week(self, context: dict) -> WeekSuggestions:
-        return self._parse("week", WeekSuggestions, "medium", WEEK_PROMPT,
+    def suggest_week(self, context: dict, from_stock: bool = False) -> WeekSuggestions:
+        return self._parse("week", WeekSuggestions, "medium", STOCK_WEEK_PROMPT if from_stock else WEEK_PROMPT,
                            [{"type": "text", "text": json.dumps(context, default=str)}])

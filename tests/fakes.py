@@ -390,7 +390,7 @@ class FakeAI:
     def match_ingredients(self, names, products):
         return self._ret(self.picks)
 
-    def suggest_week(self, context):
+    def suggest_week(self, context, from_stock=False):
         return self._ret(self.week)
 
 
