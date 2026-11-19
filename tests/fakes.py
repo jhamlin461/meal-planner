@@ -261,7 +261,11 @@ class FakeAI:
         return value
 
     def structure_recipe(self, text=None, pdf=None, image=None):
+        self.seen_text, self.seen_pdf = text, pdf
         return self._ret(self.draft)
+
+    def open_batches(self):
+        return []
 
     def guess_product(self, info, generics, locations, image=None):
         return self._ret(self.guess)

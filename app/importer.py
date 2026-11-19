@@ -410,7 +410,7 @@ def submit_batch(store: PendingStore, ai, pending: list[Pending]) -> bool:
 def tick(store: PendingStore, ai, http) -> None:
     """Background, every minute: collect finished batch reads into their pending imports, and once AI is back
     (the 1st), read the imports that waited for it."""
-    batches: dict[str, list[str]] = {}
+    batches: dict[str, list[str]] = {bid: [] for bid in ai.open_batches()}  # unmetered, even with no imports left
     waiting: list[Pending] = []
     for p in store.all():
         if p.status == "reading" and p.batch_id:
@@ -424,24 +424,27 @@ def tick(store: PendingStore, ai, http) -> None:
             store.save(p)
             process(store, ai, http, p.id, None if pdf else p.source, pdf.read_bytes() if pdf else None)
     for bid, pids in batches.items():
-        try:
-            results = ai.recipe_batch_results(bid)
-        except AIError:
-            log.warning("could not check batch %s", bid, exc_info=True)
-            continue
-        if results is None:
-            continue  # still running
-        for pid in pids:
-            p = store.get(pid)
-            if p is None:
-                continue  # discarded meanwhile
-            got = results.get(pid, "Claude returned no result")
-            if isinstance(got, str):
-                p.status, p.error, p.batch_id = "failed", got, None
-            else:
-                pdf = store.pdf_path(pid)
-                _ready(store, p, got, pdf_photo(pdf.read_bytes()) if pdf else None)
-            store.save(p)
+        try:  # one batch at a time: a bad one never stalls the rest
+            _collect(store, ai, bid, pids)
+        except Exception:
+            log.exception("could not collect batch %s", bid)
+
+
+def _collect(store: PendingStore, ai, bid: str, pids: list[str]) -> None:
+    results = ai.recipe_batch_results(bid)
+    if results is None:
+        return  # still running
+    for pid in pids:
+        p = store.get(pid)
+        if p is None or p.status != "reading":
+            continue  # discarded meanwhile, or already collected
+        got = results.get(pid, "Claude returned no result")
+        if isinstance(got, str):
+            p.status, p.error, p.batch_id = "failed", got, None
+        else:
+            pdf = store.pdf_path(pid)
+            _ready(store, p, got, pdf_photo(pdf.read_bytes()) if pdf else None)
+        store.save(p)
 
 
 def start_worker(store: PendingStore, ai, http, interval: int = 60) -> threading.Thread:

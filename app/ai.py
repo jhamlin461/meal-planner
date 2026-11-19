@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from typing import Literal
 
 import anthropic
-from anthropic.lib._parse._transform import transform_schema  # the SDK's own pydantic -> strict JSON schema
+from anthropic import transform_schema  # the SDK's own pydantic -> strict JSON schema
 from pydantic import BaseModel
 
 from app.cfe import CfeTable
@@ -34,7 +34,8 @@ TOKENS = ("input_tokens", "output_tokens", "cache_read", "cache_write_5m", "cach
 
 def _tokens(u) -> dict:
     cc = getattr(u, "cache_creation", None)
-    w5, w1 = (getattr(cc, "ephemeral_5m_input_tokens", 0) or 0, getattr(cc, "ephemeral_1h_input_tokens", 0) or 0)         if cc else (0, 0)
+    w5 = (getattr(cc, "ephemeral_5m_input_tokens", 0) or 0) if cc else 0
+    w1 = (getattr(cc, "ephemeral_1h_input_tokens", 0) or 0) if cc else 0
     if not (w5 or w1):  # no breakdown: count the writes at the 5-minute price (the default TTL)
         w5 = getattr(u, "cache_creation_input_tokens", 0) or 0
     return dict(zip(TOKENS, (getattr(u, "input_tokens", 0) or 0, getattr(u, "output_tokens", 0) or 0,
@@ -210,17 +211,25 @@ class AI:
     def mode(self, now: datetime | None = None) -> Literal["full", "economy", "free"]:
         return budget_mode(self.spent(now), self.budget, self.economy_at)
 
-    def _record(self, kind: str, resp, batch: bool = False) -> None:
+    @staticmethod
+    def _usage(kind: str, resp, batch: bool = False) -> tuple[str, str, dict, float]:
+        """(kind, model, summed tokens, cost) for a response."""
+        model = getattr(resp, "model", None) or MODEL
+        parts = usage_parts(model, resp.usage)
+        return kind, model, {k: sum(t[k] for _, t in parts) for k in TOKENS}, cost(parts, batch)
+
+    def _record(self, kind: str, resp) -> None:
         """Meter a response; metering never fails a call."""
         if self.house is None or getattr(resp, "usage", None) is None:
             return
         try:
-            model = getattr(resp, "model", None) or MODEL
-            parts = usage_parts(model, resp.usage)
-            tokens = {k: sum(t[k] for _, t in parts) for k in TOKENS}
-            self.house.add_ai_usage(datetime.now(), kind, model, tokens, cost(parts, batch), batch)
+            self.house.add_ai_usage(datetime.now(), *self._usage(kind, resp))
         except Exception:
             log.warning("could not record AI usage", exc_info=True)
+
+    def open_batches(self) -> list[str]:
+        """Submitted batches not yet metered (collected even when their imports were discarded)."""
+        return self.house.open_batches() if self.house else []
 
     def _parse(self, kind: str, model_cls, effort: str, system: str, content: list[dict]):
         model, mode = MODEL, self.mode()
@@ -259,30 +268,38 @@ class AI:
             "system": _system(CFE_PROMPT), "messages": [{"role": "user", "content": _recipe_content(pdf=pdf)}]}}
             for cid, pdf in pdfs.items()]
         try:
-            return self.client.messages.batches.create(requests=reqs).id
+            bid = self.client.messages.batches.create(requests=reqs).id
         except anthropic.APIError as e:
             raise AIError(f"Claude unavailable: {e}") from e
+        if self.house:
+            self.house.add_batch(bid)
+        return bid
 
     def recipe_batch_results(self, batch_id: str) -> dict[str, RecipeDraft | str] | None:
-        """None while the batch runs; then each custom_id's draft, or why there is none."""
+        """None while the batch runs; then each custom_id's draft, or why there is none. The batch's usage is
+        metered the first time its results are read, never again."""
         try:
             if self.client.messages.batches.retrieve(batch_id).processing_status != "ended":
                 return None
             out: dict[str, RecipeDraft | str] = {}
+            usage = []
             for r in self.client.messages.batches.results(batch_id):
                 if r.result.type != "succeeded":
                     out[r.custom_id] = f"Claude couldn't read it ({r.result.type})"
                     continue
                 msg = r.result.message
-                self._record("recipe", msg, batch=True)
+                if getattr(msg, "usage", None) is not None:
+                    usage.append(self._usage("recipe", msg, batch=True))
                 try:
                     text = next(b.text for b in msg.content if b.type == "text")
                     out[r.custom_id] = RecipeDraft.model_validate_json(text)
                 except (StopIteration, ValueError):  # a refusal, or JSON that isn't a draft
                     out[r.custom_id] = "Claude declined or returned no result"
-            return out
         except anthropic.APIError as e:
             raise AIError(f"Claude unavailable: {e}") from e
+        if self.house:
+            self.house.meter_batch(batch_id, datetime.now(), usage)
+        return out
 
     def guess_product(self, info: dict, generics: list[dict], locations: list[str],
                       image: bytes | None = None) -> ProductGuess:

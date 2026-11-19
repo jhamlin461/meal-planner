@@ -64,6 +64,7 @@ class HouseStore:
                     model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read INTEGER, cache_write_5m INTEGER,
                     cache_write_1h INTEGER, batch INTEGER, cost REAL);
                 CREATE INDEX IF NOT EXISTS ai_usage_month ON ai_usage (month);
+                CREATE TABLE IF NOT EXISTS ai_batches (id TEXT PRIMARY KEY, created TEXT, metered INTEGER DEFAULT 0);
             """)
             if "sent_for" not in [c[1] for c in self._db.execute("PRAGMA table_info(reminders)")]:
                 self._db.execute("ALTER TABLE reminders ADD COLUMN sent_for TEXT")  # house.db from before sent_for
@@ -121,13 +122,35 @@ class HouseStore:
             self._q("INSERT OR REPLACE INTO flags VALUES (?,?)", name, value)
 
     # ---- the AI meter (app/ai.py prices each call) -----------------------------------------------------------------
-    def add_ai_usage(self, at: datetime, kind: str, model: str, tokens: dict, cost: float, batch: bool = False) -> None:
-        """tokens: input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h (missing ones are 0)."""
+    _USAGE = ("INSERT INTO ai_usage (at, month, kind, model, input_tokens, output_tokens, cache_read, cache_write_5m, "
+              "cache_write_1h, batch, cost) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+
+    @staticmethod
+    def _usage_row(at: datetime, kind: str, model: str, tokens: dict, cost: float, batch: bool) -> tuple:
         t = [int(tokens.get(k, 0)) for k in ("input_tokens", "output_tokens", "cache_read", "cache_write_5m",
                                              "cache_write_1h")]
-        self._q("INSERT INTO ai_usage (at, month, kind, model, input_tokens, output_tokens, cache_read, cache_write_5m, "
-                "cache_write_1h, batch, cost) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                at.isoformat(), at.strftime("%Y-%m"), kind, model, *t, int(batch), cost)
+        return (at.isoformat(), at.strftime("%Y-%m"), kind, model, *t, int(batch), cost)
+
+    def add_ai_usage(self, at: datetime, kind: str, model: str, tokens: dict, cost: float, batch: bool = False) -> None:
+        """tokens: input_tokens, output_tokens, cache_read, cache_write_5m, cache_write_1h (missing ones are 0)."""
+        self._q(self._USAGE, *self._usage_row(at, kind, model, tokens, cost, batch))
+
+    def add_batch(self, batch_id: str) -> None:
+        """A submitted Message Batch, to be metered once when it ends (even if its imports were discarded)."""
+        self._q("INSERT OR IGNORE INTO ai_batches (id, created) VALUES (?,?)", batch_id, datetime.now().isoformat())
+
+    def open_batches(self) -> list[str]:
+        return [r[0] for r in self._q("SELECT id FROM ai_batches WHERE metered=0 ORDER BY created")]
+
+    def meter_batch(self, batch_id: str, at: datetime, rows: list[tuple[str, str, dict, float]]) -> bool:
+        """Record an ended batch's usage, rows of (kind, model, tokens, cost), and mark it metered, in one
+        transaction; False (nothing recorded) when it was metered before."""
+        with self._lock, self._db:
+            self._db.execute("INSERT OR IGNORE INTO ai_batches (id, created) VALUES (?,?)", (batch_id, at.isoformat()))
+            if self._db.execute("UPDATE ai_batches SET metered=1 WHERE id=? AND metered=0", (batch_id,)).rowcount == 0:
+                return False
+            self._db.executemany(self._USAGE, [self._usage_row(at, k, m, t, c, True) for k, m, t, c in rows])
+            return True
 
     def ai_spent(self, month: str) -> float:
         """Dollars spent on Claude in `month` ('YYYY-MM')."""
