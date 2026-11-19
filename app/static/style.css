@@ -4,18 +4,18 @@
 /* Midnight is the default; light is a per-device choice (cookie -> html[data-theme]). */
 :root { --bg: #383C45; --surface: #434954; --rail: #2E333A; --action: #5294E2; --now: #E45E65; --soon: #F4B400;
   --text: #FFFFFF; --muted: rgba(255,255,255,.68); --line: rgba(255,255,255,.09); --field: rgba(0,0,0,.18);
-  --rail-w: 232px; --edge: 0px; color-scheme: dark; }
+  --rail-w: 232px; --edge: 0px; --on-action: #fff; color-scheme: dark; }
 [data-theme="light"] { --bg: #EEF0F3; --surface: #FFFFFF; --rail: #E2E5EA; --action: #2F6FBF; --now: #C4373F;
   --soon: #9A6400; --text: #1E2228; --muted: rgba(30,34,40,.68); --line: rgba(30,34,40,.12); --field: #FFFFFF;
   color-scheme: light; }
 /* Black is for AMOLED screens: pure black so pixels are off, with outlines (not lighter fills) separating things.
    Match phone is Black on a dark phone and Light on a light one, with no script. */
-[data-theme="black"], [data-theme="auto"] { --bg: #000; --surface: #000; --rail: #000; --line: rgba(255,255,255,.28);
-  --field: #000; --edge: 1px; --muted: rgba(255,255,255,.72); color-scheme: dark; }
+[data-theme="black"], [data-theme="auto"] { --bg: #000; --surface: #000; --rail: #000; --line: rgba(255,255,255,.45);
+  --field: #000; --edge: 1px; --on-action: #000; --muted: rgba(255,255,255,.72); color-scheme: dark; }
 @media (prefers-color-scheme: light) {
   [data-theme="auto"] { --bg: #EEF0F3; --surface: #FFFFFF; --rail: #E2E5EA; --action: #2F6FBF; --now: #C4373F;
     --soon: #9A6400; --text: #1E2228; --muted: rgba(30,34,40,.68); --line: rgba(30,34,40,.12); --field: #FFFFFF;
-    --edge: 0px; color-scheme: light; }
+    --edge: 0px; --on-action: #fff; color-scheme: light; }
 }
 
 * { box-sizing: border-box; }
@@ -42,10 +42,10 @@ a { color: var(--action); }
 /* Controls */
 button, .button, input, select, textarea { font: inherit; color: inherit; }
 button, .button, .btn { min-height: 48px; padding: 6px 16px; border: 0; border-radius: 10px; background: var(--action);
-  color: #fff; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--on-action); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
   gap: 8px; text-align: center; text-decoration: none; transition: background-color .12s; }
 .btn, .secondary { background: transparent; color: var(--action); box-shadow: inset 0 0 0 1px var(--line); }
-.btn-primary { background: var(--action); color: #fff; box-shadow: none; }
+.btn-primary { background: var(--action); color: var(--on-action); box-shadow: none; }
 button:disabled { opacity: .45; cursor: default; }
 @media (hover: hover) { .btn:hover, .secondary:hover { background: var(--line); } .rail a:not([aria-current]):hover, .segmented > :not([aria-current], [aria-pressed=true]):hover { color: var(--text); background: transparent; } }
 .default { position: absolute; left: -9999px; }
@@ -85,7 +85,7 @@ summary { min-height: 48px; display: flex; align-items: center; cursor: pointer;
 .segmented > * { flex: 1 1 auto; min-height: 48px; padding: 0 12px; border-radius: 10px; background: transparent;
   box-shadow: none; color: var(--muted); font-weight: 500; white-space: nowrap; text-decoration: none; display: flex;
   align-items: center; justify-content: center; }
-.segmented > :is([aria-pressed=true], [aria-current]) { background: var(--action); color: #fff; font-weight: 600; }
+.segmented > :is([aria-pressed=true], [aria-current]) { background: var(--action); color: var(--on-action); font-weight: 600; }
 .segmented :focus-visible { outline-color: var(--text); outline-offset: -3px; }
 .pages { margin: 0 0 16px; }
 @media (max-width: 359px) { .pages > * { padding: 0 6px; font-size: .9375rem; } }
@@ -195,7 +195,7 @@ td[aria-pressed=true] .cfe-where { text-decoration: line-through; }
 .day input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .day span { display: flex; align-items: center; justify-content: center; min-height: 48px; border: 1px solid var(--line);
   border-radius: 10px; background: var(--field); }
-.day input:checked + span { background: var(--action); border-color: var(--action); color: #fff; }
+.day input:checked + span { background: var(--action); border-color: var(--action); color: var(--on-action); }
 .day input:focus-visible + span { outline: 3px solid var(--action); outline-offset: 2px; }
 .hint { margin: -8px 0 12px; color: var(--muted); font-size: .9rem; }
 .icon-link { display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 48px; }
@@ -255,7 +255,7 @@ td[aria-pressed=true] .cfe-where { text-decoration: line-through; }
 .tick { width: 28px; height: 28px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--muted); display: grid;
   place-items: center; flex: none; }
 .tick .icon { width: 20px; height: 20px; visibility: hidden; }
-.shop-item[aria-pressed=true] .tick { background: var(--action); box-shadow: none; color: #fff; }
+.shop-item[aria-pressed=true] .tick { background: var(--action); box-shadow: none; color: var(--on-action); }
 .shop-item[aria-pressed=true] .tick .icon { visibility: visible; }
 .shop-item[aria-pressed=true] .shop-name { text-decoration: line-through; color: var(--muted); }
 .shop-item:focus-visible { outline-offset: -3px; }
@@ -303,7 +303,7 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .place-chips a { min-height: 48px; max-width: 100%; display: inline-flex; align-items: center; padding: 0 18px;
   border: 1px solid var(--line); border-radius: 24px; background: var(--field); color: var(--text);
   text-decoration: none; overflow-wrap: anywhere; }
-.place-chips a[aria-current] { background: var(--action); border-color: var(--action); color: #fff; font-weight: 600; }
+.place-chips a[aria-current] { background: var(--action); border-color: var(--action); color: var(--on-action); font-weight: 600; }
 @media (hover: hover) { .place-chips a:not([aria-current]):hover { background: var(--line); } }
 .inventory-end { margin: 24px 0 0; }
 .stock-more form.inline:first-of-type { margin-top: 0; }
@@ -314,7 +314,7 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .scan-mode { margin: 0 0 12px; max-width: 22em; }
 .scan-mode label { position: relative; cursor: pointer; }
 .scan-mode input { position: absolute; opacity: 0; pointer-events: none; }
-.scan-mode label:has(input:checked) { background: var(--action); color: #fff; font-weight: 600; }
+.scan-mode label:has(input:checked) { background: var(--action); color: var(--on-action); font-weight: 600; }
 .scan-mode label:has(input:focus-visible) { outline: 3px solid var(--text); outline-offset: -3px; }
 #scan-status { margin: 10px 2px; }
 .result-title { margin: 0; color: var(--text); font-size: 1.2rem; font-weight: 650; font-stretch: 90%; }
@@ -344,8 +344,8 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 :is(.chip, .show-all) span { min-height: 48px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px;
   background: var(--field); min-width: 0; line-height: 22px; overflow-wrap: anywhere; }
 .chip-step span { border-style: dashed; border-color: var(--muted); }
-.chip input:checked + span { background: var(--action); border: 1px solid var(--action); color: #fff; font-weight: 600; }
-.chip-step input:checked + span { border: 1px dashed #fff; outline: 1px solid var(--action); }
+.chip input:checked + span { background: var(--action); border: 1px solid var(--action); color: var(--on-action); font-weight: 600; }
+.chip-step input:checked + span { border: 1px dashed var(--on-action); outline: 1px solid var(--action); }
 :is(.chip, .show-all) input:focus-visible + span { outline: 3px solid var(--action); outline-offset: 2px; }
 /* What another step already ticks stays tucked away until this row's "Show all" is on. */
 .chip.used { display: none; }
@@ -454,8 +454,13 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 }
 
 /* Black: outlines carry the separation the fills give the other themes. */
-:is([data-theme="black"], [data-theme="auto"]) :is(.card, dialog, #toast, .segmented, .plan-day.is-today, .photo-full) {
+:is([data-theme="black"], [data-theme="auto"]) :is(.card, dialog, #toast, .segmented, .plan-day.is-today, .photo-full,
+    table.cfe td, td.cfe-filler, td.cfe-op, .recipe-grid img, .photo-none, .review-photo, .recipe-thumb, .source-pdf iframe) {
   outline: var(--edge) solid var(--line); outline-offset: -1px; }
+/* The current tab, rail item and Settings button are marked with an action-coloured outline, since a fill is invisible. */
+:is([data-theme="black"], [data-theme="auto"]) :is(.rail > ul > li > a[aria-current], .rail-settings[aria-current],
+    .settings-btn[aria-current]) { outline: var(--edge) solid var(--action); outline-offset: -2px; border-radius: 10px; }
+:is([data-theme="black"], [data-theme="auto"]) .settings-btn[aria-current] { border-radius: 24px; }
 .rail { border-top: var(--edge) solid var(--line); }
 @media (min-width: 900px) { .rail { border-top: 0; border-right: var(--edge) solid var(--line); } }
 .settings-theme .segmented { flex-basis: 26em; }

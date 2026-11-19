@@ -1609,3 +1609,18 @@ def test_wide_pages_split_into_columns(env):
         assert '<div class="split">' in c.get(url, cookies={"who": "kitchen"}).text, url
     for url in ("/home", "/inventory", "/settings"):
         assert '<main class="roomy">' in c.get(url, cookies={"who": "kitchen"}).text, url
+
+
+def test_black_theme_css_covers_every_surface_and_inks_on_action(env):
+    css = env[3].get("/static/style.css").text
+    black = css[css.index('[data-theme="black"], [data-theme="auto"] {'):]
+    black = black[:black.index("}")]
+    assert "--on-action: #000" in black and "--line: rgba(255,255,255,.45)" in black
+    outline = css[css.index(':is([data-theme="black"], [data-theme="auto"]) :is('):]
+    outline = outline[:outline.index("{")]
+    for sel in ("table.cfe td", "td.cfe-filler", "td.cfe-op", ".recipe-grid img", ".photo-none", ".review-photo",
+                ".recipe-thumb"):
+        assert sel in outline, sel
+    for sel in (".rail-settings[aria-current]", ".settings-btn[aria-current]", ".rail > ul > li > a[aria-current]"):
+        assert f"{sel}" in css[css.index("The current tab"):], sel
+    assert "color: #fff" not in css  # ink on an action fill comes from --on-action
