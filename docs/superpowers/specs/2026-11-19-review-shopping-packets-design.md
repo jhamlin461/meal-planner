@@ -92,6 +92,12 @@ actually arrives. Running low is a shopping concern for food as well as supplies
    - Inventory amounts and Use ("2 1/2 cups left", "Used [ ] cups"), Set total, the scan sheet's "left" line and its
      amount field when the package size is unknown.
    - Amounts are rounded to kitchen-friendly fractions (1/4, 1/3, 1/2…) as the recipe table already does.
+   - **The measure is adjustable** (owner, 2026-11-19: "The unit should also be adjustable for cups, tsp, tbsp, etc."):
+     Inventory's More has "Measure in [cups ▾]" per item, offering cups, tbsp, tsp, fl oz, oz, lb, plus the item's
+     count word ("rolls", "eggs", "packets") when it has one. Changing it re-shows every amount for that item in the new
+     measure (Keep at least, left, Use, Set total, scan). Conversions within volume (cup/tbsp/tsp/fl oz) and within
+     weight (oz/lb) are fixed kitchen math; between volume, weight and counts the item's own conversion is used. The
+     person's choice wins over Claude's and a Walmart link never changes it.
    (Designer's call: the owner named Keep at least; the same rule is applied to every amount on Inventory and Scan so
    no gram value is ever shown or typed.) Free mode: a product without a measure yet shows its stock unit until Claude is
    back.
