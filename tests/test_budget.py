@@ -620,7 +620,10 @@ def batch_house(tmp_path):
     results = []
     batches = NS(create=lambda requests: NS(id="msgbatch_1"), retrieve=lambda bid: NS(processing_status="ended"),
                  results=lambda bid: iter(results))
-    return AI(NS(messages=NS(batches=batches)), house), house, results
+    from app.ai import TableCheck
+    check = NS(stop_reason="end_turn", parsed_output=TableCheck(table=DRAFT.table, doubts=[]), usage=usage())
+    beta = NS(messages=NS(parse=lambda **kw: check))  # the accuracy check on each collected read: no doubts, $0
+    return AI(NS(messages=NS(batches=batches), beta=beta), house), house, results
 
 
 def submitted(tmp_path, ai, results):
@@ -757,3 +760,49 @@ def test_make_the_table_says_when_it_used_the_saved_text(tmp_path):
     c2, g2, rid2, _ = table_app(tmp_path / "up", ai, page="<p>Bread from the page</p>")
     r2 = c2.post(f"/recipes/{rid2}/make-table")
     assert "Bread from the page" in ai.seen_text and "saved recipe text" not in r2.text
+
+
+# ---- the accuracy check (Task 3) ---------------------------------------------------------------------------------
+def test_the_check_uses_the_recipe_settings_and_sends_the_source_and_table(tmp_path):
+    import json
+    from app.ai import TableCheck
+    answer = TableCheck(table=TABLE, doubts=[])
+    c, calls = client(answer)
+    assert AI(c).check_table(TABLE, 2, pdf=b"%PDF-x") == answer
+    c2, calls2 = client(answer)
+    economy(tmp_path, c2).check_table(TABLE, None, text="2 cups flour. Mix.")
+    assert ai_mod.ECONOMY["check"] == ai_mod.ECONOMY["recipe"]
+    got = [(kw["_beta"], kw["model"], kw["output_config"]["effort"]) for kw in calls + calls2]
+    assert got == [(True, "claude-opus-5-5", "high"), (True, "claude-opus-5-5", "medium")]
+    for kw in calls + calls2:
+        assert kw["system"][0]["cache_control"] == {"type": "ephemeral"} and kw["output_format"] is TableCheck
+    full, eco = calls[0]["messages"][0]["content"], calls2[0]["messages"][0]["content"]
+    assert full[0]["type"] == "document" and eco[0]["text"] == "2 cups flour. Mix."
+    sent = json.loads(full[-1]["text"])
+    assert sent == {"servings": 2, "table": TABLE.model_dump()}
+
+
+def test_batch_and_make_table_run_check(tmp_path, web):
+    from app.ai import Doubt, TableCheck
+    from app.importer import tick
+    fixed = TABLE.model_copy(update={"ops": [TABLE.ops[0].model_copy(update={"label": "Mix 2 min"})]})
+    check = TableCheck(table=fixed, doubts=[Doubt(ref="o1", reason="The card gives no time.")])
+    # a batch read is checked by a normal call once its result arrives, against its own PDF
+    ai = BatchAI(draft=DRAFT.model_copy(update={"table": TABLE}), mode="economy", check=check)
+    ic, store = import_app(tmp_path / "batch", ai)
+    ic.post("/import", files=pdfs(3))
+    ai.results = {p.id: ai.draft for p in store.all()}
+    tick(store, ai, None)
+    for p in store.all():
+        assert p.status == "ready" and p.draft.table == fixed
+        assert p.doubts == [{"ref": "o1", "reason": "The card gives no time."}]
+    assert ai.checked["pdf"] in {store.pdf_path(p.id).read_bytes() for p in store.all()}
+
+    # Make the table: the corrections are saved and the doubts shown with the new table
+    c, house, g = web
+    rid = saved_recipe(g)
+    c.app_ai.draft, c.app_ai.check = DRAFT.model_copy(update={"table": TABLE}), check
+    r = c.post(f"/recipes/{rid}/make-table", follow_redirects=False)
+    assert r.status_code == 200 and CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]) == fixed
+    assert 'role="note"' in r.text and "The card gives no time." in r.text and 'class="cfe-op doubt"' in r.text
+    assert "Bake it." in c.app_ai.checked["text"]

@@ -1,0 +1,7 @@
+{# What the accuracy check doubted (web._doubt_ctx), numbered as the marks on the table's cells. #}
+{% if doubts %}<div class="doubts" role="note" aria-labelledby="doubts-title">
+<p id="doubts-title">Check this against the card</p>
+<ol role="list">{% for d in doubts %}
+<li>{{ d.reason }}</li>{% endfor %}
+</ol>
+</div>{% endif %}

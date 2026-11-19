@@ -61,6 +61,7 @@
 {% if cfe %}{% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols %}{% include "_cfe_table.html" %}{% endwith %}
 {% elif tableless %}<p class="muted">No table yet. Add steps below, or press Make the table on the recipe page after the 1st.</p>
 {% else %}{% for e in table_errors %}<p class="error">{{ e }}</p>{% endfor %}{% endif %}
+{% include "_doubts.html" %}
 {% include "_cfe_editor.html" %}
 <div class="form-actions"><button class="btn" name="action" value="update">Update</button><button class="btn btn-primary" name="action" value="save">Save recipe</button></div>
 </form>

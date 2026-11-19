@@ -582,3 +582,80 @@ def test_tick_fills_estimates(tmp_path):
     rid, _, _ = saved_without_amounts(g)
     tick(PendingStore(tmp_path), FakeAI(conversion=ConversionGuess(factor=125, explanation="")), None, g, {})
     assert positions(g, rid)[0] == (250, "")
+
+
+# ---- the accuracy check (Task 3) ---------------------------------------------------------------------------------
+def two_step():
+    """garlic, chicken -> o1 (sear); oil -> o2 (fry o1 in it)."""
+    return CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="clove", name="garlic"),
+                                         Ingredient(qty=1, unit="lb", name="chicken"),
+                                         Ingredient(qty=1, unit="tbsp", name="oil")],
+                    ops=[Op(id="o1", label="Sear 5 min", inputs=["i0", "i1"]),
+                         Op(id="o2", label="Fry", inputs=["o1", "i2"])])
+
+
+def test_check_corrects_table(tmp_path):
+    from app.ai import Doubt, TableCheck
+    from app.importer import apply_check
+    t = two_step()
+    fixed = t.model_copy(deep=True)
+    fixed.ingredients[0].qty, fixed.ops[0].label = 3, "Sear 6 min"
+    doubts = [Doubt(ref="i0", reason="The card's garlic is smudged."), Doubt(ref="o2", reason="No time given."),
+              Doubt(ref="", reason="The card lists parsley; no row has it."), Doubt(ref="i9", reason="gone"),
+              Doubt(ref="o7", reason="gone")]
+    table, kept = apply_check(t, TableCheck(table=fixed, doubts=doubts))
+    assert table == fixed and [d.ref for d in kept] == ["i0", "o2", ""]  # unknown refs dropped
+
+    # process: the check reads the same source, its corrections replace the table, its doubts are kept
+    store = PendingStore(tmp_path)
+    p = store.new("chicken.pdf", pdf=b"%PDF-c")
+    ai = FakeAI(draft=RecipeDraft(title="Chicken", servings=2, steps=["Sear"], table=t),
+                check=TableCheck(table=fixed, doubts=doubts[:2]))
+    process(store, ai, httpx.Client(), p.id, None, b"%PDF-c")
+    got = store.get(p.id)
+    assert got.status == "ready" and got.draft.table == fixed
+    assert got.doubts == [{"ref": "i0", "reason": "The card's garlic is smudged."},
+                          {"ref": "o2", "reason": "No time given."}]
+    assert ai.checked["pdf"] == b"%PDF-c" and ai.checked["table"] == t and ai.checked["servings"] == 2
+
+    q = store.new("https://example.com/pie")  # a page: the check reads the text Claude structured
+    http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, text="<p>Pie: bake it.</p>")))
+    process(store, ai, http, q.id, "https://example.com/pie", None)
+    assert "Pie: bake it." in ai.checked["text"] and ai.checked["pdf"] is None
+
+
+@pytest.mark.parametrize("change", ["swap rows", "drop row", "add row", "reorder steps", "invalid"])
+def test_check_rejects_reordered_table_as_doubt(change):
+    from app.ai import Doubt, TableCheck
+    from app.importer import MISFIT, apply_check
+    t = two_step()
+    bad = t.model_copy(deep=True)
+    if change == "swap rows":  # same count, rows moved: product picks would land on the wrong rows
+        bad.ingredients[0], bad.ingredients[1] = bad.ingredients[1], bad.ingredients[0]
+    elif change == "drop row":
+        bad.ingredients.pop()
+        bad.ops[1].inputs = ["o1"]
+    elif change == "add row":
+        bad.ingredients.append(Ingredient(qty=1, unit="", name="parsley"))
+        bad.ops[1].inputs = ["o1", "i2", "i3"]
+    elif change == "reorder steps":
+        bad.ops[0].id, bad.ops[1].id = "o2", "o1"
+        bad.ops[1].inputs = ["o2", "i2"]
+    else:
+        bad.ops[1].inputs = ["o1"]  # oil in no step
+    table, doubts = apply_check(t, TableCheck(table=bad, doubts=[Doubt(ref="i0", reason="Garlic: 3 cloves?")]))
+    assert table == t
+    # the cells aren't marked (their rows don't line up), but nothing the check said is lost
+    assert [(d.ref, d.reason) for d in doubts] == [("", MISFIT), ("", "Garlic: 3 cloves?")]
+    assert MISFIT == "The check suggested changes that didn't fit; compare with the card."
+
+
+def test_check_failure_keeps_table(tmp_path):
+    from app.ai import AIPaused
+    for err in (AIError("Claude unavailable"), AIPaused()):
+        store = PendingStore(tmp_path / type(err).__name__)
+        p = store.new("chicken.pdf", pdf=b"%PDF-c")
+        ai = FakeAI(draft=RecipeDraft(title="Chicken", servings=2, steps=["Sear"], table=two_step()), check=err)
+        process(store, ai, httpx.Client(), p.id, None, b"%PDF-c")
+        got = store.get(p.id)
+        assert got.status == "ready" and got.draft.table == two_step() and got.doubts == []

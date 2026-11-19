@@ -113,7 +113,9 @@ def main():
     store.save(ready.model_copy(update={"status": "ready", "draft": soup_draft()}))
     store.save_photo(ready.id, dish((170, 120, 40)))
     card = store.new("grandmas-soup-card.pdf", pdf=recipe_card_pdf())
-    store.save(card.model_copy(update={"status": "ready", "draft": soup_draft()}))
+    store.save(card.model_copy(update={"status": "ready", "draft": soup_draft(), "doubts": [  # the check's doubts
+        {"ref": "i1", "reason": "The card's dragon egg count is smudged; it may say 2."},
+        {"ref": "o1", "reason": "The card gives no time for mixing."}]}))
     failed = store.new("grandmas-cards.pdf")
     store.save(failed.model_copy(update={"status": "failed", "error": "No recipe found in this PDF."}))
     mode = os.environ.get("DEMO_AI", "full")

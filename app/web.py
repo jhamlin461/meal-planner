@@ -88,6 +88,9 @@ def _servings(s: str) -> int | None:
     return n
 
 
+MADE_FROM_TEXT = "Made from the saved recipe text — the original page couldn't be reached."
+
+
 def _monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
@@ -124,6 +127,23 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     return old.model_copy(update={"ops": [Op(id=new[n], label=lab, where=where,
                                              inputs=[new[r] if isinstance(r, int) else r for r in refs])
                                           for n, ((_, lab, _, where), refs) in enumerate(zip(rows, picked))]})
+
+
+def _standing(doubts: list[dict], old: CfeTable, new: CfeTable) -> list[dict]:
+    """The check's doubts still standing: one about a row or step the reviewer has changed has been looked at."""
+    def parts(t: CfeTable) -> dict:
+        return {f"i{n}": g for n, g in enumerate(t.ingredients)} | {o.id: o for o in t.ops}
+    a, b = parts(old), parts(new)
+    return [d for d in doubts if a.get(d["ref"]) == b.get(d["ref"])]
+
+
+def _doubt_ctx(doubts: list[dict]) -> dict:
+    """Template context for the doubts: the numbered list, and each doubtful cell's numbers (ref -> [n, ...])."""
+    marks: dict[str, list[int]] = {}
+    for n, d in enumerate(doubts, 1):
+        if d["ref"]:
+            marks.setdefault(d["ref"], []).append(n)
+    return {"doubts": doubts, "marks": marks}
 
 
 def _chip_names(table: CfeTable) -> dict[str, str]:
@@ -807,11 +827,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/recipes/{rid}")
     def recipe(request: Request, rid: int, servings: int | None = None, made: str = ""):
-        note = "Made from the saved recipe text — the original page couldn't be reached." if made == "text" else None
+        note = MADE_FROM_TEXT if made == "text" else None
         return recipe_page(request, rid, servings, note=note)
 
     def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
-                    status_code: int = 200, note: str | None = None):
+                    status_code: int = 200, note: str | None = None, doubts: list[dict] = ()):
         r = recipe_or_404(rid)
         base = float(r.get("base_servings") or 2)
         servings = max(1, servings or round(base))
@@ -828,7 +848,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat(),
-                    ai_free=ai_mode() == "free", note=note)
+                    ai_free=ai_mode() == "free", note=note, **_doubt_ctx(doubts))
 
     @app.post("/recipes/{rid}/make-table")
     def make_table_post(request: Request, rid: int):  # plain def: Claude takes a while, FastAPI threadpools it
@@ -845,13 +865,16 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         text = "\n".join([r["name"], "", "Ingredients:", *(f"- {x}" for x in lines), "", "Instructions:",
                           page_text(r.get("description") or "")])
         try:
-            table, fell_back = make_table(ai, http, text, uf.get("source_url") or None,
-                               pdf.read_bytes() if uf.get("source_pdf") and pdf.is_file() else None)
+            table, fell_back, doubts = make_table(ai, http, text, uf.get("source_url") or None,
+                                                  pdf.read_bytes() if uf.get("source_pdf") and pdf.is_file() else None)
         except AIPaused:
             return recipe_page(request, rid, error="The table can be made after the 1st.", status_code=409)
         except (AIError, ValueError) as e:
             return recipe_page(request, rid, error=f"Couldn't make the table: {e}", status_code=502)
         grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json()})
+        if doubts:  # shown once, with the new table: there is no review to keep them on
+            return recipe_page(request, rid, note=MADE_FROM_TEXT if fell_back else None,
+                               doubts=[d.model_dump() for d in doubts])
         return back(f"/recipes/{rid}" + ("?made=text" if fell_back else ""))
 
     @app.get("/recipes/{rid}/photo")
@@ -957,7 +980,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             raise HTTPException(404, "No such import")
         return p
 
-    def review_page(request: Request, p, table: CfeTable, rows: list[dict], errors: list[str]):
+    def review_page(request: Request, p, table: CfeTable, rows: list[dict], errors: list[str],
+                    doubts: list[dict] = ()):
         gens = sorted(_generics(grocy), key=lambda g: g["name"].lower())
         for ing, row in zip(table.ingredients, rows):
             row["text"], row["packets"] = line_text(ing, 1), packet_text(ing.packets) if ing.packets else ""
@@ -967,7 +991,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     pdf=store.pdf_path(p.id) is not None, missing=sum(not r["product_id"] for r in rows),
                     source_url=p.source if p.source.startswith(("http://", "https://")) else None,
                     locations=list(places(grocy)), default_location=default_place(grocy),
-                    table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
+                    table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table),
+                    **_doubt_ctx(doubts))
 
     def next_review(none: str) -> RedirectResponse:
         """The oldest import ready for review, else `none`."""
@@ -989,7 +1014,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             store.save(p)  # Claude's picks kept: reloading this page costs nothing
         rows = [{"product_id": m.product_id, "new_name": ing.name, "error": None}
                 for m, ing in zip(matches, p.draft.table.ingredients)]
-        return review_page(request, p, p.draft.table, rows, [])
+        return review_page(request, p, p.draft.table, rows, [], p.doubts)
 
     @app.get("/import/{pid}/photo")
     def review_photo(pid: str):
@@ -1031,10 +1056,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             rows.append(row)
         errors: list[str] = []
         if action == "save":
+            cleared, p.doubts = p.doubts, []  # Save clears every doubt: the reviewer has looked
             known = dict(p.estimates)
             amounts = [estimate_amount(grocy, ai, p, r["product_id"], ing.qty, ing.unit) if r["product_id"] else None
                        for ing, r in zip(table.ingredients, rows)]  # Claude's guesses, never shown or typed
-            if p.estimates != known:
+            if p.estimates != known or cleared:
                 store.save(p)  # kept: a failed Save doesn't ask again
             draft = p.draft.model_copy(update={"table": table})
             source_url = p.source if p.source.startswith(("http://", "https://")) else None
@@ -1057,7 +1083,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                                 log.warning("could not store the estimate for product %s", r["product_id"],
                                             exc_info=True)
                     return next_review("/recipes")
-        return review_page(request, p, table, rows, errors)
+        return review_page(request, p, table, rows, errors, _standing(p.doubts, p.draft.table, table))
 
     @app.post("/import/{pid}/discard")
     def discard(pid: str, then: str = Form("")):

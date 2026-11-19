@@ -21,6 +21,7 @@
 {% if cfe %}
 {% with pre=cfe.pre, grid=cfe.grid, ncols=cfe.ncols, cross=cross %}{% include "_cfe_table.html" %}{% endwith %}
 <div class="cross-bar"><p class="muted">Tap a step or an ingredient to cross it off.</p><button class="btn" type="button" id="start-over">Start over</button></div>
+{% include "_doubts.html" %}
 {% endif %}
 <div class="recipe-more">
 <div>

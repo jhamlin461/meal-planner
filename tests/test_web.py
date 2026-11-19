@@ -1819,3 +1819,53 @@ def test_a_refused_conversion_still_saves_the_recipe(env):
     r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg), follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/recipes" and len(g.objects("recipes")) == 1
     assert store.get(pid) is None and not g.objects("quantity_unit_conversions", product_id=flour)
+
+
+# ---- the accuracy check's doubts (Task 3) ------------------------------------------------------------------------
+DOUBTS = [{"ref": "i1", "reason": "The card says 2 dragon eggs."}, {"ref": "o1", "reason": "No time on the card."},
+          {"ref": "", "reason": "The card lists salt; no row has it."}]
+
+
+def doubtful(store, doubts=DOUBTS):
+    p = store.new("https://example.com/soup")
+    store.save(p.model_copy(update={"status": "ready", "draft": soup_draft(), "doubts": doubts}))
+    return p.id
+
+
+def table_cells(html):
+    """(classes, visible words) per table cell."""
+    return [(cls, " ".join(re.sub(r"<[^>]*>", " ", body).split()))
+            for cls, body in re.findall(r'<td class="([^"]*)"[^>]*>(.*?)</td>', html, re.S)]
+
+
+def doubt_notes(html):
+    m = re.search(r'<div class="doubts" role="note"[^>]*>(.*?)</div>', html, re.S)
+    return m and re.findall(r"<li>(.*?)</li>", m.group(1), re.S)
+
+
+def test_review_marks_doubts_and_lists_reasons(env):
+    g, ai, store, c, _ = env
+    html = c.get(f"/import/{doubtful(store)}").text
+    assert table_cells(html) == [("cfe-ingredient", "2 cup flour"), ("cfe-op doubt", "mix Check this, note 2"),
+                                 ("cfe-ingredient doubt", "1 dragon egg Check this, note 1")]
+    # numbered as the markers are; the one about no row in particular is listed without marking a cell
+    assert doubt_notes(html) == ["The card says 2 dragon eggs.", "No time on the card.",
+                                 "The card lists salt; no row has it."]
+    assert "Check this against the card" in html and "style=" not in html and "·" not in html
+    assert doubt_notes(c.get(f"/import/{doubtful(store, [])}").text) is None  # nothing doubted: no list
+
+
+def test_editing_a_row_clears_its_doubt(env):
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    html = c.post(f"/import/{pid}", data=review_form(action="update")).text  # nothing changed: all stand
+    assert len(doubt_notes(html)) == 3
+    html = c.post(f"/import/{pid}", data=review_form(action="update", op_label=["mix 2 min", ""])).text
+    assert doubt_notes(html) == ["The card says 2 dragon eggs.", "The card lists salt; no row has it."]
+    assert ("cfe-op", "mix 2 min") in table_cells(html)
+    assert ("cfe-ingredient doubt", "1 dragon egg Check this, note 1") in table_cells(html)
+    html = c.post(f"/import/{pid}", data=review_form(action="update", packets=["", "2"])).text  # egg's packets
+    assert doubt_notes(html) == ["No time on the card.", "The card lists salt; no row has it."]
+    assert store.get(pid).doubts == DOUBTS  # an edit isn't kept until Save, so neither is its clearing
+    html = c.post(f"/import/{pid}", data=review_form()).text  # Save (refused: no products picked)
+    assert doubt_notes(html) is None and "doubt" not in html and store.get(pid).doubts == []

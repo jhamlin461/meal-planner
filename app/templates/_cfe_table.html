@@ -1,13 +1,15 @@
 {% from "_packets.html" import packets %}
-{# `cross` (optional, a storage key that changes when the table does): ingredient and step cells become toggles for crossing off while cooking (app.js) #}
+{# `cross` (optional, a storage key that changes when the table does): ingredient and step cells become toggles for crossing off while cooking (app.js).
+   `marks` (optional, web._doubt_ctx): doubtful cells are outlined and carry the numbers of their notes in _doubts.html. #}
 <div class="cfe-wrap" role="region" aria-label="Recipe table" tabindex="0"{% if cross %} data-cross-key="{{ cross }}"{% endif %}>
 <table class="cfe">
 {% for line in pre %}<tr><td class="cfe-pre" colspan="{{ ncols }}">{{ line }}</td></tr>
-{% endfor %}{% for row in grid %}<tr>{% for c in row %}<td class="cfe-{{ c.kind }}" rowspan="{{ c.rowspan }}" colspan="{{ c.colspan }}"
+{% endfor %}{% for row in grid %}<tr>{% for c in row %}{% set m = marks[c.ref] if marks and c.ref in marks else none %}<td class="cfe-{{ c.kind }}{{ ' doubt' if m }}" rowspan="{{ c.rowspan }}" colspan="{{ c.colspan }}"
 {%- if cross and c.ref %} data-cross="{{ c.ref }}" role="button" tabindex="0" aria-pressed="false"{% endif %}>
 {%- if c.kind == "ingredient" %}{% if c.amount %}<span class="cfe-amt">{{ c.amount }}</span>{% endif %}{{ packets(c.packets) }}
 {%- if c.amount or c.packets %} {% endif %}{{ c.name }}
 {%- if c.note %}<span class="cfe-note">{{ c.note }}</span>{% endif %}{% else %}{{ c.text }}{% endif %}
+{%- for n in m or [] %}<sup class="doubt-mark"><span class="sr-only">Check this, note </span>{{ n }}</sup>{% endfor %}
 {%- if c.where %}<span class="cfe-where">{{ c.where }}</span>{% endif %}</td>{% endfor %}</tr>
 {% endfor %}</table>
 </div>

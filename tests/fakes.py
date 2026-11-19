@@ -298,8 +298,10 @@ def fake_grocy_with_week():
 class FakeAI:
     """Canned stand-in for app.ai.AI; set attributes per test, or set `error` to make every call raise."""
 
-    def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None, mode="full"):
+    def __init__(self, draft=None, guess=None, conversion=None, picks=None, week=None, error=None, mode="full",
+                 check=None):
         self.draft, self.guess, self.conversion, self.picks, self.week = draft, guess, conversion, picks, week
+        self.check = check  # check_table's answer (a TableCheck, or an exception it raises); None: the table back
         self.error = error
         self.mode_ = mode  # the budget mode app.ai.AI.mode() would report
 
@@ -317,6 +319,13 @@ class FakeAI:
     def structure_recipe(self, text=None, pdf=None, image=None):
         self.seen_text, self.seen_pdf = text, pdf
         return self._ret(self.draft)
+
+    def check_table(self, table, servings, text=None, pdf=None, image=None):
+        from app.ai import TableCheck
+        self.checked = {"table": table, "servings": servings, "text": text, "pdf": pdf}
+        if isinstance(self.check, Exception):
+            raise self.check
+        return self._ret(self.check or TableCheck(table=table, doubts=[]))
 
     def open_batches(self):
         return []

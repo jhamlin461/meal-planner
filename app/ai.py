@@ -17,8 +17,8 @@ MODEL = "claude-opus-5-5"
 BETAS = ["server-side-fallback-2026-07-01"]
 HAIKU = "claude-haiku-5-5"  # no server-side fallbacks: called without betas/fallbacks
 # Economy mode, per call type: (model, effort). Week suggestions are not listed: they stay as in full mode.
-ECONOMY = {"recipe": (MODEL, "medium"), "product": (HAIKU, "low"), "conversion": (HAIKU, "low"),
-           "match": (HAIKU, "low")}
+ECONOMY = {"recipe": (MODEL, "medium"), "check": (MODEL, "medium"), "product": (HAIKU, "low"),
+           "conversion": (HAIKU, "low"), "match": (HAIKU, "low")}
 MATCH_LIMIT = 30  # economy: products sent with an ingredient list
 log = logging.getLogger(__name__)
 
@@ -81,6 +81,16 @@ class RecipeDraft(BaseModel):
     servings: int | None
     steps: list[str]
     table: CfeTable
+
+
+class Doubt(BaseModel):
+    ref: str  # "i<index>" (an ingredient row), an op id, or "" for the table as a whole (something missing)
+    reason: str
+
+
+class TableCheck(BaseModel):
+    table: CfeTable
+    doubts: list[Doubt]
 
 
 class ProductGuess(BaseModel):
@@ -149,6 +159,21 @@ Table rules:
 - Replace kit-only seasoning blends (e.g. "Southwest Spice Blend") with their component spices: one row each, amounts
   estimated, note "(est., from <blend name>)", packets null. Ops must still cover those rows contiguously."""
 
+CHECK_PROMPT = """You check a Cooking-for-Engineers table against the recipe it was made from; someone will cook from
+the table alone, so it must match the card exactly. The user message gives the recipe, then the table and the servings
+it is for (null: the card's own).
+Compare, against the recipe: every amount and unit, every packet count (the column for those servings), every
+temperature and time in the step labels, and which ingredients each step combines. Correct anything wrong in place.
+Return the corrected table with the same ingredient rows and the same steps (same ids) in the same order: never add,
+remove or reorder a row or a step, and keep the table valid under the rules below.
+Add a doubt for anything you are not sure of, anything the recipe has that the table lacks, and anything in the
+table the recipe doesn't have. A doubt's ref is the ingredient row ("i<index>", zero-based) or the step's id it is
+about, or "" when it belongs to no row or step (something missing). Its reason is one short sentence for the cook,
+naming the ingredient or step. No doubts when everything matches.
+
+The table was made with these instructions:
+""" + CFE_PROMPT
+
 PRODUCT_PROMPT = """You fill in pantry product details for a grocery inventory.
 Use the given product info (barcode database data or a package photo). Prefer an existing generic from
 `generics` when one fits (is_new_generic=false, generic_name = its name exactly); otherwise propose a short new
@@ -186,14 +211,15 @@ def _system(text: str) -> list[dict]:
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
-def _recipe_content(text: str | None = None, pdf: bytes | None = None, image: bytes | None = None) -> list[dict]:
+def _recipe_content(text: str | None = None, pdf: bytes | None = None, image: bytes | None = None,
+                    ask: str = "Structure the attached recipe.") -> list[dict]:
     content: list[dict] = []
     if pdf:
         content.append({"type": "document", "source": {
             "type": "base64", "media_type": "application/pdf", "data": _b64(pdf)}})
     if image:
         content.append(_image_block(image))
-    content.append({"type": "text", "text": text or "Structure the attached recipe."})
+    content.append({"type": "text", "text": text or ask})
     return content
 
 
@@ -265,6 +291,13 @@ class AI:
     def structure_recipe(self, text: str | None = None, pdf: bytes | None = None,
                          image: bytes | None = None) -> RecipeDraft:
         return self._parse("recipe", RecipeDraft, "high", CFE_PROMPT, _recipe_content(text, pdf, image))
+
+    def check_table(self, table: CfeTable, servings: int | None, text: str | None = None, pdf: bytes | None = None,
+                    image: bytes | None = None) -> TableCheck:
+        """The accuracy check: Claude re-reads the source against the table, correcting it and saying what it doubts."""
+        content = _recipe_content(text, pdf, image, ask="The recipe is attached.")
+        content.append({"type": "text", "text": json.dumps({"servings": servings, "table": table.model_dump()})})
+        return self._parse("check", TableCheck, "high", CHECK_PROMPT, content)
 
     def submit_recipe_batch(self, pdfs: dict[str, bytes]) -> str:
         """Economy: read several PDFs through the Message Batches API at half price (results usually in minutes,

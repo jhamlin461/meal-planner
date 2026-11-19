@@ -25,7 +25,7 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from app.ai import AIError, AIPaused, RecipeDraft
+from app.ai import AIError, AIPaused, Doubt, RecipeDraft, TableCheck
 from app.barcode import _generic_named, _generics, _product_fields, create_manual, generic_choices
 from app.cfe import CfeTable, Ingredient, line_text, validate
 from app.nutrition import fill_missing_nutrition
@@ -281,6 +281,7 @@ class Pending(BaseModel):
     tableless: bool = False  # read without Claude from the page's JSON-LD: may be saved without a table
     ai_picks: dict[str, int | None] = {}  # Claude's product per ingredient name, so a reload doesn't ask again
     estimates: dict[str, float] = {}  # "{product_id}:{unit}" -> Claude's stock units per 1 unit, asked once
+    doubts: list[dict] = []  # the accuracy check's Doubts (ref, reason), shown on the review until Save
 
 
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -373,31 +374,67 @@ def _get(http, url: str) -> httpx.Response:
     return r
 
 
-def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraft, bytes | None, bool]:
-    """The draft, the dish photo (None when there is none) and whether it was read without Claude (no table)."""
+MISFIT = "The check suggested changes that didn't fit; compare with the card."
+
+
+def apply_check(table: CfeTable, check: TableCheck) -> tuple[CfeTable, list[Doubt]]:
+    """The checked table and its doubts. The correction is taken only when it keeps every ingredient row and step
+    where it was (product picks go by row) and still validates; otherwise the table stays as it was and the check's
+    doubts are kept for the table as a whole, since their rows may not line up. Doubts about unknown rows are dropped."""
+    new, names = check.table, [g.name for g in table.ingredients]
+    moved = any(g.name != old and g.name in names for g, old in zip(new.ingredients, names))  # rows swapped
+    if (len(new.ingredients) != len(names) or moved or [o.id for o in new.ops] != [o.id for o in table.ops]
+            or validate(new)):
+        return table, [Doubt(ref="", reason=MISFIT), *(Doubt(ref="", reason=d.reason) for d in check.doubts)]
+    refs = {"", *(f"i{n}" for n in range(len(names))), *(o.id for o in new.ops)}
+    return new, [d for d in check.doubts if d.ref in refs]
+
+
+def check(ai, table: CfeTable, servings: int | None, **source) -> tuple[CfeTable, list[Doubt]]:
+    """The accuracy check of a table Claude just made, against the same source (text=, pdf=). Claude failing or
+    paused leaves the table unchecked, with no doubts."""
+    try:
+        return apply_check(table, ai.check_table(table, servings, **source))
+    except AIError:  # AIPaused too
+        log.warning("could not check the table; keeping it unchecked", exc_info=True)
+        return table, []
+
+
+def _structure(ai, http, url: str | None,
+               pdf: bytes | None) -> tuple[RecipeDraft, bytes | None, bool, list[Doubt]]:
+    """The checked draft, the dish photo (None when there is none), whether it was read without Claude (no table)
+    and the check's doubts."""
     if pdf:
-        return ai.structure_recipe(pdf=pdf), pdf_photo(pdf), False
+        draft = ai.structure_recipe(pdf=pdf)
+        draft.table, doubts = check(ai, draft.table, draft.servings, pdf=pdf)
+        return draft, pdf_photo(pdf), False, doubts
     if not url:
         raise ValueError("nothing to import: no URL or PDF")
     r = _get(http, url)
-    tableless = False
+    tableless, doubts = False, []
     try:
-        draft = ai.structure_recipe(text=_recipe_text(ai, r.text))
+        text = _recipe_text(ai, r.text)
+        draft = ai.structure_recipe(text=text)
     except AIPaused:
         node = _jsonld(r.text)
         if node is None:
             raise  # nothing to go on without Claude: wait for the 1st
         draft, tableless = draft_from_jsonld(node), True
-    return draft, fetch_photo(http, photo_url(r.text, str(r.url))), tableless
+    else:
+        draft.table, doubts = check(ai, draft.table, draft.servings, text=text)
+    return draft, fetch_photo(http, photo_url(r.text, str(r.url))), tableless, doubts
 
 
-def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = None) -> tuple[CfeTable, bool]:
+def make_table(ai, http, text: str, url: str | None = None,
+               pdf: bytes | None = None) -> tuple[CfeTable, bool, list[Doubt]]:
     """"Make the table" for a saved recipe: read its kept PDF, else its web page, else `text` (its saved ingredients
-    and steps). Returns the table and whether `text` stood in for a page that couldn't be fetched. Raises AIError
-    (AIPaused in free mode), or ValueError when Claude's table doesn't check out."""
+    and steps), then check it against the same. Returns the table, whether `text` stood in for a page that couldn't be
+    fetched, and the check's doubts. Raises AIError (AIPaused in free mode), or ValueError when Claude's table doesn't
+    check out."""
     fell_back = False
     if pdf:
         draft = ai.structure_recipe(pdf=pdf)
+        table, doubts = check(ai, draft.table, draft.servings, pdf=pdf)
     else:
         if url:
             try:
@@ -406,9 +443,10 @@ def make_table(ai, http, text: str, url: str | None = None, pdf: bytes | None = 
                 log.warning("could not fetch %s; using the saved recipe", url, exc_info=True)
                 fell_back = True
         draft = ai.structure_recipe(text=text)
-    if validate(draft.table):
+        table, doubts = check(ai, draft.table, draft.servings, text=text)
+    if validate(table):
         raise ValueError("the table Claude made doesn't check out; try again, or make it by hand with Edit table")
-    return draft.table, fell_back
+    return table, fell_back, doubts
 
 
 def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf: bytes | None) -> None:
@@ -428,12 +466,14 @@ def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf
         log.exception("could not record result of import %s", pending_id)
 
 
-def _ready(store: PendingStore, p: Pending, draft: RecipeDraft, photo: bytes | None, tableless: bool = False) -> None:
+def _ready(store: PendingStore, p: Pending, draft: RecipeDraft, photo: bytes | None, tableless: bool = False,
+           doubts: list[Doubt] = ()) -> None:
     if photo:
         store.save_photo(p.id, photo)
     if draft.servings is None:
         draft.servings = 2
     p.status, p.draft, p.error, p.batch_id, p.tableless = "ready", draft, None, None, tableless
+    p.doubts = [d.model_dump() for d in doubts]
 
 
 BATCH_MIN = 3  # economy: this many PDFs imported at once go through one Message Batch
@@ -493,8 +533,12 @@ def _collect(store: PendingStore, ai, bid: str, pids: list[str]) -> None:
         if isinstance(got, str):
             p.status, p.error, p.batch_id = "failed", got, None
         else:
-            pdf = store.pdf_path(pid)
-            _ready(store, p, got, pdf_photo(pdf.read_bytes()) if pdf else None)
+            f = store.pdf_path(pid)
+            pdf = f.read_bytes() if f else None
+            doubts = []
+            if pdf:  # checked by a normal call, now its result is here
+                got.table, doubts = check(ai, got.table, got.servings, pdf=pdf)
+            _ready(store, p, got, pdf_photo(pdf) if pdf else None, doubts=doubts)
         store.save(p)
 
 
