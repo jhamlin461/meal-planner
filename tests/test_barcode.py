@@ -275,3 +275,18 @@ def test_brand_follows_its_generics_group():
     assert g.get_object("products", food.product_id)["product_group_id"] == group
     relink(g, flour.product_id, "Trash bags")  # same unit: relinked under a supply generic
     assert g.get_object("products", flour.product_id)["product_group_id"] == group
+
+
+def test_package_source_owner_only_when_the_scan_gave_the_size():
+    """A size from the barcode data is the owner's (a Walmart link never replaces it); one Claude guessed is an estimate."""
+    g = grocy()
+    r = resolve(g, FakeAI(guess=guess()), http(off=OFF), CODE)  # Open Food Facts says "5 lb"
+    assert g.userfields("products", r.product_id)["package_source"] == "owner"
+    upc = {"items": [{"title": "Brand rice", "brand": "Brand"}]}  # UPC hits never carry a size
+    r = resolve(g, FakeAI(guess=guess(generic_name="Rice", package_amount=900)), http(upc=upc), "0001")
+    assert g.userfields("products", r.product_id)["package_source"] == "estimate"
+    r = resolve_from_photo(g, FakeAI(guess=guess(generic_name="Beans", package_amount=400)), http(), "0002", b"jpg")
+    assert g.userfields("products", r.product_id)["package_source"] == "estimate"  # Claude read the photo
+    relink(g, r.product_id, "Pulses")  # a new generic made from the brand keeps where its size came from
+    pulses = next(p for p in g.objects("products") if p["name"] == "Pulses")
+    assert g.userfields("products", pulses["id"])["package_source"] == "estimate"

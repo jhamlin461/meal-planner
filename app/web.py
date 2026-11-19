@@ -7,6 +7,7 @@ import math
 import mimetypes
 import re
 import threading
+import time
 from datetime import date, datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 from pathlib import Path
@@ -34,7 +35,7 @@ from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
-from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic,
+from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, add_conversion, create_generic,
                           estimate_amount, estimate_key, make_table, needs_estimate, page_text, process,
                           propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
                           to_jpeg)
@@ -282,6 +283,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     last_picks: dict[date, list[dict]] = {}  # latest suggestions per week, until accepted or dismissed
     save_lock = threading.Lock()  # ponytail: one lock for all import saves; they are rare and per-household
     measure_lock = threading.Lock()  # one measure fill at a time, so no product is asked about twice
+    measure_tried: dict[int, float] = {}  # product id -> when Claude last gave no usable measure for it
 
     @app.middleware("http")
     async def no_cross_site_writes(request: Request, call_next):
@@ -621,11 +623,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.post("/home/supplies/{pid}/min")
     def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False), place: int | None = Form(None),
                    word: str | None = Form(None, alias="measure")):
+        gen = generic_of(product_or_404(pid))
         try:
-            m = typed(generic_of(product_or_404(pid)), word)
+            m = typed(gen, word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
-        set_min(pid, msr.to_stock(amount, m))  # 0 = never goes on Running low
+        set_min(pid, msr.from_field(amount, m, float(gen.get("min_stock_amount") or 0)))  # 0 = never on Running low
         return inventory_back(place)
 
     @app.post("/home/supplies/{pid}/move")
@@ -654,11 +657,26 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def fill_measures(pids: list[int]) -> None:
         """Claude's measure for products shown without one, after the page is sent: they show it from the next visit.
-        ponytail: a product Claude can't answer for is asked again on the next visit (free mode asks nothing)."""
-        with measure_lock:
+        A fill already running takes them (nothing piles up); one Claude gave no usable measure for waits a day.
+        ponytail: that wait is kept in memory, so a restart asks again."""
+        if not measure_lock.acquire(blocking=False):
+            return
+        try:
             for pid in pids:
-                if p := grocy.get_object("products", pid):
-                    msr.of(grocy, ai, p)
+                if ai.mode() == "free":
+                    return
+                if pid in measure_tried and time.monotonic() - measure_tried[pid] < FILL_RETRY:
+                    continue
+                try:
+                    if p := grocy.get_object("products", pid):
+                        msr.of(grocy, ai, p)
+                        if not grocy.userfields("products", pid).get("measure"):  # failed, or not a measure
+                            measure_tried[pid] = time.monotonic()
+                except Exception:  # one product's failure never stops the rest
+                    log.warning("could not find a measure for product %s", pid, exc_info=True)
+                    measure_tried[pid] = time.monotonic()
+        finally:
+            measure_lock.release()
 
     @app.get("/inventory")
     def inventory(request: Request, background: BackgroundTasks, place: int | None = None, msg: str = "",
@@ -692,11 +710,12 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             m = typed(product_or_404(pid), word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
-        grocy.set_amount(pid, msr.to_stock(amount, m))
+        own = sum(float(e["amount"]) for e in grocy.stock_entries() if int(e["product_id"]) == pid)  # as prefilled
+        grocy.set_amount(pid, msr.from_field(amount, m, own))
         return inventory_back(place)
 
     @app.post("/inventory/{pid}/measure")
-    def inventory_measure(pid: int, word: str = Form(alias="measure"), place: int | None = Form(None)):
+    def inventory_measure(pid: int, word: str = Form("", alias="measure"), place: int | None = Form(None)):
         """The person's own measure for this product: every amount of it is shown and typed in it from now on."""
         try:
             msr.change(grocy, product_or_404(pid), word)
@@ -834,6 +853,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         p = product_or_404(pid)
         try:
             m = typed(p, body.measure)
+            if body.measure is None and (body.amount or body.min) and m.word != msr.stock_unit(grocy, p):
+                raise ValueError(f"Say which measure the amount is in ({msr.label(m)}).")
         except ValueError as e:
             return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
         known = _num(grocy.userfields("products", pid).get("package_amount"))
@@ -865,7 +886,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             if done > 0:
                 tid = grocy.consume(pid, done)
         if body.min:
-            set_min(pid, msr.to_stock(body.min, m))
+            set_min(pid, msr.from_field(body.min, m, known) if known else msr.to_stock(body.min, m))  # keep: 1 package
         return {"status": "ok", "action": body.action, "product": p["name"], "amount": done, "place": place,
                 "transaction_id": tid, "shown": msr.show(done, m), "short": done < want}
 

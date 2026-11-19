@@ -17,9 +17,10 @@ USERFIELDS = (
      ("recipes", "doubts", MULTI),
      ("products", "walmart_item_id", TEXT), ("products", "staple", CHECK)]
     + [("products", n, NUM) for n in ("package_amount", "g_per_unit", "kcal_100", "protein_100", "carbs_100", "fat_100",
-                                      "measure_factor")]
-    # measure: the household measure ("cups"); *_source: where measure / package_amount came from (estimate, link, owner)
-    + [("products", n, TEXT) for n in ("measure", "measure_source", "package_source")]
+                                      "measure_factor", "measure_count_factor")]
+    # measure: the household measure ("cups"); *_source: where measure / package_amount came from (estimate, link,
+    # owner); measure_count: a count word ("bottles") the product was in before a kitchen measure, kept to go back
+    + [("products", n, TEXT) for n in ("measure", "measure_source", "package_source", "measure_count")]
 )
 
 

@@ -123,10 +123,10 @@ def _product_fields(grocy, g, source: str = "estimate") -> tuple[dict, dict]:
     return fields, uf
 
 
-def _create(grocy, g, name: str, code: str | None, nutrition: dict) -> Resolved:
+def _create(grocy, g, name: str, code: str | None, nutrition: dict, source: str) -> Resolved:
     """The generic (found or new) and a product `name` under it with barcode `code`. Without a code, a name that is
-    the generic's own makes just the generic. A scan's or a typed package size counts as the owner's."""
-    fields, uf = _product_fields(grocy, g, "owner")
+    the generic's own makes just the generic. `source`: where the package size came from (see _product_fields)."""
+    fields, uf = _product_fields(grocy, g, source)
     parent = _generic_named(grocy, g.generic_name)
     if parent:
         uf = _align_to_parent(grocy, parent, fields, uf)
@@ -158,7 +158,8 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
         g = ai.guess_product(info, generic_choices(grocy), list(places(grocy)))
     except AIPaused as e:
         raise NeedsDetails(info["name"]) from e
-    return _create(grocy, g, info["name"], code, _nutrition(info))
+    # the barcode data's own size is the owner's; one Claude guessed without it is an estimate
+    return _create(grocy, g, info["name"], code, _nutrition(info), "owner" if info.get("quantity_text") else "estimate")
 
 
 def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -> Resolved:
@@ -166,7 +167,7 @@ def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -
         g = ai.guess_product({"barcode": code}, generic_choices(grocy), list(places(grocy)), image=image)
     except AIPaused as e:
         raise NeedsDetails() from e
-    return _create(grocy, g, f"{g.generic_name} (scanned)", code, {})
+    return _create(grocy, g, f"{g.generic_name} (scanned)", code, {}, "estimate")  # Claude read it off the photo
 
 
 def create_manual(grocy, http: httpx.Client, code: str | None, name: str, generic: str, stock_unit: str,
@@ -181,7 +182,7 @@ def create_manual(grocy, http: httpx.Client, code: str | None, name: str, generi
     g = ProductGuess.model_construct(generic_name=parent["name"] if parent else generic, is_new_generic=parent is None,
                                      stock_unit=stock_unit, package_amount=package_amount, location=location,
                                      best_before_days=days, g_per_unit=None, category=category)
-    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}) if code else {})
+    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}) if code else {}, "owner")
 
 
 def relink(grocy, product_id: int, generic_name: str) -> None:
@@ -205,7 +206,8 @@ def relink(grocy, product_id: int, generic_name: str) -> None:
                                                                         *MEASURE), ""), **new_uf})
     if parent:
         upd["product_group_id"] = parent.get("product_group_id")  # follows its generic between Pantry and Supplies
-    parent_id = _find_or_create_generic(
-        grocy, generic_name, {k: child[k] for k in keep if k in child},
-        {k: uf[k] for k in ("package_amount", "g_per_unit") if k in uf}, {})
+    new = {k: uf[k] for k in ("package_amount", "g_per_unit", *MEASURE) if uf.get(k) not in (None, "")}
+    if "package_amount" in new:  # a new generic made from this brand keeps where its size came from
+        new["package_source"] = uf.get("package_source") or "estimate"
+    parent_id = _find_or_create_generic(grocy, generic_name, {k: child[k] for k in keep if k in child}, new, {})
     grocy.update("products", product_id, {**upd, "parent_product_id": parent_id})

@@ -9,7 +9,7 @@
     <form class="inline" method="post" action="/inventory/{{ r.pid }}/measure">{{ keep() }}
       <label for="measure-{{ r.pid }}-{{ r.loc }}">Measure in</label>
       <span class="inline-group">
-        <select id="measure-{{ r.pid }}-{{ r.loc }}" name="measure">{% if now not in words %}<option value="" selected disabled>Choose</option>{% endif %}{% for w in words %}<option value="{{ w }}"{% if w == now %} selected{% endif %}>{{ w }}</option>{% endfor %}</select>
+        <select id="measure-{{ r.pid }}-{{ r.loc }}" name="measure" required>{% if now not in words %}<option value="" selected disabled>Choose</option>{% endif %}{% for w in words %}<option value="{{ w }}"{% if w == now %} selected{% endif %}>{{ w }}</option>{% endfor %}</select>
         <button class="btn">Change</button>
       </span>
     </form>

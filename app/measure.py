@@ -1,7 +1,7 @@
 """Household measures: each product is shown and typed in a measure people use ("cups", "rolls", "eggs"); Grocy
 keeps its stock unit (g, ml, piece) and every write converts with the product's factor (stock units per measure)."""
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.ai import AIError
 from app.qty import format_qty, normalize_unit
@@ -16,6 +16,7 @@ STOCK_WORDS = {"g", "ml", "kg", "l"}  # never a measure: no gram value is shown 
 class Measure:
     word: str  # as shown for several: "cups", "rolls"; a stock unit name when the product has no measure yet
     factor: float  # stock units per 1 measure
+    count: str = field(default="", compare=False)  # a count word it was in before a kitchen measure ("bottles")
 
 
 def _key(word: str) -> str:
@@ -33,7 +34,8 @@ def _one(word: str) -> str:
     """The singular: "cups" -> "cup", "boxes" -> "box", "rolls" -> "roll"; tbsp, oz, lb stay."""
     if _key(word) in KITCHEN:
         return _key(word)
-    for tail, keep in (("ches", "ch"), ("shes", "sh"), ("xes", "x"), ("sses", "ss"), ("ies", "y")):
+    # ponytail: a short list of English endings; a word it gets wrong reads oddly only at exactly one
+    for tail, keep in (("ches", "ch"), ("shes", "sh"), ("xes", "x"), ("sses", "ss"), ("rries", "rry"), ("aves", "af")):
         if word.endswith(tail):
             return word[: -len(tail)] + keep
     return word[:-1] if word.endswith("s") and not word.endswith("ss") else word
@@ -72,6 +74,12 @@ def to_stock(amount: float, m: Measure) -> float:
     return amount * m.factor
 
 
+def from_field(amount: float, m: Measure, shown: float) -> float:
+    """A typed amount in stock units; `shown` (stock units) when the field still holds the value it was prefilled
+    with, so saving an untouched form writes nothing new (the prefill is rounded)."""
+    return shown if amount == float(value(shown, m)) else to_stock(amount, m)
+
+
 def _ok(x) -> float | None:
     try:
         f = float(x)
@@ -80,7 +88,7 @@ def _ok(x) -> float | None:
     return f if math.isfinite(f) and f > 0 else None
 
 
-def _stock(grocy, product: dict) -> str:
+def stock_unit(grocy, product: dict) -> str:
     qu = product.get("qu_id_stock")
     return next((u["name"] for u in grocy.objects("quantity_units") if str(u["id"]) == str(qu)), "")
 
@@ -105,8 +113,8 @@ def of(grocy, ai, product: dict, stock: str | None = None) -> Measure:
     unit itself, until Claude is back. `stock`: the stock unit's name when the caller has it."""
     uf = grocy.userfields("products", int(product["id"]))
     if uf.get("measure") and _ok(uf.get("measure_factor")):
-        return Measure(uf["measure"], float(uf["measure_factor"]))
-    stock = _stock(grocy, product) if stock is None else stock
+        return Measure(uf["measure"], float(uf["measure_factor"]), uf.get("measure_count") or "")
+    stock = stock_unit(grocy, product) if stock is None else stock
     if ai is not None:
         try:
             g = ai.guess_measure(product["name"], stock)
@@ -120,10 +128,10 @@ def of(grocy, ai, product: dict, stock: str | None = None) -> Measure:
 
 
 def choices(stock: str, m: Measure) -> list[str]:
-    """The kitchen measures, plus the product's count word when it is counted in pieces or has one.
-    ponytail: a piece product moved to cups offers "pieces" back, not its old count word."""
+    """The kitchen measures, plus the product's count word: the one it is in, or was in before a kitchen measure,
+    else "pieces" for a product counted in pieces."""
     out = [_shown(k) for k in KITCHEN]
-    count = m.word if m.word not in out and m.word != stock else "pieces" if stock == "piece" else None
+    count = m.word if m.word not in out and m.word != stock else m.count or ("pieces" if stock == "piece" else "")
     return out + [count] if count else out
 
 
@@ -143,6 +151,8 @@ def _per_base(grocy, product: dict, stock: str, kind: str) -> float | None:
 def _factor(grocy, product: dict, stock: str, old: Measure, new: str) -> float | None:
     k, o = _key(new), _key(old.word)
     if k not in KITCHEN:
+        if new == old.count:  # back to the count word it had
+            return _ok(grocy.userfields("products", int(product["id"])).get("measure_count_factor"))
         return 1.0 if stock == "piece" else None  # a count word: one piece each
     kind, size = KITCHEN[k]
     if o in KITCHEN and KITCHEN[o][0] == kind:
@@ -156,8 +166,9 @@ def _factor(grocy, product: dict, stock: str, old: Measure, new: str) -> float |
 def change(grocy, product: dict, word: str) -> Measure:
     """The person's measure ("owner": Claude and a link never replace it). The factor comes from fixed kitchen math
     within volume or weight, else the product's own conversion; a kitchen measure that carried the product's own
-    weight-to-volume is kept as its conversion first, so switching back finds it. ValueError when unknown."""
-    stock = _stock(grocy, product)
+    weight-to-volume is kept as its conversion first, and a count word left for a kitchen measure is kept with its
+    factor (measure_count), so switching back finds them. ValueError when unknown."""
+    stock = stock_unit(grocy, product)
     old, new = of(grocy, None, product, stock), _shown(word)
     if new not in choices(stock, old):
         raise ValueError(f"Pick one of: {', '.join(choices(stock, old))}.")
@@ -171,5 +182,7 @@ def change(grocy, product: dict, word: str) -> Measure:
         from app.importer import add_conversion  # importer imports this module's users
         add_conversion(grocy, int(product["id"]), o, old.factor)
     m = Measure(new, f)
-    grocy.set_userfields("products", int(product["id"]), fields(m, "owner"))
+    counted = o not in KITCHEN and old.word != stock  # leaving a count word (not the bare stock unit)
+    kept = {"measure_count": old.word, "measure_count_factor": old.factor} if counted else {}
+    grocy.set_userfields("products", int(product["id"]), fields(m, "owner") | kept)
     return m

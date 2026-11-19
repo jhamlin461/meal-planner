@@ -90,7 +90,7 @@ def test_new_product_gets_measure_at_creation(env):
     pid = measure_scan(c, "777")
     uf = g.userfields("products", pid)
     assert (uf["measure"], uf["measure_factor"], uf["measure_source"]) == ("rolls", 1, "estimate")
-    assert uf["package_source"] == "owner"  # the scan's own package data
+    assert uf["package_source"] == "estimate"  # Claude read the size off the photo
     assert not ai.measures  # no second call
 
 
@@ -202,3 +202,78 @@ def test_free_mode_shows_stock_unit_until_measure(env):
     c.get("/inventory")
     assert ai.measures == [("Flour", "g")]
     assert "4 cups left" in c.get("/inventory").text and len(ai.measures) == 1
+
+
+def test_untouched_fields_leave_stock_exact(env):
+    """A prefilled amount saved as it was shown (rounded to 2 decimals) writes nothing new."""
+    g, _, c = env
+    spinach = product(g, "Spinach")
+    g.add_stock(spinach, 140, None, ids(g).location["Pantry"])
+    measured(g, spinach, "cups", 30)
+    html = c.get("/inventory").text
+    assert re.search(rf'id="total-{spinach}-\d+"[^>]*value="4.67"', html)
+    c.post(f"/pantry/{spinach}/amount", data={"amount": 4.67, "measure": "cups"})
+    assert g.stock_amounts()[spinach] == 140
+    c.post(f"/pantry/{spinach}/amount", data={"amount": 4.5, "measure": "cups"})  # a real change still writes
+    assert g.stock_amounts()[spinach] == 135
+    soap = supply(g, "Dish soap", min_stock=1000, stock=0)
+    measured(g, soap, "bottles", 750)
+    assert re.search(rf'id="min-{soap}-\d+"[^>]*value="1.33"', c.get("/inventory").text)
+    c.post(f"/home/supplies/{soap}/min", data={"amount": 1.33, "measure": "bottles"})
+    assert g.get_object("products", soap)["min_stock_amount"] == 1000
+
+
+def test_scan_min_and_supply_use_in_a_measure(env):
+    """Scan: a new supply's keep-at-least and using supplies, for a measure that isn't one stock unit each."""
+    g, ai, c = env
+    soap = supply(g, "Dish soap", min_stock=0, stock=3000, package_amount=1000)
+    measured(g, soap, "bottles", 750)
+    g.create("product_barcodes", {"product_id": soap, "barcode": "321"})
+    r = c.post("/api/scan/lookup", json={"code": "321"}).json()
+    assert (r["measure"], r["left"], r["keep"]) == ("bottles", "4 bottles left", 1.33)
+    ok = c.post("/api/scan/confirm", json={"product_id": soap, "action": "add", "min": 1.33, "measure": "bottles"})
+    assert ok.json()["status"] == "ok" and g.get_object("products", soap)["min_stock_amount"] == 1000  # untouched
+    c.post("/api/scan/confirm", json={"product_id": soap, "action": "add", "min": 2, "measure": "bottles"})
+    assert g.get_object("products", soap)["min_stock_amount"] == 1500
+    r = c.post("/api/scan/confirm", json={"product_id": soap, "action": "use", "packs": 2, "measure": "bottles"}).json()
+    assert r["amount"] == 1500 and r["shown"] == "2 bottles" and not r["short"]
+    r = c.post("/api/scan/confirm", json={"product_id": soap, "action": "add", "amount": 1})  # no measure said
+    assert r.status_code == 400 and "bottles" in r.json()["message"]
+
+
+def test_measure_in_needs_a_pick(env):
+    g, _, c = env
+    flour = product(g, "Flour")
+    g.add_stock(flour, 500, None, ids(g).location["Pantry"])
+    assert re.search(r'<select id="measure-\d+-\d+" name="measure" required>', c.get("/inventory").text)
+    r = c.post(f"/inventory/{flour}/measure", data={}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"]
+
+
+def test_count_word_stays_a_choice_after_a_change(env):
+    g, _, c = env
+    soap = supply(g, "Dish soap", min_stock=0, stock=1500)
+    g.update("products", soap, {"qu_id_stock": ids(g).unit["ml"]})
+    measured(g, soap, "bottles", 750)
+    c.post(f"/inventory/{soap}/measure", data={"measure": "cups"})
+    p = g.get_object("products", soap)
+    m = measure.of(g, None, p)
+    assert m.word == "cups" and "bottles" in measure.choices("ml", m)
+    assert measure.change(g, p, "bottles") == Measure("bottles", 750)
+    assert "2 bottles left" in c.get("/inventory").text
+
+
+def test_singular_words():
+    for many, one in (("loaves", "loaf"), ("cookies", "cookie"), ("boxes", "box"), ("cans", "can"),
+                      ("berries", "berry"), ("olives", "olive"), ("cups", "cup"), ("tbsp", "tbsp")):
+        assert measure.show(1, Measure(many, 1)) == f"1 {one}", many
+
+
+def test_background_fill_asks_a_failed_product_once_a_day(env):
+    g, ai, c = env
+    flour = product(g, "Flour")
+    g.add_stock(flour, 500, None, ids(g).location["Pantry"])
+    ai.measure = MeasureGuess(measure="g", factor=1)  # not a measure: refused by fixed()
+    c.get("/inventory")
+    c.get("/inventory")
+    assert ai.measures == [("Flour", "g")]
