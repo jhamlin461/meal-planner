@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError, AIPaused, budget_mode, month
 from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
-from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
+from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, line_text, ncols, packet_text, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
@@ -96,7 +96,8 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     """Rebuild the ops from the editor: per step row an op_id (hidden), an op_label, an op_where and the ticked chips
     op_in_<row> (ingredient ids or earlier steps' op_ids). Blank rows are dropped, action remove:<row> drops that step and the
     ticks pointing at it, and steps are renumbered o1, o2, ... in row order. A tick that names no ingredient and no
-    earlier step (unknown, later, itself) is kept as-is so validate() rejects it."""
+    earlier step (unknown, later, itself) is kept as-is so validate() rejects it. `packets` (one per ingredient row,
+    blank or not a number above 0 for none) sets each ingredient's packets; a form without them keeps the old ones."""
     wheres = form.getlist("op_where")
     rows = [(i.strip(), lab.strip(), [r.strip() for r in form.getlist(f"op_in_{k}") if r.strip()],
              wheres[k].strip() if k < len(wheres) else "")
@@ -116,6 +117,10 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
     unknown = {r for refs in picked for r in refs if isinstance(r, str)}
     fresh = (f"o{n}" for n in itertools.count(1) if f"o{n}" not in unknown)
     new = [next(fresh) for _ in rows]
+    packets = form.getlist("packets")
+    if len(packets) == len(old.ingredients):
+        old = old.model_copy(update={"ingredients": [g.model_copy(update={"packets": _num(n)})
+                                                     for g, n in zip(old.ingredients, packets)]})
     return old.model_copy(update={"ops": [Op(id=new[n], label=lab, where=where,
                                              inputs=[new[r] if isinstance(r, int) else r for r in refs])
                                           for n, ((_, lab, _, where), refs) in enumerate(zip(rows, picked))]})
@@ -955,7 +960,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def review_page(request: Request, p, table: CfeTable, rows: list[dict], errors: list[str]):
         gens = sorted(_generics(grocy), key=lambda g: g["name"].lower())
         for ing, row in zip(table.ingredients, rows):
-            row["text"] = ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")
+            row["text"], row["packets"] = line_text(ing, 1), packet_text(ing.packets) if ing.packets else ""
         tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",

@@ -78,7 +78,11 @@ def seed(data: Path, settings: Settings):
 
     pids = [product(ing.name) for ing in BROWNIE.ingredients]
     wheres = ["in a small pot", "same pot", "same pot", "in a large bowl", "in the 8x8 pan"]
-    table = BROWNIE.model_copy(update={"ops": [o.model_copy(update={"where": w}) for o, w in zip(BROWNIE.ops, wheres)]})
+    extras = {0: {"note": "cubed"}, 3: {"note": "(est.)", "packets": 2}, 6: {"packets": 1},
+              8: {"note": "(for the batter)"}}  # prep and purpose notes, and two from a meal kit's packets
+    table = BROWNIE.model_copy(update={"ops": [o.model_copy(update={"where": w}) for o, w in zip(BROWNIE.ops, wheres)],
+                                       "ingredients": [ing.model_copy(update=extras.get(n, {}))
+                                                       for n, ing in enumerate(BROWNIE.ingredients)]})
     draft = RecipeDraft(title="Fudgy brownies", servings=4, steps=["Mix", "Bake"], table=table)
     rid = save_recipe(g, draft, [IngredientMatch(n, p, 100) for n, p in enumerate(pids)], None, None)
     put_photo(g, rid, dish())

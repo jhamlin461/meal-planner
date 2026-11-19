@@ -10,7 +10,8 @@ class Ingredient(BaseModel):
     qty: float | None
     unit: str
     name: str
-    note: str = ""
+    note: str = ""  # prep words ("minced") and/or the row's purpose in parentheses ("(for the chicken)")
+    packets: float | None = None  # meal-kit packets for the recipe's base servings; None: not from the box
 
 
 class Op(BaseModel):
@@ -33,12 +34,36 @@ class Cell(BaseModel):
     kind: Literal["ingredient", "op", "filler"]
     ref: str = ""  # the ingredient ("i<index>") or op id the cell shows; fillers have none
     where: str = ""
+    amount: str = ""  # ingredient cells: the amount, name, note (as note_text joins it) and packet count apart
+    name: str = ""
+    note: str = ""
+    packets: str = ""
+
+
+def amount_text(ing: Ingredient, scale: float) -> str:
+    qty = format_qty(ing.qty * scale) if ing.qty is not None else ""
+    unit = "" if ing.unit == "piece" else ing.unit
+    return " ".join(p for p in (qty, unit) if p)
 
 
 def ingredient_text(ing: Ingredient, scale: float) -> str:
-    qty = format_qty(ing.qty * scale) if ing.qty is not None else ""
-    unit = "" if ing.unit == "piece" else ing.unit
-    return " ".join(p for p in (qty, unit, ing.name) if p)
+    return " ".join(p for p in (amount_text(ing, scale), ing.name) if p)
+
+
+def note_text(note: str) -> str:
+    """The note as it follows the name: "(for the chicken)" after a space, prep words after a comma."""
+    return "" if not note else f" {note}" if note.startswith("(") else f", {note}"
+
+
+def line_text(ing: Ingredient, scale: float) -> str:
+    """The ingredient in words, as the recipe card reads: "4 oz grape tomatoes, halved (raw, added later)"."""
+    return ingredient_text(ing, scale) + note_text(ing.note)
+
+
+def packet_text(n: float) -> str:
+    """1 -> "1 packet", 0.5 -> "half a packet", 1.5 -> "1 1/2 packets"."""
+    q = format_qty(n)
+    return "half a packet" if q == "1/2" else f"{q} packet{'s' if n > 1 and q != '1' else ''}"
 
 
 def _is_ing(ref: str) -> bool:
@@ -118,8 +143,10 @@ def layout(t: CfeTable, scale: float = 1.0) -> list[list[Cell]]:
         raise ValueError("; ".join(errs))
     cols = _cols(t)
     col = lambda r: 0 if _is_ing(r) else cols[r]  # noqa: E731
-    starts: list[list[tuple[int, Cell]]] = [[(0, Cell(text=ingredient_text(g, scale), rowspan=1, colspan=1, kind="ingredient",
-                                                     ref=f"i{n}"))] for n, g in enumerate(t.ingredients)]
+    starts: list[list[tuple[int, Cell]]] = [[(0, Cell(
+        text=ingredient_text(g, scale), rowspan=1, colspan=1, kind="ingredient", ref=f"i{n}",
+        amount=amount_text(g, scale), name=g.name, note=note_text(g.note),
+        packets=packet_text(g.packets * scale) if g.packets else ""))] for n, g in enumerate(t.ingredients)]
     for o in t.ops:
         rows = sorted(_rows(t, o.id))
         starts[rows[0]].append((col(o.id), Cell(text=o.label, rowspan=len(rows), colspan=1, kind="op", ref=o.id,

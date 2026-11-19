@@ -70,3 +70,11 @@ def test_sdk_errors_become_aierror():
 def test_cfe_prompt_asks_where_each_step_happens():
     from app.ai import CFE_PROMPT
     assert "`where`" in CFE_PROMPT and "same pot" in CFE_PROMPT and "bowl" in CFE_PROMPT
+
+
+def test_prompt_mentions_packets_and_purpose_notes():
+    from app.ai import CFE_PROMPT
+    p = CFE_PROMPT
+    assert "`packets`" in p and "what we send" in p and "est." in p
+    assert "salt" in p and "(for the chicken)" in p and "garlic" in p and "minced" in p  # purpose and prep notes
+    assert "Sear 5 min, flip, cook 5 min more; remove" in p and "no trailing period" in p

@@ -326,7 +326,7 @@ def test_recipe_page_has_cfe_table_and_wakelock(env):
 def test_recipe_servings_scales(env):
     g, _, _, c, _ = env
     html = c.get(f"/recipes/{brownie_recipe(g)}?servings=4").text
-    assert "8 oz unsalted butter" in html and 'value="4"' in html
+    assert '<span class="cfe-amt">8 oz</span> unsalted butter' in html and 'value="4"' in html
 
 
 def test_recipe_macros_per_serving(env):
@@ -642,25 +642,63 @@ def test_grocy_refusal_says_so_with_its_reason(tmp_path):
     assert "Grocy said: table chores has no column named x" in r.text and "Grocy is down" not in r.text
 
 
-def test_review_packet_row_saves_without_a_number(env):
+def test_review_packet_ingredient_saves_its_measured_amount(env):
     g, ai, store, c, _ = env
     sour = product(g, "Sour cream")
-    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream", note="est.")],
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="tbsp", name="sour cream", note="(est.)", packets=1)],
                  ops=[Op(id="o1", label="mix", inputs=["i0"])])
     ai.draft = RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t)
+    ai.conversion = ConversionGuess(factor=15, explanation="")
     calls = counting_conversions(ai)
     c.post("/import", data={"urls": "https://example.com/tacos"})
     pid = store.all()[0].id
     form = dict(product_0=sour, new_name_0="sour cream", op_id=["o1"], op_label=["mix"], op_in_0=["i0"])
     html = c.post(f"/import/{pid}", data={**form, "action": "update"}).text
-    assert 'class="error"' not in html and "Packet sizes vary" not in html
+    assert 'class="error"' not in html
+    assert re.search(r'2 tbsp sour cream \(est\.\)\s*<span class="packet">1 packet</span>', html)  # the review row
     r = c.post(f"/import/{pid}", data={**form, "action": "save"}, follow_redirects=False)
-    assert r.status_code == 303 and calls == []  # a packet is never turned into a conversion
+    assert r.status_code == 303 and [a[1:] for a in calls] == [("tbsp", "g")]  # the measured amount, not the packet
     [rid] = [int(x["id"]) for x in g.objects("recipes")]
-    assert [p["amount"] for p in g.objects("recipes_pos", recipe_id=rid)] == [0]  # not taken out of stock
-    assert not g.objects("quantity_unit_conversions", product_id=sour)
+    [pos] = g.objects("recipes_pos", recipe_id=rid)
+    assert pos["amount"] == 30 and not pos.get("variable_amount")  # taken out of stock when cooked
+    assert pos["note"] == "2 tbsp sour cream (est.)"
     [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients
-    assert (ing.qty, ing.unit, ing.name, ing.note) == (1, "packet", "sour cream", "est.")  # the card's own words
+    assert (ing.qty, ing.unit, ing.packets) == (2, "tbsp", 1)
+
+
+def test_recipe_page_hides_steps_when_table_exists(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}").text
+    assert 'class="cfe"' in html and "<summary>Steps</summary>" not in html and "<li>Mix</li>" not in html
+    g.set_userfields("recipes", rid, {"cfe_table": ""})  # no table: the steps show
+    html = c.get(f"/recipes/{rid}").text
+    assert "<h2>Steps</h2>" in html and "<li>Mix</li>" in html
+
+
+def test_table_editor_keeps_packets(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    t = BROWNIE.model_copy(update={"ingredients": [i.model_copy(update={"packets": 1 if n == 6 else None})
+                                                   for n, i in enumerate(BROWNIE.ingredients)]})
+    g.set_userfields("recipes", rid, {"cfe_table": t.model_dump_json()})
+    html = c.get(f"/recipes/{rid}/table").text
+    fields = re.findall(r'<input name="packets"[^>]*>', html)
+    assert len(fields) == len(BROWNIE.ingredients) and 'value="1"' in fields[6] and 'value=""' in fields[0]
+    assert 'aria-label="Packets of cocoa powder"' in fields[6]
+
+    def saved():
+        return [i.packets for i in CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients]
+
+    assert c.post(f"/recipes/{rid}/table", data=chips(t), follow_redirects=False).status_code == 303
+    assert saved() == [None] * 6 + [1, None, None]  # a form without the fields keeps them
+    packets = [""] * 9
+    packets[1], packets[6] = "2", "1.5"
+    r = c.post(f"/recipes/{rid}/table", data={**chips(t), "packets": packets}, follow_redirects=False)
+    assert r.status_code == 303 and saved() == [None, 2, None, None, None, None, 1.5, None, None]
+    packets[1], packets[6] = "", "nonsense"
+    c.post(f"/recipes/{rid}/table", data={**chips(t), "packets": packets})
+    assert saved() == [None] * 9
 
 
 def test_review_estimates_belong_to_their_product(env):

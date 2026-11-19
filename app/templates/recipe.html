@@ -24,8 +24,7 @@
 {% endif %}
 <div class="recipe-more">
 <div>
-{% if cfe %}<details class="steps"><summary>Steps</summary><div class="prose">{{ (r.description or "")|safe }}</div></details>
-{% else %}
+{% if not cfe %}
 {% if ai_free %}<p class="muted">The table can be made after the 1st.</p>
 {% else %}<form method="post" action="/recipes/{{ r.id }}/make-table"><button class="btn btn-primary">Make the table</button></form>{% endif %}
 {% if fallback %}<h2>Ingredients</h2>

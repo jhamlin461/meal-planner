@@ -1,0 +1,3 @@
+{# The meal-kit packet count beside an amount ("1 packet"); `text` is cfe.packet_text's, blank when not from the box.
+   The one place packets show, so whether they show at all can be decided here. #}
+{% macro packets(text) %}{% if text %} <span class="packet">{{ text }}</span>{% endif %}{% endmacro %}

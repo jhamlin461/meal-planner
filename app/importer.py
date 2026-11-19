@@ -27,7 +27,7 @@ from pypdf import PdfReader
 
 from app.ai import AIError, AIPaused, RecipeDraft
 from app.barcode import _generic_named, _generics, _product_fields, create_manual, generic_choices
-from app.cfe import CfeTable, Ingredient, ingredient_text, validate
+from app.cfe import CfeTable, Ingredient, line_text, validate
 from app.nutrition import fill_missing_nutrition
 from app.qty import is_packaging, normalize_unit, parse_qty, to_stock_amount
 from app.inventory import places
@@ -606,7 +606,9 @@ def estimate_key(product_id: int, unit: str) -> str:
 def estimate_amount(grocy, ai, pending: Pending, product_id: int, qty: float | None, unit: str) -> float | None:
     """`qty unit` in the product's stock unit: a known conversion first, else Claude's estimate, cached on the
     pending import under "{product_id}:{unit}" (dropped again once a known conversion covers it, so Save stores only
-    estimates it used). None with no amount (to taste), for packets, in free mode, or when Claude fails."""
+    estimates it used). None with no amount (to taste), in free mode, or when Claude fails, and for a packaging unit:
+    a packet ingredient carries its measured amount (`packets` apart), so "1 packet" is only an older import or a slip
+    and is never guessed."""
     known = stock_amount_for(grocy, product_id, qty, unit)
     key = estimate_key(product_id, unit)
     if known is not None or qty is None or is_packaging(unit):
@@ -660,7 +662,7 @@ def fill_estimates(grocy, ai, tried: dict[str, float], now: float | None = None)
         q, _, unit = str(pos.get("variable_amount") or "").partition(" ")
         qty = parse_qty(q)
         if float(pos.get("amount") or 0) or qty is None or is_packaging(unit):
-            continue  # has an amount, to taste, or not ours; packets get a measured amount from Task 2's import
+            continue  # has an amount, to taste, or not ours; a stray packet stays as it is (see estimate_amount)
         pid = int(pos["product_id"])
         key = estimate_key(pid, unit)
         if key in tried and now - tried[key] < FILL_RETRY:
@@ -734,7 +736,7 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
             made.append(grocy.create("recipes_pos", {
                 "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount or 0,
                 "qu_id": int(products[m.product_id]["qu_id_stock"]),
-                "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else ""),
+                "note": line_text(ing, 1),
                 **(needs_estimate(ing) if m.stock_amount is None else {})}))
         uf = {"cfe_table": draft.table.model_dump_json() if draft.table.ops else "", "source_url": source_url or "",
               "source_pdf": ""}

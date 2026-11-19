@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import jinja2
@@ -71,3 +72,36 @@ def test_op_where_round_trips_and_renders():
     html = env.get_template("_cfe_table.html").render(pre=t.pre, grid=layout(t), ncols=ncols(t))
     assert 'melt<span class="cfe-where">in a small pot</span>' in html
     assert html.count('class="cfe-where"') == 1  # steps without a where render as before
+
+
+def test_packet_text():
+    from app.cfe import packet_text
+    assert [packet_text(n) for n in (1, 2, 0.5, 1.5, 0.25)] == \
+        ["1 packet", "2 packets", "half a packet", "1 1/2 packets", "1/4 packet"]
+
+
+SAUCE = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="tbsp", name="umami ginger sauce", note="(est.)", packets=1),
+                                      Ingredient(qty=0.25, unit="tsp", name="salt", note="(for the chicken)"),
+                                      Ingredient(qty=5, unit="clove", name="garlic", note="minced")],
+                 ops=[Op(id="o1", label="Cook sauce & garlic 2 min", inputs=["i0", "i1", "i2"])])
+
+
+def test_ingredient_packets_round_trip_and_scale():
+    back = CfeTable.model_validate_json(SAUCE.model_dump_json())  # a 2-serving card: 1 packet
+    assert back.ingredients[0].packets == 1 and back.ingredients[1].packets is None
+    old = CfeTable.model_validate({"pre": [], "ingredients": [{"qty": 1, "unit": "", "name": "egg", "note": ""}],
+                                   "ops": [{"id": "o1", "label": "beat", "inputs": ["i0"]}]})  # saved before packets
+    assert old.ingredients[0].packets is None
+    sauce, salt, _ = (row[0] for row in layout(SAUCE, scale=1.5))  # 3 servings
+    assert (sauce.amount, sauce.name, sauce.packets) == ("3 tbsp", "umami ginger sauce", "1 1/2 packets")
+    assert sauce.text == "3 tbsp umami ginger sauce" and salt.packets == ""
+
+
+def test_table_cell_shows_packet_pill():
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(Path(__file__).parent.parent / "app" / "templates"))
+    html = env.get_template("_cfe_table.html").render(pre=[], grid=layout(SAUCE), ncols=ncols(SAUCE))
+    assert re.search(r'<span class="cfe-amt">2 tbsp</span>\s*<span class="packet">1 packet</span>\s*umami ginger sauce'
+                     r'<span class="cfe-note"> \(est\.\)</span>', html), html
+    assert re.search(r'1/4 tsp</span>\s*salt<span class="cfe-note"> \(for the chicken\)</span>', html)
+    assert re.search(r'5 clove</span>\s*garlic<span class="cfe-note">, minced</span>', html)
+    assert html.count('class="packet"') == 1

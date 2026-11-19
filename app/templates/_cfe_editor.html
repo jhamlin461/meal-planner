@@ -23,3 +23,10 @@
 {% endfor %}</ol>
 <p><button class="btn" name="action" value="addop">{{ icon("plus") }}Add step</button></p>
 </fieldset>
+<details class="packet-edit">
+<summary>Packets from the box</summary>
+<p class="hint">How many packets the meal kit sends for each ingredient. Leave blank for what you supply.</p>
+<ul class="rows packet-rows">
+{% for g in table.ingredients %}<li><label><span class="breakable">{{ names["i" ~ loop.index0] }}</span><input name="packets" value="{{ '%g'|format(g.packets) if g.packets else '' }}" type="number" min="0" step="any" inputmode="decimal" aria-label="Packets of {{ g.name }}"></label></li>
+{% endfor %}</ul>
+</details>

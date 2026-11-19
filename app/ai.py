@@ -122,8 +122,8 @@ class Picks(BaseModel):
 CFE_PROMPT = """You convert a recipe into a Cooking-for-Engineers (CfE) table plus plain steps.
 Return title, servings (null if the source does not say), steps (plain numbered steps, text only) and table.
 Table rules:
-- `ingredients` are listed in the order they are combined; each has qty, unit, name, note.
-- `ops` are the actions. An op has id, a short verb label ("melt", "mix", "fold in", "bake 350°F 30–40 min") and inputs.
+- `ingredients` are listed in the order they are combined; each has qty, unit, name, note, packets.
+- `ops` are the actions. An op has id, a short label and inputs.
 - Each input is `i<index>` (zero-based ingredient row) or the id of another op.
 - Exactly one op is final (the root): nothing consumes it.
 - Every ingredient is used by exactly one op.
@@ -133,11 +133,21 @@ Table rules:
 - Each op's `where` names the vessel, short: "in a large pot", "in a small bowl", "on a sheet pan". Use the one the
   recipe names, else a sensible home-kitchen choice; never blank for an op that combines things. An op that carries
   on in its input's vessel says so ("same pot").
-- Never use a packaging unit (packet, pouch, sachet, container, package, bag, box). Convert each packet to a real unit
-  (g, ml, tbsp, tsp, cup, oz) using the size printed on the card; if none is printed, use the typical meal-kit packet
-  size and put "est." in the note.
+- `name` is the plain ingredient ("garlic", "grape tomatoes"), nothing else in it.
+- `note` holds prep words, then the row's purpose in parentheses: "minced" ("5 cloves garlic, minced"), "halved (raw,
+  added later)", "(for the chicken)", "(for searing)". Give the purpose whenever an ingredient is split over rows.
+- Op labels are short imperatives with times and temperatures inline as the card writes them, semicolons between
+  actions, no trailing period: "Sear 5 min, flip, cook 5 min more; remove", "Cook tomatoes, garlic & spices 2 min",
+  "Roast 425°F 18–20 min", "Melt", "Fold in".
+- Never use a packaging unit (packet, pouch, sachet, container, package, bag, box) as `unit`. qty and unit are always
+  the measured amount (g, ml, tbsp, tsp, cup, oz, clove...): the size printed on the card, else the typical meal-kit
+  packet size with "est." in the note's parentheses ("(est.)", "minced (est.)").
+- `packets`: meal kits (EveryPlate, HelloFresh) list "what we send" per box size, e.g. "Umami Ginger Sauce (1 | 2)" for
+  2 | 4 servings. Set `packets` to the count in the column matching the recipe's servings (here 1 for 2 servings) and
+  keep the measured amount in qty and unit. Staples the card says to have at home (salt, pepper, oil, butter) and
+  every non-kit recipe get null.
 - Replace kit-only seasoning blends (e.g. "Southwest Spice Blend") with their component spices: one row each, amounts
-  estimated, note "est., from <blend name>". Ops must still cover those rows contiguously."""
+  estimated, note "(est., from <blend name>)", packets null. Ops must still cover those rows contiguously."""
 
 PRODUCT_PROMPT = """You fill in pantry product details for a grocery inventory.
 Use the given product info (barcode database data or a package photo). Prefer an existing generic from

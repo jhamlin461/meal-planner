@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_packets.html" import packets %}
 {% block title %}Review import{% endblock %}
 {% block main_attrs %}{% if p.status == "ready" and (pdf or photo) %} class="review"{% endif %}{% endblock %}
 {% block head %}{% if p.status == "processing" %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
@@ -30,7 +31,7 @@
 {% if missing %}<p><button class="btn wide" name="action" value="create_all">Create {{ missing }} missing product{{ "s" if missing > 1 }}</button></p>{% endif %}
 <ul class="rows review-rows">
 {% for row in rows %}{% set i = loop.index0 %}<li class="review-row">
-  <p class="review-text breakable">{{ row.text }}</p>
+  <p class="review-text breakable">{{ row.text }}{{ packets(row.packets) }}</p>
   <div class="row">
     <select name="product_{{ i }}" class="grow" aria-label="Product for {{ row.text }}">
       <option value="">Pick a product</option>
