@@ -253,6 +253,9 @@ class FakeAI:
         return self.mode_
 
     def _ret(self, value):
+        if self.mode_ == "free":
+            from app.ai import AIPaused
+            raise AIPaused()
         if self.error:
             raise self.error
         return value

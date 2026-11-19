@@ -292,7 +292,9 @@ def import_app(tmp_path, ai):
     store = PendingStore(tmp_path / "pending")
     app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))), settings,
                      store, house=HouseStore(tmp_path / "house.db"))
-    return TestClient(app, cookies={"who": "kitchen"}), store
+    c = TestClient(app, cookies={"who": "kitchen"})
+    c.grocy = g
+    return c, store
 
 
 def pdfs(n):
@@ -337,3 +339,180 @@ def test_a_failed_batch_submission_reads_them_one_at_a_time(tmp_path):
     c, store = import_app(tmp_path, Down(draft=DRAFT, mode="economy"))
     c.post("/import", files=pdfs(3))
     assert {p.status for p in store.all()} == {"ready"}
+
+
+# ---- free: no Claude calls, each feature's fallback ---------------------------------------------------------------
+def test_free_mode_makes_no_claude_call(tmp_path):
+    from app.ai import AIPaused
+
+    def boom(**kw):
+        raise AssertionError("Claude was called")
+    c = NS(beta=NS(messages=NS(parse=boom)), messages=NS(parse=boom, batches=NS(create=boom)))
+    house = HouseStore(tmp_path / "house.db")
+    spend(house, 100, datetime.now())
+    a = AI(c, house)
+    for call in (lambda: a.structure_recipe(text="x"), lambda: a.guess_product({}, [], []),
+                 lambda: a.guess_conversion("flour", "cup", "g"), lambda: a.match_ingredients(["x"], []),
+                 lambda: a.suggest_week({}), lambda: a.submit_recipe_batch({"a" * 32: b"%PDF"})):
+        with pytest.raises(AIPaused, match="until the 1st"):
+            call()
+
+
+def jsonld_http():
+    from pathlib import Path
+    page = (Path(__file__).parent / "fixtures" / "recipe_jsonld.html").read_text(encoding="utf-8")
+    return httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, text=page) if r.url.path == "/soup" else
+        httpx.Response(200, text="<p>Pie: bake it.</p>") if r.url.path == "/pie" else httpx.Response(404)))
+
+
+def test_free_mode_imports_jsonld_without_a_table_and_queues_the_rest(tmp_path):
+    from app.importer import process
+    store = PendingStore(tmp_path)
+    ai = FakeAI(draft=DRAFT, mode="free")
+    soup, pie, pdf = store.new("https://example.com/soup"), store.new("https://example.com/pie"), \
+        store.new("r.pdf", pdf=b"%PDF-1")
+    process(store, ai, jsonld_http(), soup.id, "https://example.com/soup", None)
+    process(store, ai, jsonld_http(), pie.id, "https://example.com/pie", None)
+    process(store, ai, jsonld_http(), pdf.id, None, b"%PDF-1")
+    d = store.get(soup.id).draft
+    assert store.get(soup.id).status == "ready" and d.title == "Best Tomato Soup" and d.servings == 4
+    assert d.steps == ["Melt the butter.", "Cook the onion until soft.", "Add tomatoes and simmer 20 min."]
+    assert d.table.ops == [] and [(i.qty, i.unit, i.name) for i in d.table.ingredients] == [
+        (1, "can", "crushed tomatoes"), (2, "tbsp", "butter"), (1, "", "onion, diced")]
+    assert store.get(pie.id).status == "waiting" and store.get(pdf.id).status == "waiting"
+
+
+def test_queued_imports_are_read_after_the_month_rolls_over(tmp_path):
+    from app.importer import process, tick
+    store = PendingStore(tmp_path)
+    ai = FakeAI(draft=DRAFT, mode="free")
+    pie, pdf = store.new("https://example.com/pie"), store.new("r.pdf", pdf=b"%PDF-1")
+    process(store, ai, jsonld_http(), pie.id, "https://example.com/pie", None)
+    process(store, ai, jsonld_http(), pdf.id, None, b"%PDF-1")
+    tick(store, ai, jsonld_http())
+    assert {p.status for p in store.all()} == {"waiting"}
+    ai.mode_ = "full"  # the 1st
+    tick(store, ai, jsonld_http())
+    assert {p.status for p in store.all()} == {"ready"}
+
+
+def test_waiting_imports_say_when_they_will_be_read(tmp_path):
+    from datetime import date, timedelta
+    c, store = import_app(tmp_path, FakeAI(draft=DRAFT, mode="free"))
+    c.post("/import", files=pdfs(1))
+    [p] = store.all()
+    first = (date.today().replace(day=1) + timedelta(days=32)).replace(day=1)
+    words = f"Waiting for next month's AI budget — it will be read on {first:%B} 1"
+    assert words in c.get("/import").text
+    assert words in c.get(f"/import/{p.id}").text
+
+
+def test_a_tableless_import_saves_ingredients_and_steps(tmp_path):
+    from app.setup_grocy import ids
+    ai = FakeAI(mode="free")
+    c, store = import_app(tmp_path, ai)
+    from app.importer import process
+    p = store.new("https://example.com/soup")
+    process(store, ai, jsonld_http(), p.id, "https://example.com/soup", None)
+    html = c.get(f"/import/{p.id}").text
+    assert "Add at least one step" not in html and "No table yet" in html
+    grocy = c.grocy
+    i = ids(grocy)
+    pids = [grocy.create("products", {"name": n, "qu_id_stock": i.unit["g"]}) for n in ("Tomatoes", "Butter", "Onion")]
+    form = {"action": "save", **{f"product_{k}": str(pid) for k, pid in enumerate(pids)},
+            **{f"prev_{k}": str(pid) for k, pid in enumerate(pids)},
+            **{f"amount_{k}": "100" for k in range(3)}}
+    r = c.post(f"/import/{p.id}", data=form, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert grocy.userfields("recipes", rid)["cfe_table"] == ""
+    assert len(grocy.objects("recipes_pos", recipe_id=rid)) == 3
+    assert "<li>Melt the butter.</li>" in grocy.get_object("recipes", rid)["description"]
+    assert c.get(f"/recipes/{rid}").status_code == 200
+
+
+def test_free_matching_uses_plain_normalised_names():
+    from app.importer import propose_matches
+    from app.cfe import Ingredient
+    from app.setup_grocy import ids
+    g = FakeGrocy()
+    bootstrap(g)
+    i = ids(g)
+    basil, sugar, brown, tomato = (g.create("products", {"name": n, "qu_id_stock": i.unit["g"]})
+                                   for n in ("Basil", "Sugar", "Brown sugar", "Tomato"))
+    names = ["fresh basil leaves", "packed brown sugar", "ripe tomatoes", "dragon egg"]
+    draft = DRAFT.model_copy(update={"table": CfeTable(pre=[], ops=[], ingredients=[
+        Ingredient(qty=1, unit="g", name=n) for n in names])})
+    got = [m.product_id for m in propose_matches(g, FakeAI(mode="free"), draft)]
+    assert got == [basil, brown, tomato, None]
+
+
+def test_free_scan_asks_for_the_details_and_creates_the_product_like_the_ai_path(tmp_path):
+    import json
+    from pathlib import Path
+    off = json.loads((Path(__file__).parent / "fixtures" / "off_flour.json").read_text())
+    g = FakeGrocy()
+    bootstrap(g)
+    http = httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json=off) if "openfoodfacts" in r.url.host and "111" in r.url.path
+        else httpx.Response(404)))
+    app = create_app(g, FakeAI(mode="free"), http, Settings("", "", "", "KEY", None, 6, tmp_path, 3),
+                     PendingStore(tmp_path / "pending"), house=HouseStore(tmp_path / "house.db"))
+    c = TestClient(app, cookies={"who": "kitchen"})
+    assert c.post("/api/scan", json={"code": "111"}).json() == {
+        "status": "manual", "code": "111", "name": "Great Value All Purpose Flour"}
+    assert c.post("/api/scan", json={"code": "222"}).json()["status"] == "manual"  # in no database
+    assert 'id="manual"' in c.get("/scan").text
+    form = {"code": "111", "action": "add", "name": "Great Value All Purpose Flour", "generic": "Flour",
+            "stock_unit": "g", "package_amount": "2268", "location": "Pantry", "category": "food"}
+    r = c.post("/api/scan/manual", data=form).json()
+    assert r["status"] == "ok" and r["created"] and r["generic"] == "Flour" and r["amount"] == 2268
+    child = g.get_object("products", r["product_id"])
+    parent = g.get_object("products", child["parent_product_id"])
+    assert parent["name"] == "Flour" and g.product_by_barcode("111")["product"]["id"] == r["product_id"]
+    assert g.userfields("products", r["product_id"])["kcal_100"] == 364  # nutrition from Open Food Facts
+    assert c.post("/api/scan/manual", data={**form, "location": "Moon"}).status_code == 400
+
+
+def test_free_week_suggestions_use_expiring_stock_and_skip_recent_meals(fake_grocy_with_week):
+    from datetime import date, timedelta
+    from app.suggest import suggest
+    g = fake_grocy_with_week
+    for r in g.objects("meal_plan"):
+        g.delete("meal_plan", r["id"])
+    mon = date(2026, 11, 16)
+    g.entities["products"][11] = {"id": 11, "name": "Spinach"}
+    g.entities["recipes"][2] = {"id": 2, "name": "Spinach pie", "base_servings": 2}
+    g.entities["recipes"][3] = {"id": 3, "name": "Stew", "base_servings": 2}
+    g.entities["recipes_pos"][2] = {"id": 2, "recipe_id": 2, "product_id": 11, "amount": 1, "note": ""}
+    g.add_stock(11, 1, date.today() + timedelta(days=1), None)
+    from app.setup_grocy import ids
+    g.create("meal_plan", {"day": (mon - timedelta(days=7)).isoformat(), "type": "recipe", "recipe_id": 3,
+                           "recipe_servings": 2, "section_id": ids(g).section["Dinner"], "note": "", "done": 0})
+    picks = suggest(g, FakeAI(mode="free"), mon)
+    assert [(p.day, p.section, p.recipe_id) for p in picks] == [(mon, "Dinner", 2), (mon + timedelta(days=1),
+                                                                                       "Dinner", 1)]
+    assert "Spinach" in picks[0].reason and picks[1].reason
+
+
+def test_today_has_a_quiet_note_only_in_free_mode(web):
+    c, house, _ = web
+    assert "AI is paused" not in c.get("/").text
+    spend(house, 100, datetime.now())
+    assert "AI is paused until the 1st" in c.get("/").text
+
+
+def test_free_review_asks_for_the_factor_instead_of_suggesting(tmp_path):
+    from app.cfe import Ingredient, Op
+    from app.setup_grocy import ids
+    ai = FakeAI(mode="free")
+    c, store = import_app(tmp_path, ai)
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0"])])
+    p = store.new("x")
+    p.status, p.draft = "ready", RecipeDraft(title="T", servings=2, steps=[], table=t)
+    store.save(p)
+    pid = c.grocy.create("products", {"name": "Flour", "qu_id_stock": ids(c.grocy).unit["g"]})
+    html = c.post(f"/import/{p.id}", data={"action": "update", "product_0": str(pid)}).text
+    assert 'name="factor_0"' in html and 'value="suggest:0"' not in html

@@ -45,9 +45,10 @@ if (video) {
   const dlg = document.getElementById("fix");
   const sheet = document.getElementById("ask");
   const card = document.getElementById("scan-result");
+  const manual = document.getElementById("manual");
   const idle = "Point the camera at a barcode.";
   const action = () => document.querySelector("[name=scan-action]:checked").value;
-  let busy = false, last = "", lastAt = 0, unknownCode = "", shown = null;
+  let busy = false, last = "", lastAt = 0, unknownCode = "", manualCode = "", shown = null;
 
   // A number from the in-page sheet, or null when skipped.
   function ask(text, value, [no, yes]) {
@@ -104,6 +105,12 @@ if (video) {
         ["Cancel", d.action === "add" ? "Add" : "Use"]);
       if (n) return show(await post("/api/scan", {code, action: d.action, amount: n}), code);
       toast(`Nothing changed for ${d.product}.`);
+    } else if (d.status === "manual") {  // AI paused: the product's details by hand
+      manualCode = code;
+      document.getElementById("manual-code").textContent = code;
+      manual.reset();
+      manual.elements.namedItem("name").value = d.name || "";
+      manual.hidden = false;
     } else if (d.status === "unknown") {
       unknownCode = code;
       document.getElementById("unknown-code").textContent = code;
@@ -139,6 +146,15 @@ if (video) {
     });
   });
 
+  manual.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(manual);
+    fd.append("code", manualCode);
+    fd.append("action", action());
+    manual.hidden = true;
+    run("Saving…", async () => show(await post("/api/scan/manual", fd), manualCode));
+  });
+
   new ZXingBrowser.BrowserMultiFormatReader().decodeFromVideoDevice(undefined, video, (result) => {
     if (!result) return;
     const code = result.getText(), now = Date.now();
@@ -148,6 +164,7 @@ if (video) {
     last = code;
     lastAt = now;
     unknown.hidden = true;
+    manual.hidden = true;
     card.hidden = true;
     run(`Looking up ${code}…`, async () => show(await post("/api/scan", {code, action: action()}), code));
   }).catch((e) => { status.textContent = `Camera unavailable: ${e.message}`; });

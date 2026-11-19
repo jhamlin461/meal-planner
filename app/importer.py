@@ -24,11 +24,11 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel
 from pypdf import PdfReader
 
-from app.ai import AIError, RecipeDraft
+from app.ai import AIError, AIPaused, RecipeDraft
 from app.barcode import _generics, _product_fields, generic_choices
-from app.cfe import ingredient_text, validate
+from app.cfe import CfeTable, Ingredient, ingredient_text, validate
 from app.nutrition import fill_missing_nutrition
-from app.qty import is_packaging, normalize_unit, to_stock_amount
+from app.qty import is_packaging, normalize_unit, parse_qty, to_stock_amount
 from app.setup_grocy import LOCATIONS, ids
 
 UA = "MealPlanner/1.0"
@@ -97,20 +97,56 @@ def _flat(v) -> str:
     return ", ".join(map(str, v)) if isinstance(v, list) else str(v)
 
 
-def extract_jsonld_recipe(html: str) -> str | None:
+def _jsonld(html: str) -> dict | None:
+    """The page's first JSON-LD Recipe."""
     for body in _Parser(html).ld:
         try:
             data = json.loads(body)
         except ValueError:
             continue
         for r in _recipes(data):
-            lines = [_flat(r.get("name", ""))]
-            if r.get("recipeYield"):
-                lines.append(f"Yield: {_flat(r['recipeYield'])}")
-            lines += ["", "Ingredients:"] + [f"- {i}" for i in r.get("recipeIngredient") or []]
-            lines += ["", "Instructions:"] + [f"- {s}" for s in _steps(r.get("recipeInstructions"))]
-            return "\n".join(lines)
+            return r
     return None
+
+
+def extract_jsonld_recipe(html: str) -> str | None:
+    r = _jsonld(html)
+    if r is None:
+        return None
+    lines = [_flat(r.get("name", ""))]
+    if r.get("recipeYield"):
+        lines.append(f"Yield: {_flat(r['recipeYield'])}")
+    lines += ["", "Ingredients:"] + [f"- {i}" for i in r.get("recipeIngredient") or []]
+    lines += ["", "Instructions:"] + [f"- {s}" for s in _steps(r.get("recipeInstructions"))]
+    return "\n".join(lines)
+
+
+UNITS = {"cup", "tbsp", "tsp", "g", "kg", "ml", "l", "oz", "lb", "pinch", "dash", "clove", "can", "slice", "stick",
+         "bunch"}
+
+
+def _ingredient(line: str) -> Ingredient:
+    """'2 Tbsp. butter' -> 2, tbsp, butter: a leading amount, a known unit word, the rest is the name."""
+    toks = line.split()
+    n = 0
+    while n < len(toks) and parse_qty(" ".join(toks[:n + 1])) is not None:
+        n += 1
+    qty = parse_qty(" ".join(toks[:n])) if n else None
+    unit = ""
+    if qty is not None and n < len(toks):
+        u = normalize_unit(toks[n].rstrip(".,"))
+        u = u if u in UNITS else u[:-1] if u[:-1] in UNITS and u.endswith("s") else None
+        if u:
+            unit, n = u, n + 1
+    return Ingredient(qty=qty, unit=unit, name=" ".join(toks[n:]) or line.strip())
+
+
+def draft_from_jsonld(r: dict) -> RecipeDraft:
+    """Free mode: the page's own ingredients and steps, without a CfE table (no ops)."""
+    servings = re.search(r"\d+", _flat(r.get("recipeYield") or ""))
+    ings = [_ingredient(str(i)) for i in r.get("recipeIngredient") or [] if str(i).strip()]
+    return RecipeDraft(title=_flat(r.get("name") or "") or "Recipe", servings=int(servings[0]) if servings else None,
+                       steps=_steps(r.get("recipeInstructions")), table=CfeTable(pre=[], ingredients=ings, ops=[]))
 
 
 def page_text(html: str) -> str:
@@ -232,9 +268,10 @@ def fetch_photo(http, url: str | None) -> bytes | None:
 
 
 class Pending(BaseModel):
-    """status: processing (being read now), reading (in a Message Batch, batch_id), ready, failed."""
+    """status: processing (being read now), reading (in a Message Batch, batch_id), waiting (free mode: read after
+    the 1st), ready, failed."""
     id: str
-    status: Literal["processing", "reading", "ready", "failed"]
+    status: Literal["processing", "reading", "waiting", "ready", "failed"]
     source: str
     draft: RecipeDraft | None = None
     error: str | None = None
@@ -318,7 +355,13 @@ def _structure(ai, http, url: str | None, pdf: bytes | None) -> tuple[RecipeDraf
         text = page_text(r.text)
         if ai.mode() == "economy":
             text = recipe_part(text)
-    draft = ai.structure_recipe(text=text)
+    try:
+        draft = ai.structure_recipe(text=text)
+    except AIPaused:
+        node = _jsonld(r.text)
+        if node is None:
+            raise  # nothing to go on without Claude: wait for the 1st
+        draft = draft_from_jsonld(node)
     return draft, fetch_photo(http, photo_url(r.text, str(r.url)))
 
 
@@ -330,6 +373,8 @@ def process(store: PendingStore, ai, http, pending_id: str, url: str | None, pdf
             return  # deleted while queued
         try:
             _ready(store, p, *_structure(ai, http, url, pdf))
+        except AIPaused:
+            p.status, p.error = "waiting", None
         except Exception as e:  # AIError, HTTP, parse: all shown to the reviewer
             p.status, p.error = "failed", str(e) or type(e).__name__
         store.save(p)
@@ -363,11 +408,21 @@ def submit_batch(store: PendingStore, ai, pending: list[Pending]) -> bool:
 
 
 def tick(store: PendingStore, ai, http) -> None:
-    """Background, every minute: collect finished batch reads into their pending imports."""
+    """Background, every minute: collect finished batch reads into their pending imports, and once AI is back
+    (the 1st), read the imports that waited for it."""
     batches: dict[str, list[str]] = {}
+    waiting: list[Pending] = []
     for p in store.all():
         if p.status == "reading" and p.batch_id:
             batches.setdefault(p.batch_id, []).append(p.id)
+        elif p.status == "waiting":
+            waiting.append(p)
+    if waiting and ai.mode() != "free":
+        for p in waiting:
+            pdf = store.pdf_path(p.id)
+            p.status = "processing"
+            store.save(p)
+            process(store, ai, http, p.id, None if pdf else p.source, pdf.read_bytes() if pdf else None)
     for bid, pids in batches.items():
         try:
             results = ai.recipe_batch_results(bid)
@@ -402,6 +457,22 @@ def start_worker(store: PendingStore, ai, http, interval: int = 60) -> threading
     t = threading.Thread(target=run, name="imports", daemon=True)
     t.start()
     return t
+
+
+def _words(name: str) -> set[str]:
+    """Lowercase words, plurals made singular: 'Ripe Tomatoes' -> {'ripe', 'tomato'}."""
+    out = set()
+    for w in re.findall(r"[a-z]+", name.lower()):
+        out.add(w[:-2] if w.endswith("oes") else w[:-1] if w.endswith("s") and not w.endswith("ss") and len(w) > 3
+                else w)
+    return out
+
+
+def plain_match(name: str, generics: dict[int, dict]) -> int | None:
+    """Free mode: the generic whose words all appear in the ingredient name, the most specific (most words) first."""
+    words = _words(name)
+    hits = [(len(gw), pid) for pid, p in generics.items() if (gw := _words(p["name"])) and gw <= words]
+    return max(hits)[1] if hits else None
 
 
 @dataclass
@@ -445,6 +516,10 @@ def propose_matches(grocy, ai, draft: RecipeDraft) -> list[IngredientMatch]:
             for pk in res.items:
                 if 0 <= pk.index < len(rest) and pk.product_id in generics:  # Claude can invent ids
                     picks.setdefault(rest[pk.index], pk.product_id)
+        except AIPaused:
+            for i in rest:
+                if (pid := plain_match(ings[i].name, generics)) is not None:
+                    picks[i] = pid
         except AIError:
             pass  # left unmatched; the reviewer picks by hand
     names = {v: k for k, v in ids(grocy).unit.items()}
@@ -498,16 +573,17 @@ def put_photo(grocy, rid: int, jpeg: bytes) -> None:
 
 
 def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], source_url: str | None,
-                pdf_path: Path | None, photo: Path | None = None) -> int:
+                pdf_path: Path | None, photo: Path | None = None, need_table: bool = True) -> int:
     """Create the reviewed recipe in Grocy. pdf_path is a PendingStore PDF (DATA_DIR/pending/<id>.pdf);
     it is copied to its sibling DATA_DIR/sources/<recipe_id>.pdf and source_pdf = "sources/<recipe_id>.pdf".
-    photo (a PendingStore JPEG) becomes the recipe's picture; if that fails the recipe is still saved."""
+    photo (a PendingStore JPEG) becomes the recipe's picture; if that fails the recipe is still saved.
+    need_table=False (a free-mode import) saves a draft with no steps in its table as a recipe without a table."""
     ings = draft.table.ingredients
     by_index = {m.index: m for m in matches}
     bad = [i for i in range(len(ings))
            if i not in by_index or by_index[i].product_id is None or by_index[i].stock_amount is None]
     errs = ([f"ingredients without a product or amount: {', '.join(map(str, bad))}"] if bad else []) \
-        + validate(draft.table)
+        + (validate(draft.table) if need_table or draft.table.ops else [])
     if errs:
         raise ValueError("; ".join(errs))
     products = {}
@@ -531,7 +607,8 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
                 "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount,
                 "qu_id": int(products[m.product_id]["qu_id_stock"]),
                 "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")}))
-        uf = {"cfe_table": draft.table.model_dump_json(), "source_url": source_url or "", "source_pdf": ""}
+        uf = {"cfe_table": draft.table.model_dump_json() if draft.table.ops else "", "source_url": source_url or "",
+              "source_pdf": ""}
         if pdf_path:
             dest = Path(pdf_path).parent.parent / "sources" / f"{rid}.pdf"
             dest.parent.mkdir(exist_ok=True)

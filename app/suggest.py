@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from app.ai import AIPaused
 from app.setup_grocy import ids
 
 NEVER = "2999-12-31"  # Grocy's "never expires"
@@ -74,11 +75,16 @@ def build_context(grocy, monday: date) -> dict:
 
 
 def suggest(grocy, ai, monday: date) -> list[Pick]:
-    """Ask the AI, keep only first suggestion per open slot with a real recipe."""
+    """Ask the AI, keep only first suggestion per open slot with a real recipe. Free mode: local_picks."""
     open_slots = set(week_slots(grocy, monday))
     valid = {int(r["id"]) for r in user_recipes(grocy)}
+    ctx = build_context(grocy, monday)
+    try:
+        items = ai.suggest_week(ctx).items
+    except AIPaused:
+        return local_picks(ctx)
     out, seen = [], set()
-    for s in ai.suggest_week(build_context(grocy, monday)).items:
+    for s in items:
         try:
             slot = (date.fromisoformat(s.day), s.section)
         except ValueError:
@@ -86,4 +92,19 @@ def suggest(grocy, ai, monday: date) -> list[Pick]:
         if s.recipe_id in valid and slot in open_slots and slot not in seen:
             seen.add(slot)
             out.append(Pick(slot[0], s.section, s.recipe_id, s.reason))
+    return out
+
+
+def local_picks(ctx: dict) -> list[Pick]:
+    """Without Claude: recipes using the most expiring stock first (then the most in stock), none cooked in the last
+    3 weeks, one per open slot in order, no repeats."""
+    expiring = {e["product"] for e in ctx["expiring"]}
+    recent = set(ctx["recent_recipes"])
+    recipes = sorted((r for r in ctx["recipes"] if r["name"] not in recent),
+                     key=lambda r: (-len(expiring & set(r["ingredients"])), -r["fulfillment"]))
+    out = []
+    for (day, section), r in zip(ctx["open_slots"], recipes):
+        used = sorted(expiring & set(r["ingredients"]))
+        reason = f"Uses {', '.join(used)} before it expires" if used else "Not cooked in the last 3 weeks"
+        out.append(Pick(date.fromisoformat(day), section, r["id"], reason))
     return out

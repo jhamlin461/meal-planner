@@ -2,12 +2,21 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.ai import AIPaused, ProductGuess
 from app.setup_grocy import LOCATIONS, ids, supplies_group
 
 OFF_URL = "https://world.openfoodfacts.org/api/v2/product/{}.json"
 UPC_URL = "https://api.upcitemdb.com/prod/trial/lookup"
 NUTRIENTS = {"kcal_100": "energy-kcal_100g", "protein_100": "proteins_100g",
              "carbs_100": "carbohydrates_100g", "fat_100": "fat_100g"}
+
+
+class NeedsDetails(Exception):
+    """Free mode: Claude can't fill in a new product, so the scan screen asks for its details."""
+
+    def __init__(self, name: str = ""):
+        super().__init__(name)
+        self.name = name
 
 
 @dataclass
@@ -133,13 +142,34 @@ def resolve(grocy, ai, http: httpx.Client, code: str) -> Resolved | None:
         info = {**(info or {}), **{k: upc[k] for k in ("name", "brand")}} if upc else None
     if not info or not info.get("name"):
         return None
-    g = ai.guess_product(info, generic_choices(grocy), LOCATIONS)
+    try:
+        g = ai.guess_product(info, generic_choices(grocy), LOCATIONS)
+    except AIPaused as e:
+        raise NeedsDetails(info["name"]) from e
     return _create(grocy, g, info["name"], code, _nutrition(info))
 
 
 def resolve_from_photo(grocy, ai, http: httpx.Client, code: str, image: bytes) -> Resolved:
-    g = ai.guess_product({"barcode": code}, generic_choices(grocy), LOCATIONS, image=image)
+    try:
+        g = ai.guess_product({"barcode": code}, generic_choices(grocy), LOCATIONS, image=image)
+    except AIPaused as e:
+        raise NeedsDetails() from e
     return _create(grocy, g, f"{g.generic_name} (scanned)", code, {})
+
+
+def create_manual(grocy, http: httpx.Client, code: str, name: str, generic: str, stock_unit: str,
+                  package_amount: float | None, location: str, category: str) -> Resolved:
+    """Free mode: the product the scan screen's form describes, created as resolve() would from Claude's guess
+    (shelf life from the generic it joins, else a week; nutrition from Open Food Facts when it has the code)."""
+    hit = grocy.product_by_barcode(code)
+    if hit:  # scanned twice before saving
+        return resolve(grocy, None, http, code)
+    parent = _generic_named(grocy, generic)
+    days = int(float(parent.get("default_best_before_days") or 7)) if parent else 7
+    g = ProductGuess.model_construct(generic_name=parent["name"] if parent else generic, is_new_generic=parent is None,
+                                     stock_unit=stock_unit, package_amount=package_amount, location=location,
+                                     best_before_days=days, g_per_unit=None, category=category)
+    return _create(grocy, g, name, code, _nutrition(off_lookup(code, http) or {}))
 
 
 def relink(grocy, product_id: int, generic_name: str) -> None:

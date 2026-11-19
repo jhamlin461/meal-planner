@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError, budget_mode, month
-from app.barcode import Resolved, _generics, relink, resolve, resolve_from_photo
+from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
 from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
@@ -182,6 +182,12 @@ def _named(errors: list[str], table: CfeTable) -> list[str]:
     return out
 
 
+def _resume_day() -> str:
+    """When free mode ends: the 1st of next month, 'December 1'."""
+    first = (date.today().replace(day=1) + timedelta(days=32)).replace(day=1)
+    return f"{first:%B} 1"
+
+
 def _cfe(table: CfeTable | None, scale: float = 1.0) -> dict | None:
     """Context for _cfe_table.html, or None when the table is missing or invalid (caller shows the fallback)."""
     if table is None or validate(table):
@@ -217,6 +223,10 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("sec-fetch-site") == "cross-site":
             return JSONResponse({"status": "error", "message": "cross-site request refused"}, status_code=403)
         return await call_next(request)
+
+    def ai_mode() -> str:
+        """This month's budget mode, from the meter (as app.ai.AI decides it)."""
+        return budget_mode(house.ai_spent(month()), settings.ai_monthly_budget, settings.ai_economy_at)
 
     def page(request: Request, name: str, status_code: int = 200, **ctx):
         return templates.TemplateResponse(request, name, ctx, status_code=status_code)
@@ -257,7 +267,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         if who is None:
             return back("/who")
         now = datetime.now()
-        return page(request, "today.html", msg=msg, date=f"{now:%A, %B} {now.day}",
+        return page(request, "today.html", msg=msg, date=f"{now:%A, %B} {now.day}", ai_paused=ai_mode() == "free",
                     **today_view(grocy, house, who, now, ha=ha, warn_days=settings.expiry_warn_days))
 
     # ---- chores, tasks and upkeep (logic in app/home.py) ---------------------------------------------------------
@@ -499,9 +509,8 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.get("/me")
     def me(request: Request):
-        spent = house.ai_spent(month())
-        return page(request, "me.html", who=current_who(request), ai_spent=spent, ai_budget=settings.ai_monthly_budget,
-                    ai_mode=budget_mode(spent, settings.ai_monthly_budget, settings.ai_economy_at))
+        return page(request, "me.html", who=current_who(request), ai_spent=house.ai_spent(month()),
+                    ai_budget=settings.ai_monthly_budget, ai_mode=ai_mode())
 
     # ---- household supplies (Grocy product group; keep-at-least is the generic's min stock amount, counting the stock
     # of every brand under it) ------------------------------------------------------------------------------------
@@ -627,7 +636,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     # ---- scanning -----------------------------------------------------------------------------------------------
     @app.get("/scan")
     def scan(request: Request):
-        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)))
+        return page(request, "scan.html", generics=sorted(p["name"] for p in _generics(grocy)), locations=LOCATIONS)
 
     def apply_scan(r: Resolved, action: str, amount: float | None = None) -> dict:
         """Add or use `amount`, else one package; with no known package size, ask for the amount first."""
@@ -668,18 +677,38 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/api/scan")
     def api_scan(body: ScanIn):
+        code = body.code.strip()
         try:
-            r = resolve(grocy, ai, http, body.code.strip())
+            r = resolve(grocy, ai, http, code)
+        except NeedsDetails as e:  # free mode: the scan screen's product form, name filled in
+            return {"status": "manual", "code": code, "name": e.name}
         except AIError as e:
             return {"status": "error", "message": str(e)}
-        return apply_scan(r, body.action, body.amount) if r else {"status": "unknown"}
+        if r is None:
+            return {"status": "manual", "code": code, "name": ""} if ai.mode() == "free" else {"status": "unknown"}
+        return apply_scan(r, body.action, body.amount)
 
     @app.post("/api/scan/photo")
     def api_scan_photo(code: str = Form(), image: UploadFile = File(), action: Literal["add", "use"] = Form("add")):
         try:
             r = resolve_from_photo(grocy, ai, http, code.strip(), image.file.read())
+        except NeedsDetails:
+            return {"status": "manual", "code": code.strip(), "name": ""}
         except AIError as e:
             return {"status": "error", "message": str(e)}
+        return apply_scan(r, action)
+
+    @app.post("/api/scan/manual")
+    def api_scan_manual(code: str = Form(), action: Literal["add", "use"] = Form("add"), name: str = Form(""),
+                        generic: str = Form(""), stock_unit: Literal["g", "ml", "piece"] = Form("g"),
+                        package_amount: str = Form(""), location: str = Form("Pantry"),
+                        category: Literal["food", "supply"] = Form("food")):
+        """Free mode: a new product from the scan screen's form, created as Claude's guess would have been."""
+        if not (code.strip() and name.strip() and generic.strip()) or location not in LOCATIONS:
+            msg = "Fill in the name, what it counts as and where it's kept."
+            return JSONResponse({"status": "error", "message": msg}, status_code=400)
+        r = create_manual(grocy, http, code.strip(), name.strip(), generic.strip(), stock_unit, _num(package_amount),
+                          location, category)
         return apply_scan(r, action)
 
     class RelinkIn(BaseModel):
@@ -795,7 +824,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/import")
     def import_list(request: Request):
         pend = store.all()
-        return page(request, "import.html", pending=pend,
+        return page(request, "import.html", pending=pend, resume=_resume_day(),
                     busy=any(p.status in ("processing", "reading") for p in pend))
 
     @app.post("/import")
@@ -825,15 +854,16 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             row["stock_unit"] = units.get(_int(prod.get("qu_id_stock")), "") if prod else ""
             row["packaging"] = is_packaging(row["unit"])
             row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
+        tableless = not table.ops and not p.draft.table.ops  # a free-mode import: a table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
-                    photo=store.photo_path(p.id) is not None,
-                    table_errors=_named(validate(table), table), errors=_named(errors, table))
+                    photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
+                    table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
 
     @app.get("/import/{pid}")
     def review(request: Request, pid: str):
         p = pending_or_404(pid)
         if p.status != "ready":
-            return page(request, "review.html", p=p)
+            return page(request, "review.html", p=p, resume=_resume_day())
         rows = [{"product_id": m.product_id, "amount": m.stock_amount, "prev": m.product_id, "factor": "",
                  "new_name": ing.name, "error": None, "note": None}
                 for m, ing in zip(propose_matches(grocy, ai, p.draft), p.draft.table.ingredients)]
@@ -900,7 +930,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 try:
                     rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
                                                      for i, r in enumerate(rows)], source_url, store.pdf_path(pid),
-                                      photo=store.photo_path(pid))
+                                      photo=store.photo_path(pid), need_table=bool(p.draft.table.ops))
                 except ValueError as e:
                     errors.append(str(e))
                 else:

@@ -68,6 +68,13 @@ class AIError(Exception):
     pass
 
 
+class AIPaused(AIError):
+    """Free mode: this month's budget is used, so nothing was sent to Claude; callers use their fallback."""
+
+    def __init__(self):
+        super().__init__("AI is paused until the 1st (this month's budget is used)")
+
+
 class RecipeDraft(BaseModel):
     title: str
     servings: int | None
@@ -216,8 +223,10 @@ class AI:
             log.warning("could not record AI usage", exc_info=True)
 
     def _parse(self, kind: str, model_cls, effort: str, system: str, content: list[dict]):
-        model = MODEL
-        if self.mode() == "economy":
+        model, mode = MODEL, self.mode()
+        if mode == "free":
+            raise AIPaused()
+        if mode == "economy":
             model, effort = ECONOMY.get(kind, (model, effort))
         kw = dict(model=model, max_tokens=16000, output_format=model_cls, output_config={"effort": effort},
                   system=_system(system), messages=[{"role": "user", "content": content}])
@@ -241,6 +250,8 @@ class AI:
     def submit_recipe_batch(self, pdfs: dict[str, bytes]) -> str:
         """Economy: read several PDFs through the Message Batches API at half price (results usually in minutes,
         at most a day). Keys become custom_ids (pending ids). Returns the batch id."""
+        if self.mode() == "free":
+            raise AIPaused()
         model, effort = ECONOMY["recipe"]
         fmt = {"type": "json_schema", "schema": transform_schema(RecipeDraft)}
         reqs = [{"custom_id": cid, "params": {
