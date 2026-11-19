@@ -151,8 +151,8 @@ and scan tests).
 - `measure.choices(product, m) -> list[str]`: KITCHEN words plus the count word if the product is counted in pieces or
   has one; `measure.change(grocy, product, word)`: new factor via fixed kitchen math within vol/wt, else via the
   product's grams-per-unit / existing conversion; source "owner".
-- Inventory: amounts, Use, Set total, Keep at least (food and supplies) shown/typed in the measure; More gains
-  "Measure in [▾]". Scan lookup returns `measure` and `left` text; confirm's `amount` is in the measure.
+- Inventory: amounts, Use, Set total, and the supplies' existing Keep at least shown/typed in the measure (food Keep at
+  least arrives in Task 6 and uses these helpers); More gains "Measure in [▾]". Scan lookup returns `measure` and `left` text; confirm's `amount` is in the measure.
 - New products (scan, manual, review create, create all) get their measure at creation (`ProductGuess` gains
   `measure`, `measure_factor`).
 
