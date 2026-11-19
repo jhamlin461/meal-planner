@@ -1523,3 +1523,26 @@ def test_import_page_has_a_drop_zone_for_pdfs(env):
     html = env[3].get("/import").text
     assert re.search(r'<label class="drop"[^>]*>.*?<input type="file" name="files" accept="application/pdf" multiple',
                      html, re.S)
+
+
+def test_plan_week_is_a_seven_day_grid(env):
+    g, _, _, c, _ = env
+    html = c.get("/plan").text
+    grid = html[html.index('<div class="week-grid">'):]
+    assert grid.count('<section class="plan-day') == 7 and "style=" not in html
+    css = c.get("/static/style.css").text
+    wide = css[css.index("@media (min-width: 1280px)"):]
+    assert ".week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));" in wide
+
+
+def test_wide_pages_split_into_columns(env):
+    g, _, _, c, _ = env
+    rid = brownie_recipe(g)
+    html = c.get(f"/recipes/{rid}").text
+    assert html.index('class="cfe-wrap"') < html.index('class="recipe-more"') < html.index('class="recipe-side"') \
+        < html.index("Add to plan")
+    assert html.index('class="servings"') < html.index("</h1>") + 200 < html.index('class="cfe-wrap"')  # in the title row
+    for url in ("/shopping", "/"):
+        assert '<div class="split">' in c.get(url, cookies={"who": "kitchen"}).text, url
+    for url in ("/home", "/home/supplies", "/pantry", "/me"):
+        assert '<main class="roomy">' in c.get(url, cookies={"who": "kitchen"}).text, url

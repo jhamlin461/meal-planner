@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Recipes{% endblock %}
+{% block main_attrs %} class="wide"{% endblock %}
 {% block heading %}<h1>Recipes</h1>{% endblock %}
 {% block content %}
 <p class="row"><a class="btn btn-primary" href="/import">{{ icon("plus") }}Import recipes</a>

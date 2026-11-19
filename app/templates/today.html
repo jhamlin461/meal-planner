@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Today{% endblock %}
+{% block main_attrs %} class="wide"{% endblock %}
 {% block content %}
 {% set n = now_items|length %}
 <p class="today-date">{{ date }}</p>
 <h1 class="headline">{% if n == 0 %}Nothing needs you{% elif n == 1 %}1 thing needs you{% else %}{{ n }} things need you{% endif %}<small>{{ note }}</small></h1>
+<div class="split">
+<div class="split-now"{% if not (n or msg or ha_error) %} hidden{% endif %}>
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
 {% if ha_error %}
 <div class="card ha-warning" role="alert">{{ icon("alert-circle-outline") }}<p><b>{{ ha_error }}</b><br>Check that Home Assistant is running and each phone has the Home Assistant app.</p></div>
@@ -19,6 +22,8 @@
   </div>
 </article>
 {% endfor %}
+</div>
+<div>
 <h2>Tonight</h2>
 {% if tonight %}
 <div class="card tonight">
@@ -36,4 +41,6 @@
 </ul>
 {% endif %}
 {% if ai_paused %}<p class="empty">AI is paused until the 1st; the app is using its free fallbacks.</p>{% endif %}
+</div>
+</div>
 {% endblock %}

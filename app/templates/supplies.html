@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Supplies{% endblock %}
+{% block main_attrs %} class="roomy"{% endblock %}
 {% block heading %}<h1>Supplies</h1>{% endblock %}
 {% block content %}
 {% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+{% if supplies %}<div class="cards">
 {% for s in supplies %}{% set low = s.amount < s.min %}
 <div class="card">
   <p class="row"><b class="grow breakable">{{ s.name }}</b></p>
@@ -19,7 +21,9 @@
     <form method="post" action="/home/supplies/{{ s.id }}/used"><button class="btn btn-primary"{% if s.amount <= 0 %} disabled{% endif %}>Used one</button></form>
   </div>
 </div>
+{% endfor %}
+</div>
 {% else %}
 <p class="empty">Supplies you keep at home will show here. <a href="/scan?from=chores">Scan a pack</a> to add one.</p>
-{% endfor %}
+{% endif %}
 {% endblock %}

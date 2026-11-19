@@ -132,7 +132,7 @@ dialog .field { margin: 0; }
 dialog .card-actions > [value=cancel] { order: -1; border-left: 0; }
 dialog .card-actions > [value=ok] { border-left: 1px solid var(--line); }
 dialog::backdrop { background: rgba(0,0,0,.5); }
-main.wide { max-width: 1100px; }
+main.cook { max-width: 1100px; }  /* the recipe table needs room even on tablets */
 
 /* Cooking for Engineers table: scrolls inside its own box, ops on the rail colour, ingredients on the surface. */
 .cfe-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; margin: 12px 0;
@@ -260,8 +260,10 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .macros dt { color: var(--muted); font-size: .875rem; }
 .macros dd { margin: 0; font-size: 1.2rem; font-weight: 650; font-stretch: 90%; }
 @media (max-width: 420px) { .macros { grid-template-columns: 1fr 1fr; } }
-.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 0 12px; }
-.fields .field { margin-bottom: 4px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 12px; margin: 0 0 12px; }
+.fields .field { margin: 0; }
+/* Four product details read as two pairs, never three and one. */
+@media (min-width: 360px) { .fields.pairs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Pantry: the use-soon list is the one block on a surface; stock is plain rows, actions tucked under each. */
 .card > h2:first-child { margin-top: 0; }
@@ -333,7 +335,7 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 /* Import review: the source (the PDF, or the website and its photo) above the review, folded away; on wide screens
    it sits beside the review, each pane scrolling on its own, with Save always in view. */
 .review-source { margin: 0 0 12px; }
-.source-pdf iframe { display: block; width: 100%; height: 70vh; border: 0; border-radius: 14px; background: #fff; }
+.source-pdf iframe { display: block; width: 100%; height: 70vh; border: 0; border-radius: 14px; background: var(--rail); }
 .source-pdf p { margin: 8px 2px 12px; }
 @media (min-width: 900px) {
   .review-main .form-actions { position: sticky; bottom: 0; z-index: 1; margin-bottom: 0; padding: 12px 0;
@@ -352,7 +354,7 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 /* Recipe photos: cards on the list (two across on phones), a quiet tile where there is none. */
 .recipe-grid { list-style: none; padding: 0; margin: 16px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px 12px; }
-@media (min-width: 600px) { .recipe-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); } }
+@media (min-width: 600px) { .recipe-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); } }
 .recipe-grid a { display: flex; flex-direction: column; gap: 8px; color: inherit; text-decoration: none; border-radius: 14px; }
 .recipe-grid img, .photo-none { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover;
   border-radius: 14px; background: var(--surface); }
@@ -370,6 +372,7 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
   background: var(--surface); }
 .recipe-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .recipe-thumb:focus-visible { outline-offset: 2px; }
+.title-row .servings { margin: 0; }
 /* Browsers without popover (iOS 16) keep the big copy hidden; app.js opens the photo itself instead. */
 [popover] { display: none; }
 [popover]:popover-open { display: block; }
@@ -378,3 +381,31 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 .photo-full::backdrop { background: rgba(0,0,0,.6); }
 .photo-full img { display: block; width: 100%; max-height: calc(92vh - 88px); object-fit: contain; border-radius: 10px; }
 .photo-full .btn { width: 100%; margin-top: 12px; }
+
+/* Cards that repeat (chores, supplies) sit in a grid, as many across as fit; their actions line up at the bottom. */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; margin: 0 0 10px; }
+.cards > .card { display: flex; flex-direction: column; margin: 0; }
+.cards > .card > .card-actions { margin-top: auto; }
+
+/* Desktop: each kind of page gets its own width. Wide pages (recipes, plan, shopping, today, a recipe) up to
+   1400 px with their own columns; roomy ones (chores, supplies, pantry, me) up to 960 px. */
+@media (min-width: 1280px) {
+  main.wide { max-width: 1400px; }
+  main.roomy { max-width: 960px; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 40px; align-items: start; }
+  .split > * > h2:first-child { margin-top: 0; }
+  .recipe-more { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 0 48px;
+    align-items: start; }
+  .recipe-side > h2:first-child { margin-top: 24px; }
+  .week-bar { grid-template-columns: repeat(3, minmax(0, 14em)); }
+  .week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; align-items: start; }
+  .week-grid .plan-day, .week-grid .plan-day.is-today + .plan-day { margin: 0; padding: 4px 10px 12px;
+    border-top: 1px solid var(--line); border-radius: 0; }
+  .week-grid .plan-day.is-today { border-top-color: transparent; border-radius: 14px; }
+  .week-grid .plan-day h2 { font-size: 1.1rem; }
+  .week-grid .plan-day h2 small { display: block; margin: 2px 0 0; }
+  .week-grid :is(.plan-what, .plan-add select, .plan-add .inline-group) { flex-basis: 100%; }
+  .week-grid .plan-actions { flex-basis: 100%; max-width: none; grid-auto-flow: row; }
+  .week-grid .plan-add .inline-group { min-width: 0; flex-wrap: wrap; }
+  .week-grid .plan-add .inline-group > * { flex: 1 1 4.5em; }
+}

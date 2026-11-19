@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Pantry{% endblock %}
+{% block main_attrs %} class="roomy"{% endblock %}
 {% macro unit(u) %}{{ "pieces" if u == "piece" else u }}{% endmacro %}
 {% block heading %}<h1>Pantry</h1>{% endblock %}
 {% block content %}

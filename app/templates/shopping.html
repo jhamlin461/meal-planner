@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Shopping{% endblock %}
+{% block main_attrs %} class="wide"{% endblock %}
 {% macro rows(items, empty) %}
 <ul class="rows shop-rows">
 {% for r in items %}<li><form method="post" action="/shopping/{{ r.id }}/toggle">
@@ -16,6 +17,8 @@
 {% block heading %}<h1>Shopping</h1>{% endblock %}
 {% block content %}
 {% if bad %}<p class="card error" role="alert">That does not look like a Walmart item link or number. Copy the link from the item's page on walmart.com.</p>{% endif %}
+<div class="split">
+<div>
 <h2>Meal plan</h2>
 {{ rows(lists["Meal plan"], "Nothing needed for the planned meals.") }}
 <h2>Running low</h2>
@@ -30,6 +33,8 @@
   <p class="muted">Back from the shop? Ticked items go into stock and come off the lists.</p>
   <div class="card-actions"><button class="btn btn-primary">Put ticked items in stock</button></div>
 </form>
+</div>
+<div>
 <h2>Walmart</h2>
 {% if cart_link %}<p><a class="btn btn-primary wide" href="{{ cart_link }}" rel="noreferrer">{{ icon("cart-outline") }}Open Walmart cart</a></p>{% endif %}
 {% if rest %}
@@ -44,4 +49,6 @@
   </form></li>
 {% endfor %}</ul>
 {% elif not cart_link %}<p class="empty">Nothing left to order.</p>{% endif %}
+</div>
+</div>
 {% endblock %}

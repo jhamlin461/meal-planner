@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_icon.html" import icon %}
 {% block title %}Plan{% endblock %}
+{% block main_attrs %} class="wide"{% endblock %}
 {% macro md(d) %}{{ d.strftime("%b") }} {{ d.day }}{% endmacro %}
 {% macro slot(d, name, entries, can_add, recipes, past) %}
 <div class="slot">
@@ -56,6 +57,7 @@
 <form method="post" action="/plan/suggest/clear" class="card-actions"><input type="hidden" name="week" value="{{ monday.isoformat() }}"><button class="btn">Dismiss suggestions</button></form>
 </section>
 {% endif %}
+<div class="week-grid">
 {% for d in days %}{% set when = "is-today" if d.day == today else "is-past" if d.day < today else "" %}
 <section class="plan-day {{ when }}" aria-labelledby="day-{{ loop.index }}">
 <h2 id="day-{{ loop.index }}">{{ d.day.strftime("%A") }} <small>{{ md(d.day) }}{% if d.day == today %}, today{% endif %}</small></h2>
@@ -63,4 +65,5 @@
 {{ slot(d.day, "Dinner", d.dinner, true, recipes, d.day < today) }}
 </section>
 {% endfor %}
+</div>
 {% endblock %}
