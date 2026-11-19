@@ -424,8 +424,7 @@ def test_pantry_use_soon_and_actions(env):
 
 
 def review_form(**extra):
-    base = {"product_0": "", "amount_0": "", "prev_0": "", "factor_0": "", "new_name_0": "flour",
-            "product_1": "", "amount_1": "", "prev_1": "", "factor_1": "", "new_name_1": "dragon egg",
+    base = {"product_0": "", "new_name_0": "flour", "product_1": "", "new_name_1": "dragon egg",
             "op_id": ["o1", ""], "op_label": ["mix", ""], "op_in_0": ["i0", "i1"], "action": "save"}
     return {**base, **extra}
 
@@ -441,22 +440,21 @@ def test_import_creates_pending_and_review_save(env):
     assert len(pend) == 2 and all(p.status == "ready" for p in pend)
     pdf = next(p for p in pend if p.source == "soup.pdf")
     html = c.get(f"/import/{pdf.id}").text
-    assert "2 cup flour" in html and "dragon egg" in html and "1 cup =" in html  # flour g, no cup conversion
-    r = c.post(f"/import/{pdf.id}", data=review_form(product_0=flour, prev_0=flour, factor_0="125",
-                                                    product_1=egg, prev_1=egg, amount_1="1"),
-               follow_redirects=False)
-    assert r.status_code == 303
-    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert "2 cup flour" in html and "dragon egg" in html and "1 cup =" not in html  # flour g: Claude estimates
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    r = c.post(f"/import/{pdf.id}", data=review_form(product_0=flour, product_1=egg), follow_redirects=False)
+    url = next(p for p in pend if p.source.startswith("https"))
+    assert r.status_code == 303 and r.headers["location"] == f"/import/{url.id}"  # the other import is next
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
     pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
     assert [(p["product_id"], p["amount"]) for p in pos] == [(flour, 250), (egg, 1)]
     assert store.get(pdf.id) is None and store.pdf_path(pdf.id) is None
     assert (tmp / "sources" / f"{rid}.pdf").read_bytes() == b"%PDF-1"
-    url = next(p for p in pend if p.source.startswith("https"))
     assert c.post(f"/import/{url.id}/discard", follow_redirects=False).status_code == 303
     assert store.all() == []
 
 
-def test_review_create_suggest_and_errors(env):
+def test_review_create_and_errors(env):
     g, ai, store, c, _ = env
     flour = product(g, "Flour")
     ai.draft = soup_draft()
@@ -467,20 +465,10 @@ def test_review_create_suggest_and_errors(env):
     pid = store.all()[0].id
     html = c.post(f"/import/{pid}", data=review_form(action="create:1", new_name_1="Dragon egg")).text
     egg = next(p["id"] for p in g.objects("products") if p["name"] == "Dragon egg")
-    assert f'<option value="{egg}" selected' in html and 'name="amount_1" value="1"' in html
-    assert '<input type="hidden" name="amount_0" value="">' in html  # no product yet: no amount box to puzzle over
-    html = c.post(f"/import/{pid}", data=review_form(action="suggest:0", product_0=flour)).text
-    assert 'name="factor_0" value="125' in html and "about 125 g" in html
-    assert "tracks this product in g, so it needs to know how much 1 cup is" in html
-    assert "That makes 250 g for this recipe." in html and "<span>Uses</span>" in html
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="abc")).text
-    assert "could not convert" in html and store.get(pid) is not None
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="inf")).text
-    assert "finite" in html
-    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg,
-                                                     amount_1="1", op_in_0=["i0"])).text
+    assert f'<option value="{egg}" selected' in html and 'value="create:0"' in html and 'value="create:1"' not in html
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, op_in_0=["i0"])).text
     assert "“dragon egg” isn&#39;t in any step yet" in html and g.objects("recipes") == []
-    assert 'name="amount_0" value="250' in html  # conversion was applied and kept
+    assert f'<option value="{flour}" selected' in html and store.get(pid) is not None  # the picks stay
 
 
 def test_table_edit_rejects_invalid_and_saves_valid(env):
@@ -532,10 +520,12 @@ def test_combines_chips_round_trip(env):
     ai.draft = RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=t)
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
-    r = c.post(f"/import/{pid}", data={**review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg,
-                                                     prev_1=egg, amount_1="1"), **chips(t)}, follow_redirects=False)
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    r = c.post(f"/import/{pid}", data={**review_form(product_0=flour, product_1=egg), **chips(t)},
+               follow_redirects=False)
     assert r.status_code == 303
-    saved = CfeTable.model_validate_json(g.userfields("recipes", int(r.headers["location"].rsplit("/", 1)[1]))["cfe_table"])
+    rid = max(int(x["id"]) for x in g.objects("recipes"))
+    saved = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
     assert [(o.id, o.label, o.inputs) for o in saved.ops] == [("o1", "beat", ["i1"]), ("o2", "mix", ["o1", "i0"])]
 
 
@@ -652,51 +642,42 @@ def test_grocy_refusal_says_so_with_its_reason(tmp_path):
     assert "Grocy said: table chores has no column named x" in r.text and "Grocy is down" not in r.text
 
 
-def test_review_packet_row_asks_for_amount_not_factor(env):
+def test_review_packet_row_saves_without_a_number(env):
     g, ai, store, c, _ = env
     sour = product(g, "Sour cream")
-    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream")],
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream", note="est.")],
                  ops=[Op(id="o1", label="mix", inputs=["i0"])])
     ai.draft = RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t)
+    calls = counting_conversions(ai)
     c.post("/import", data={"urls": "https://example.com/tacos"})
     pid = store.all()[0].id
-    form = dict(product_0=sour, prev_0=sour, amount_0="", factor_0="", new_name_0="sour cream", op_id=["o1"],
-                op_label=["mix"], op_in_0=["i0"])
+    form = dict(product_0=sour, new_name_0="sour cream", op_id=["o1"], op_label=["mix"], op_in_0=["i0"])
     html = c.post(f"/import/{pid}", data={**form, "action": "update"}).text
-    assert 'name="amount_0"' in html and "factor_0" not in html and "Suggest" not in html
-    assert "Packet sizes vary — enter the real amount" in html
-    # a posted factor for a packet row is ignored: no error, no conversion row
-    html = c.post(f"/import/{pid}", data={**form, "action": "update", "factor_0": "30"}).text
-    assert 'class="error"' not in html and not g.objects("quantity_unit_conversions", product_id=sour)
-    r = c.post(f"/import/{pid}", data={**form, "action": "save", "amount_0": "30", "factor_0": "30"},
-               follow_redirects=False)
-    assert r.status_code == 303
-    rid = int(r.headers["location"].rsplit("/", 1)[1])
-    assert [p["amount"] for p in g.objects("recipes_pos", recipe_id=rid)] == [30]
+    assert 'class="error"' not in html and "Packet sizes vary" not in html
+    r = c.post(f"/import/{pid}", data={**form, "action": "save"}, follow_redirects=False)
+    assert r.status_code == 303 and calls == []  # a packet is never turned into a conversion
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    assert [p["amount"] for p in g.objects("recipes_pos", recipe_id=rid)] == [0]  # not taken out of stock
     assert not g.objects("quantity_unit_conversions", product_id=sour)
+    [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients
+    assert (ing.qty, ing.unit, ing.name, ing.note) == (1, "packet", "sour cream", "est.")  # the card's own words
 
 
-def test_review_factor_is_not_applied_to_a_newly_picked_product(env):
+def test_review_estimates_belong_to_their_product(env):
     g, ai, store, c, _ = env
-    flour, sugar = product(g, "Flour"), product(g, "Sugar")
+    flour, sugar, egg = product(g, "Flour"), product(g, "Sugar"), product(g, "Dragon egg", "piece")
     ai.draft = soup_draft()
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    calls = counting_conversions(ai)
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
-    html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=flour, prev_0=flour,
-                                                     factor_0="125")).text
-    assert 'name="amount_0" value="250"' in html
-    # reviewer switches the row to Sugar; the hidden factor typed for Flour comes along with the form
-    html = c.post(f"/import/{pid}", data=review_form(action="update", product_0=sugar, prev_0=flour,
-                                                     amount_0="250", factor_0="125")).text
-    assert not g.objects("quantity_unit_conversions", product_id=sugar)
-    assert 'name="amount_0" value=""' in html and 'name="factor_0" value=""' in html and "1 cup =" in html
-    egg_guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
-                             location="Pantry", best_before_days=30, g_per_unit=1)
-    ai.guess = egg_guess  # same for a product created from the row
-    c.post(f"/import/{pid}", data=review_form(action="create:0", new_name_0="Bread flour", product_0="",
-                                              prev_0=flour, factor_0="125"))
-    bread = next(p["id"] for p in g.objects("products") if p["name"] == "Bread flour")
-    assert not g.objects("quantity_unit_conversions", product_id=bread)
+    c.post(f"/import/{pid}", data=review_form(product_0=flour))  # egg not picked: not saved, flour estimated
+    ai.conversion = ConversionGuess(factor=200, explanation="")
+    r = c.post(f"/import/{pid}", data=review_form(product_0=sugar, product_1=egg), follow_redirects=False)
+    assert r.status_code == 303 and [a[0] for a in calls] == ["Flour", "Sugar"]
+    assert not g.objects("quantity_unit_conversions", product_id=flour)  # its estimate went unused
+    assert [x["factor"] for x in g.objects("quantity_unit_conversions", product_id=sugar)] == [200]
+    assert sorted(p["amount"] for p in g.objects("recipes_pos")) == [1, 400]
 
 
 def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
@@ -713,10 +694,11 @@ def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
     bootstrap(g)
     flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
     store = PendingStore(tmp_path / "pending")
-    app = create_app(g, FakeAI(picks=Picks(items=[]), draft=soup_draft()),
+    ai = FakeAI(picks=Picks(items=[]), draft=soup_draft(), conversion=ConversionGuess(factor=125, explanation=""))
+    app = create_app(g, ai,
                      httpx.Client(transport=httpx.MockTransport(no_network)),
                      Settings("", "", "", "KEY", None, 6, tmp_path, 3), store)
-    form = review_form(product_0=flour, prev_0=flour, factor_0="125", product_1=egg, prev_1=egg, amount_1="1")
+    form = review_form(product_0=flour, product_1=egg)
     codes = {}
     with TestClient(app) as c:  # one event loop shared by all requests, like uvicorn
         c.post("/import", data={"urls": "https://example.com/soup"})
@@ -1066,23 +1048,6 @@ def test_plan_add_and_remove_wait_for_the_plan_lock(tmp_path):
             t.join(5)
     assert during == [gone]  # neither ran while Bought held the lock
     assert len(g.objects("meal_plan", type="recipe")) == 2 and g.get_object("meal_plan", gone) is None
-
-
-def test_saved_table_has_real_amount_for_packet_rows(env):
-    g, ai, store, c, _ = env
-    sour = product(g, "Sour cream")
-    t = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="packet", name="sour cream", note="est.")],
-                 ops=[Op(id="o1", label="mix", inputs=["i0"])])
-    ai.draft = RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t)
-    c.post("/import", data={"urls": "https://example.com/tacos"})
-    pid = store.all()[0].id
-    r = c.post(f"/import/{pid}", data=dict(product_0=sour, prev_0=sour, amount_0="57", new_name_0="sour cream",
-                                           op_id=["o1"], op_label=["mix"], op_in_0=["i0"], action="save"),
-               follow_redirects=False)
-    rid = int(r.headers["location"].rsplit("/", 1)[1])
-    [ing] = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients
-    assert (ing.qty, ing.unit, ing.name, ing.note) == (57, "g", "sour cream", "est.")
-    assert "1 packet" not in c.get(f"/recipes/{rid}").text
 
 
 # ---- people and device identity -------------------------------------------------------------------------------------
@@ -1614,3 +1579,148 @@ def test_black_theme_css_covers_every_surface_and_inks_on_action(env):
         assert f"{sel}" in css[css.index("The current tab"):], sel
     assert ") a.settings-btn[aria-current][aria-current] { border-radius: 24px; }" in css  # outranks the :is() rule
     assert "color: #fff" not in css  # ink on an action fill comes from --on-action
+
+
+# ---- the review asks only for products ------------------------------------------------------------------------------
+def ready_import(store, draft, age=0):
+    """A pending import already read, `age` seconds older than now (store.all() is oldest first by file time)."""
+    import os
+    p = store.new("https://example.com/x")
+    p.status, p.draft = "ready", draft
+    store.save(p)
+    t = time.time() - age
+    os.utime(store.dir / f"{p.id}.json", (t, t))
+    return p.id
+
+
+def counting_conversions(ai):
+    calls, real = [], ai.guess_conversion
+    ai.guess_conversion = lambda *a: calls.append(a) or real(*a)
+    return calls
+
+
+def test_review_shows_no_amounts_or_factors(env):
+    g, ai, store, c, _ = env
+    product(g, "Flour"), product(g, "Sour cream")  # grams, no cup conversion known
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"),
+                                      Ingredient(qty=1, unit="packet", name="sour cream")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0", "i1"])])
+    pid = ready_import(store, RecipeDraft(title="Tacos", servings=2, steps=["Stir"], table=t))
+    html = c.get(f"/import/{pid}").text
+    visible = re.sub(r"<[^>]*>", " ", html)
+    assert "Uses" not in visible and "1 cup =" not in visible and "Suggest" not in visible
+    assert 'name="amount_' not in html and 'name="factor_' not in html
+    assert "Packet sizes vary" not in visible and "enter the real amount" not in visible
+
+
+def test_review_saves_with_only_products_picked(env):
+    g, ai, store, c, _ = env
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="a cup of flour weighs about 125 g")
+    calls = counting_conversions(ai)
+    pid = ready_import(store, soup_draft())
+    c.get(f"/import/{pid}"), c.get(f"/import/{pid}")
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1="")).text  # one row not picked yet
+    assert "Pick a product for “dragon egg”" in html and g.objects("recipes") == []
+    assert store.get(pid).estimates == {f"{flour}:cup": 125}  # kept: the next Save doesn't ask again
+    r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg), follow_redirects=False)
+    assert r.status_code == 303 and len(calls) == 1
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    assert [(p["product_id"], p["amount"]) for p in pos] == [(flour, 250), (egg, 1)]
+    [conv] = g.objects("quantity_unit_conversions", product_id=flour)
+    assert (conv["from_qu_id"], conv["to_qu_id"], conv["factor"]) == (ids(g).unit["cup"], ids(g).unit["g"], 125)
+
+
+def test_review_free_mode_saves_without_amount(env):
+    from app.mealplan import cook
+    g, ai, store, c, _ = env
+    flour, egg, salt = product(g, "Flour"), product(g, "Dragon egg", "piece"), product(g, "Salt")
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"),
+                                      Ingredient(qty=1, unit="", name="dragon egg"),
+                                      Ingredient(qty=None, unit="", name="salt", note="to taste")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0", "i1", "i2"])])
+    pid = ready_import(store, RecipeDraft(title="Soup", servings=2, steps=["Stir"], table=t))
+    ai.mode_ = "free"
+    r = c.post(f"/import/{pid}", data={"product_0": flour, "product_1": egg, "product_2": salt, "op_id": ["o1"],
+                                       "op_label": ["mix"], "op_in_0": ["i0", "i1", "i2"], "action": "save"},
+               follow_redirects=False)
+    assert r.status_code == 303, r.text
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    assert [(p["product_id"], p["amount"], p.get("variable_amount") or "") for p in pos] == \
+        [(flour, 0, "2 cup"), (egg, 1, ""), (salt, 0, "")]  # flour waits for an estimate; salt is to taste
+    assert not g.objects("quantity_unit_conversions", product_id=flour)
+    i = ids(g)
+    for p in (flour, egg):
+        g.add_stock(p, 500, None, i.location["Pantry"])
+    entry = g.create("meal_plan", {"day": "2026-11-19", "type": "recipe", "recipe_id": rid, "recipe_servings": 2,
+                                   "section_id": i.section["Dinner"], "done": 0})
+    assert cook(g, entry) == []
+    assert g.stock_amounts()[flour] == 500 and g.stock_amounts()[egg] == 499  # nothing guessed is taken out
+
+
+def test_create_all_missing(env):
+    from app.ai import AIError
+    g, ai, store, c, _ = env
+    ai.guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
+                            location="Pantry", best_before_days=30, g_per_unit=1)
+    real = ai.guess_product
+
+    def guess(info, *a, **kw):
+        if info["name"] == "Dragon egg":
+            raise AIError("Claude didn't answer")
+        return real(info, *a, **kw)
+    ai.guess_product = guess
+    salt = product(g, "Salt")
+    t = CfeTable(pre=[], ingredients=[Ingredient(qty=2, unit="cup", name="flour"),
+                                      Ingredient(qty=1, unit="", name="dragon egg"),
+                                      Ingredient(qty=1, unit="tsp", name="salt"),
+                                      Ingredient(qty=1, unit="", name="leek")],
+                 ops=[Op(id="o1", label="mix", inputs=["i0", "i1", "i2", "i3"])])
+    pid = ready_import(store, RecipeDraft(title="Soup", servings=2, steps=["Stir"], table=t))
+    html = c.get(f"/import/{pid}").text
+    assert html.count('value="create_all"') == 1 and html.index('value="create_all"') < html.index('name="product_0"')
+    html = c.post(f"/import/{pid}", data={"product_2": salt, "new_name_0": "Flour", "new_name_1": "Dragon egg",
+                                          "new_name_3": "Leek", "op_id": ["o1"], "op_label": ["mix"],
+                                          "op_in_0": ["i0", "i1", "i2", "i3"], "action": "create_all"}).text
+    made = {p["name"]: p["id"] for p in g.objects("products") if p["name"] in ("Flour", "Leek", "Dragon egg")}
+    assert list(made) == ["Flour", "Leek"] and made["Flour"] < made["Leek"]  # row order; the egg failed
+    for i, p in ((0, made["Flour"]), (2, salt), (3, made["Leek"])):
+        assert re.search(rf'name="product_{i}"[^>]*>.*?<option value="{p}" selected', html, re.S), i
+    rows = html.split('<li class="review-row')
+    assert "Claude didn&#39;t answer" in rows[2] and "Claude didn" not in rows[1] + rows[3]  # on its own row
+    assert html.count('value="create:1"') == 1 and 'value="create:0"' not in html
+
+
+def test_review_waiting_link_opens_first_review(env):
+    g, ai, store, c, _ = env
+    assert c.get("/import/next", follow_redirects=False).headers["location"] == "/import"
+    failed = store.new("https://example.com/broken")
+    failed.status, failed.error = "failed", "no recipe"
+    store.save(failed)
+    assert c.get("/import/next", follow_redirects=False).headers["location"] == "/import"
+    newer = ready_import(store, soup_draft(), age=10)
+    older = ready_import(store, soup_draft(), age=60)
+    html = c.get("/recipes").text
+    assert re.search(r'<a class="btn" href="/import/next">Review 3 waiting</a>', html)
+    r = c.get("/import/next", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/import/{older}" != f"/import/{newer}"
+
+
+def test_save_and_discard_go_to_next_waiting(env):
+    g, ai, store, c, _ = env
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    first = ready_import(store, soup_draft(), age=60)
+    second, third = ready_import(store, soup_draft(), age=30), ready_import(store, soup_draft(), age=10)
+    r = c.post(f"/import/{first}", data=review_form(product_0=flour, product_1=egg), follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/import/{second}"
+    html = c.get(f"/import/{second}").text
+    assert '<input type="hidden" name="then" value="next">' in html  # the review's Discard
+    r = c.post(f"/import/{second}/discard", data={"then": "next"}, follow_redirects=False)
+    assert r.headers["location"] == f"/import/{third}" and store.get(second) is None
+    assert c.post(f"/import/{third}/discard", data={"then": "next"}, follow_redirects=False).headers["location"] \
+        == "/recipes"
+    gone = ready_import(store, soup_draft())
+    assert c.post(f"/import/{gone}/discard", follow_redirects=False).headers["location"] == "/import"  # Import list

@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 
-from app.ai import Picks, RecipeDraft
+from app.ai import ConversionGuess, Picks, ProductGuess, RecipeDraft
 from app.config import Settings
 from app.home import add_starters
 from app.house import HouseStore
@@ -115,7 +115,10 @@ def main():
     mode = os.environ.get("DEMO_AI", "full")
     if mode != "full":  # a month's AI spend that reaches economy, or the whole budget (free fallbacks)
         house.add_ai_usage(datetime.now(), "recipe", "claude-opus-4-1", {}, 100.0 if mode == "free" else 85.5)
-    ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]), mode=mode)
+    ai = FakeAI(draft=soup_draft(), picks=Picks(items=[]), mode=mode,  # Create and Save work in the demo
+                guess=ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
+                                   location="Pantry", best_before_days=30, g_per_unit=1),
+                conversion=ConversionGuess(factor=125, explanation=""))
     app = create_app(g, ai, httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
                      settings, store, house=house, ha=ha)
     if len(sys.argv) > 1:

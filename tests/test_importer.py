@@ -182,20 +182,39 @@ def test_propose_matches_ai_error_leaves_unmatched():
     assert m == [IngredientMatch(0, None, None)]
 
 
-def test_save_blocks_unconvertible_unit():
+def test_save_needs_a_product_but_not_an_amount():
     g = grocy()
     tomatoes = product(g, "Tomatoes", "g")
     d = make_draft([(2, "tbsp", "Tomatoes"), (1, "can", "tomatoes")])
     add_conversion(g, tomatoes, "tbsp", 15)
     m = propose_matches(g, FakeAI(), d)
-    assert m[1] == IngredientMatch(1, tomatoes, None)
-    with pytest.raises(ValueError, match=r"\b1\b"):
-        save_recipe(g, d, m, None, None)
+    assert m == [IngredientMatch(0, tomatoes, 30), IngredientMatch(1, tomatoes, None)]
+    with pytest.raises(ValueError, match=r"Pick a product for i1$"):
+        save_recipe(g, d, [m[0], IngredientMatch(1, None, None)], None, None)
     assert g.objects("recipes") == []
-    add_conversion(g, tomatoes, "can", 411)
-    m = propose_matches(g, FakeAI(), d)
-    assert m == [IngredientMatch(0, tomatoes, 30), IngredientMatch(1, tomatoes, 411)]
-    assert save_recipe(g, d, m, None, None) in {r["id"] for r in g.objects("recipes")}
+    rid = save_recipe(g, d, m, None, None)  # the can waits for an estimate: nothing taken out of stock meanwhile
+    pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
+    assert [(p["amount"], p.get("variable_amount")) for p in pos] == [(30, None), (0, "1 can")]
+
+
+def test_estimate_amount_known_first_then_claude_once():
+    from app.ai import ConversionGuess
+    from app.importer import Pending, estimate_amount
+    g = grocy()
+    flour = product(g, "Flour", "g")
+    p = Pending(id="0" * 32, status="ready", source="x")
+    calls = []
+    ai = FakeAI()
+    ai.guess_conversion = lambda *a: calls.append(a) or ConversionGuess(factor=125, explanation="")
+    assert estimate_amount(g, ai, p, flour, 2, "cups") == 250 and estimate_amount(g, ai, p, flour, 1, "cup") == 125
+    assert calls == [("Flour", "cup", "g")] and p.estimates == {f"{flour}:cup": 125}
+    assert estimate_amount(g, ai, p, flour, None, "cup") is None  # to taste
+    assert estimate_amount(g, ai, p, flour, 1, "packet") is None and len(calls) == 1  # packets are never guessed
+    add_conversion(g, flour, "cup", 120)  # known by now: it wins, and the unused estimate is dropped
+    assert estimate_amount(g, ai, p, flour, 2, "cup") == 240 and p.estimates == {}
+    for bad in (FakeAI(mode="free"), FakeAI(error=AIError("down")),
+                FakeAI(conversion=ConversionGuess(factor=0, explanation=""))):
+        assert estimate_amount(g, bad, p, flour, 1, "tbsp") is None and p.estimates == {}
 
 
 def test_add_conversion_creates_unknown_unit_and_updates_existing():
@@ -239,7 +258,7 @@ def test_save_blocks_invalid_table_and_missing_match():
     g = grocy()
     pid = product(g, "Egg", "piece")
     d = make_draft([(1, "", "egg"), (2, "", "egg")])
-    with pytest.raises(ValueError, match=r"\b1\b"):
+    with pytest.raises(ValueError, match=r"Pick a product for i1\b"):
         save_recipe(g, d, [IngredientMatch(0, pid, 1)], None, None)
     d.table.ops[0].inputs = ["i0"]
     with pytest.raises(ValueError, match="i1"):

@@ -32,10 +32,9 @@ from app import home as hm
 from app.house import LOCK, HouseStore, Person, by_grocy_user
 from app import reminders as rm
 from app.reminders import start_loop
-from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic, make_table,
-                          page_text, process, propose_matches, put_photo, save_recipe, start_worker, stock_amount_for,
-                          submit_batch, to_jpeg)
-from app.qty import is_packaging
+from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversion, create_generic,
+                          estimate_amount, estimate_key, make_table, page_text, process, propose_matches, put_photo,
+                          save_recipe, start_worker, submit_batch, to_jpeg)
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
 from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
@@ -90,13 +89,6 @@ def _servings(s: str) -> int | None:
 
 def _monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
-
-
-def _factor(s: str) -> float:
-    f = float(s)  # ValueError for non-numbers; its message is shown to the reviewer
-    if not (math.isfinite(f) and f > 0):
-        raise ValueError(f"conversion factor must be a finite number above 0, got {s}")
-    return f
 
 
 def _table_from_form(form, old: CfeTable) -> CfeTable:
@@ -264,9 +256,15 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def position_ingredients(positions: list[dict], products: dict[int, dict]) -> list[Ingredient]:
         units = unit_names()
-        return [Ingredient(qty=float(p["amount"]), unit=units.get(_int(p.get("qu_id")), ""),
-                           name=products.get(int(p["product_id"]), {}).get("name", f"product {p['product_id']}"))
-                for p in positions]
+        out = []
+        for p in positions:  # one waiting for an estimate shows the recipe's own amount; 0 alone is to taste
+            qty, unit = float(p["amount"]) or None, units.get(_int(p.get("qu_id")), "")
+            if p.get("variable_amount"):
+                q, _, unit = p["variable_amount"].partition(" ")
+                qty = float(q)
+            out.append(Ingredient(qty=qty, unit=unit, name=products.get(int(p["product_id"]), {}).get(
+                "name", f"product {p['product_id']}")))
+        return out
 
     @app.get("/")
     def today(request: Request, msg: str = ""):
@@ -953,25 +951,24 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def review_page(request: Request, p, table: CfeTable, rows: list[dict], errors: list[str]):
         gens = sorted(_generics(grocy), key=lambda g: g["name"].lower())
-        by_id, units = {int(g["id"]): g for g in gens}, unit_names()
         for ing, row in zip(table.ingredients, rows):
-            prod = by_id.get(row["product_id"])
             row["text"] = ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")
-            row["unit"] = ing.unit or "piece"
-            row["stock_unit"] = units.get(_int(prod.get("qu_id_stock")), "") if prod else ""
-            row["packaging"] = is_packaging(row["unit"])
-            row["convert"] = prod is not None and row["amount"] is None and ing.qty is not None and not row["packaging"]
-            try:  # what the typed or suggested factor comes to, before Update stores it
-                row["preview"] = _fmt(ing.qty * _factor(row["factor"])) if row["convert"] and row["factor"] else None
-            except ValueError:
-                row["preview"] = None
         tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
-                    pdf=store.pdf_path(p.id) is not None,
+                    pdf=store.pdf_path(p.id) is not None, missing=sum(not r["product_id"] for r in rows),
                     source_url=p.source if p.source.startswith(("http://", "https://")) else None,
                     locations=list(places(grocy)), default_location=default_place(grocy),
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table))
+
+    def next_review(none: str) -> RedirectResponse:
+        """The oldest import ready for review, else `none`."""
+        p = next((p for p in store.all() if p.status == "ready"), None)
+        return back(f"/import/{p.id}" if p else none)
+
+    @app.get("/import/next")  # before /import/{pid}, which would take "next" as an id
+    def review_next():
+        return next_review("/import")
 
     @app.get("/import/{pid}")
     def review(request: Request, pid: str):
@@ -982,8 +979,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         matches = propose_matches(grocy, ai, p.draft, p.ai_picks)
         if p.ai_picks != known:
             store.save(p)  # Claude's picks kept: reloading this page costs nothing
-        rows = [{"product_id": m.product_id, "amount": m.stock_amount, "prev": m.product_id, "factor": "",
-                 "new_name": ing.name, "error": None, "note": None}
+        rows = [{"product_id": m.product_id, "new_name": ing.name, "error": None}
                 for m, ing in zip(matches, p.draft.table.ingredients)]
         return review_page(request, p, p.draft.table, rows, [])
 
@@ -1003,7 +999,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     @app.post("/import/{pid}")
     async def review_post(request: Request, pid: str):
-        """One form for the whole review; `action` is save, create:<i>, suggest:<i>, addop or remove:<step> (re-render)."""
+        """One form for the whole review; `action` is save, create:<i>, create_all, addop or remove:<step> (re-render)."""
         form = await request.form()
         return await run_in_threadpool(review_submit, request, pid, form)  # Grocy/Claude calls block for seconds
 
@@ -1016,59 +1012,45 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         rows: list[dict] = []
         for i, ing in enumerate(table.ingredients):
             f = lambda k: str(form.get(f"{k}_{i}") or "").strip()  # noqa: E731
-            row = {"product_id": _int(f("product")), "amount": _num(f("amount")), "factor": f("factor"),
-                   "new_name": f("new_name") or ing.name, "error": None, "note": None,
+            row = {"product_id": _int(f("product")), "new_name": f("new_name") or ing.name, "error": None,
                    "manual": {k: f(k) for k in ("generic", "stock_unit", "package", "location", "category")}}
-            try:
-                if action == f"create:{i}":
+            if action == f"create:{i}" or (action == "create_all" and not row["product_id"]):
+                try:
                     row["product_id"] = create_generic(grocy, ai, http, settings, row["new_name"],
                                                        manual_details(row["manual"]) if ai.mode() == "free" else None)
-                pid_ = row["product_id"]
-                if pid_ and pid_ != _int(f("prev")):  # product changed: amount must be in its stock unit
-                    row["amount"] = stock_amount_for(grocy, pid_, ing.qty, ing.unit)
-                    row["factor"] = ""  # a factor typed for the old product must never be stored for this one
-                if pid_ and row["amount"] is None and ing.qty is not None and not is_packaging(ing.unit):
-                    if action == f"suggest:{i}":
-                        prod = grocy.get_object("products", pid_)
-                        g = ai.guess_conversion(prod["name"], ing.unit or "piece",
-                                                unit_names().get(_int(prod.get("qu_id_stock")), ""))
-                        row["factor"], row["note"] = _fmt(g.factor), g.explanation
-                    elif row["factor"]:
-                        add_conversion(grocy, pid_, ing.unit, _factor(row["factor"]))
-                        row["amount"] = stock_amount_for(grocy, pid_, ing.qty, ing.unit)
-            except (ValueError, AIError) as e:
-                row["error"] = str(e)
-            row["prev"] = row["product_id"]
+                except (ValueError, AIError) as e:
+                    row["error"] = str(e)
             rows.append(row)
         errors: list[str] = []
         if action == "save":
-            units, ings = unit_names(), list(table.ingredients)
-            for i, (ing, row) in enumerate(zip(ings, rows)):  # store packets as the real amount the reviewer typed
-                if is_packaging(ing.unit) and row["product_id"] and row["amount"] is not None:
-                    prod = grocy.get_object("products", row["product_id"]) or {}
-                    ings[i] = ing.model_copy(update={"qty": row["amount"],
-                                                     "unit": units.get(_int(prod.get("qu_id_stock")), ing.unit)})
-            table = table.model_copy(update={"ingredients": ings})
+            known = dict(p.estimates)
+            amounts = [estimate_amount(grocy, ai, p, r["product_id"], ing.qty, ing.unit) if r["product_id"] else None
+                       for ing, r in zip(table.ingredients, rows)]  # Claude's guesses, never shown or typed
+            if p.estimates != known:
+                store.save(p)  # kept: a failed Save doesn't ask again
             draft = p.draft.model_copy(update={"table": table})
             source_url = p.source if p.source.startswith(("http://", "https://")) else None
             with save_lock:  # a double-tapped Save must not create the recipe twice
                 if store.get(pid) is None:
-                    return back("/recipes")  # the other tap already saved it
+                    return next_review("/recipes")  # the other tap already saved it
                 try:
-                    rid = save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], r["amount"])
-                                                     for i, r in enumerate(rows)], source_url, store.pdf_path(pid),
-                                      photo=store.photo_path(pid), need_table=not p.tableless)
+                    save_recipe(grocy, draft, [IngredientMatch(i, r["product_id"], a)
+                                               for i, (r, a) in enumerate(zip(rows, amounts))], source_url,
+                                store.pdf_path(pid), photo=store.photo_path(pid), need_table=not p.tableless)
                 except ValueError as e:
                     errors.append(str(e))
                 else:
-                    store.delete(pid)
-                    return back(f"/recipes/{rid}")
+                    store.delete(pid)  # first: the recipe is saved even if a conversion below fails
+                    for ing, r in zip(table.ingredients, rows):  # the estimates used become the products' conversions
+                        if (factor := p.estimates.get(estimate_key(r["product_id"], ing.unit))) is not None:
+                            add_conversion(grocy, r["product_id"], ing.unit, factor)
+                    return next_review("/recipes")
         return review_page(request, p, table, rows, errors)
 
     @app.post("/import/{pid}/discard")
-    def discard(pid: str):
+    def discard(pid: str, then: str = Form("")):
         store.delete(pid)
-        return back("/import")
+        return next_review("/recipes") if then == "next" else back("/import")  # the review goes on; the list stays
 
     # ---- week plan ----------------------------------------------------------------------------------------------
     def plan_page(request: Request, monday: date, short: list[str] = (), picks: list[dict] | None = None,

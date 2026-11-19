@@ -424,16 +424,16 @@ def test_a_tableless_import_saves_ingredients_and_steps(tmp_path):
     grocy = c.grocy
     i = ids(grocy)
     pids = [grocy.create("products", {"name": n, "qu_id_stock": i.unit["g"]}) for n in ("Tomatoes", "Butter", "Onion")]
-    form = {"action": "save", **{f"product_{k}": str(pid) for k, pid in enumerate(pids)},
-            **{f"prev_{k}": str(pid) for k, pid in enumerate(pids)},
-            **{f"amount_{k}": "100" for k in range(3)}}
+    form = {"action": "save", **{f"product_{k}": str(pid) for k, pid in enumerate(pids)}}  # products only
     r = c.post(f"/import/{p.id}", data=form, follow_redirects=False)
     assert r.status_code == 303, r.text
-    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert r.headers["location"] == "/recipes"  # no other import waiting
+    rid = max(int(x["id"]) for x in grocy.objects("recipes"))
     assert grocy.userfields("recipes", rid)["cfe_table"] == ""
     assert len(grocy.objects("recipes_pos", recipe_id=rid)) == 3
     assert "<li>Melt the butter.</li>" in grocy.get_object("recipes", rid)["description"]
-    assert c.get(f"/recipes/{rid}").status_code == 200
+    html = c.get(f"/recipes/{rid}").text  # no conversions in free mode: the recipe's own amounts, never "0 g"
+    assert "1 can Tomatoes" in html and "2 tbsp Butter" in html and "1 Onion" in html and "0 g Butter" not in html
 
 
 def test_free_matching_uses_plain_normalised_names():
@@ -508,7 +508,7 @@ def test_today_has_a_quiet_note_only_in_free_mode(web):
     assert "AI is paused until the 1st" in c.get("/").text
 
 
-def test_free_review_asks_for_the_factor_instead_of_suggesting(tmp_path):
+def test_free_review_asks_for_nothing_but_the_product(tmp_path):
     from app.cfe import Ingredient, Op
     from app.setup_grocy import ids
     ai = FakeAI(mode="free")
@@ -520,7 +520,7 @@ def test_free_review_asks_for_the_factor_instead_of_suggesting(tmp_path):
     store.save(p)
     pid = c.grocy.create("products", {"name": "Flour", "qu_id_stock": ids(c.grocy).unit["g"]})
     html = c.post(f"/import/{p.id}", data={"action": "update", "product_0": str(pid)}).text
-    assert 'name="factor_0"' in html and 'value="suggest:0"' not in html
+    assert 'name="product_0"' in html and 'name="factor_0"' not in html and 'value="suggest:0"' not in html
 
 
 # ---- review round 1 ----------------------------------------------------------------------------------------------
@@ -594,12 +594,11 @@ def test_free_review_creates_a_new_product_by_hand_and_saves_end_to_end(tmp_path
     i = ids(g)
     butter = g.create("products", {"name": "Butter", "qu_id_stock": i.unit["g"]})
     onion = g.create("products", {"name": "Onion", "qu_id_stock": i.unit["piece"]})
-    save = {"action": "save", "product_0": tom["id"], "prev_0": tom["id"], "amount_0": "794",
-            "product_1": butter, "prev_1": butter, "amount_1": "28", "product_2": onion, "prev_2": onion,
-            "amount_2": "1"}
+    save = {"action": "save", "product_0": tom["id"], "product_1": butter, "product_2": onion}
     r = c.post(f"/import/{p.id}", data=save, follow_redirects=False)
     assert r.status_code == 303, r.text
-    rid = int(r.headers["location"].rsplit("/", 1)[1])
+    assert r.headers["location"] == "/recipes"
+    rid = max(int(x["id"]) for x in g.objects("recipes"))
     assert [x["product_id"] for x in g.objects("recipes_pos", recipe_id=rid)] == [tom["id"], butter, onion]
     assert g.userfields("recipes", rid)["cfe_table"] == ""
 

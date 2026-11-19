@@ -5,7 +5,7 @@
 {% block heading %}<h1>Recipes</h1>{% endblock %}
 {% block content %}
 <p class="row"><a class="btn btn-primary" href="/import">{{ icon("plus") }}Import recipes</a>
-{%- if waiting %}<a class="btn" href="/import">Review {{ waiting }} waiting</a>{% endif %}</p>
+{%- if waiting %}<a class="btn" href="/import/next">Review {{ waiting }} waiting</a>{% endif %}</p>
 {% if recipes %}<ul class="recipe-grid">
 {% for r in recipes %}<li><a href="/recipes/{{ r.id }}">
 {%- if r.picture_file_name %}<img src="/recipes/{{ r.id }}/photo?w=480&amp;v={{ r.picture_file_name }}" alt="{{ r.name }}" loading="lazy" width="480" height="360">

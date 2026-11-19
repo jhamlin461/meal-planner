@@ -4,6 +4,7 @@ import io
 import ipaddress
 import json
 import logging
+import math
 import re
 import secrets
 import shutil
@@ -279,6 +280,7 @@ class Pending(BaseModel):
     batch_id: str | None = None
     tableless: bool = False  # read without Claude from the page's JSON-LD: may be saved without a table
     ai_picks: dict[str, int | None] = {}  # Claude's product per ingredient name, so a reload doesn't ask again
+    estimates: dict[str, float] = {}  # "{product_id}:{unit}" -> Claude's stock units per 1 unit, asked once
 
 
 _ID = re.compile(r"[0-9a-f]{32}")
@@ -590,6 +592,34 @@ def stock_amount_for(grocy, product_id: int, qty: float | None, unit: str) -> fl
     return _stock_amount(product, qty, unit, grocy.objects("quantity_unit_conversions"), names)
 
 
+def estimate_key(product_id: int, unit: str) -> str:
+    return f"{product_id}:{_unit(unit)}"
+
+
+def estimate_amount(grocy, ai, pending: Pending, product_id: int, qty: float | None, unit: str) -> float | None:
+    """`qty unit` in the product's stock unit: a known conversion first, else Claude's estimate, cached on the
+    pending import under "{product_id}:{unit}" (dropped again once a known conversion covers it, so Save stores only
+    estimates it used). None with no amount (to taste), for packets, in free mode, or when Claude fails."""
+    known = stock_amount_for(grocy, product_id, qty, unit)
+    key = estimate_key(product_id, unit)
+    if known is not None or qty is None or is_packaging(unit):
+        pending.estimates.pop(key, None)
+        return known
+    if key not in pending.estimates:
+        prod = grocy.get_object("products", product_id) or {}
+        stock = {v: k for k, v in ids(grocy).unit.items()}.get(int(prod.get("qu_id_stock") or 0))
+        if stock is None:
+            return None
+        try:
+            factor = ai.guess_conversion(prod["name"], _unit(unit), stock).factor
+        except AIError:  # AIPaused in free mode: saved without an amount
+            return None
+        if not (math.isfinite(factor) and factor > 0):
+            return None
+        pending.estimates[key] = factor
+    return qty * pending.estimates[key]
+
+
 def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> None:
     """Product-specific `from_unit` -> stock unit conversion (1 from_unit = factor stock units); upserts."""
     if is_packaging(from_unit):  # packets vary by brand and card; they must never become a stored conversion
@@ -606,6 +636,12 @@ def add_conversion(grocy, product_id: int, from_unit: str, factor: float) -> Non
     else:
         grocy.create("quantity_unit_conversions",
                      {"from_qu_id": qu, "to_qu_id": to, "factor": factor, "product_id": product_id})
+
+
+def needs_estimate(ing: Ingredient) -> dict:
+    """A position saved without a stock amount has amount 0, so cooking and shopping skip it. Grocy's own
+    `variable_amount` keeps the recipe's amount ("2 cup") for an estimate to fill in later; to taste stays unmarked."""
+    return {"variable_amount": f"{ing.qty:g} {_unit(ing.unit)}"} if ing.qty is not None else {}
 
 
 def put_photo(grocy, rid: int, jpeg: bytes) -> None:
@@ -633,9 +669,8 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
     need_table=False (a free-mode import) saves a draft with no steps in its table as a recipe without a table."""
     ings = draft.table.ingredients
     by_index = {m.index: m for m in matches}
-    bad = [i for i in range(len(ings))
-           if i not in by_index or by_index[i].product_id is None or by_index[i].stock_amount is None]
-    errs = ([f"ingredients without a product or amount: {', '.join(map(str, bad))}"] if bad else []) \
+    bad = [i for i in range(len(ings)) if i not in by_index or by_index[i].product_id is None]
+    errs = ([f"Pick a product for {', '.join(f'i{i}' for i in bad)}"] if bad else []) \
         + (validate(draft.table) if need_table or draft.table.ops else [])
     if errs:
         raise ValueError("; ".join(errs))
@@ -657,9 +692,10 @@ def save_recipe(grocy, draft: RecipeDraft, matches: list[IngredientMatch], sourc
         for i, ing in enumerate(ings):
             m = by_index[i]
             made.append(grocy.create("recipes_pos", {
-                "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount,
+                "recipe_id": rid, "product_id": m.product_id, "amount": m.stock_amount or 0,
                 "qu_id": int(products[m.product_id]["qu_id_stock"]),
-                "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else "")}))
+                "note": ingredient_text(ing, 1) + (f", {ing.note}" if ing.note else ""),
+                **(needs_estimate(ing) if m.stock_amount is None else {})}))
         uf = {"cfe_table": draft.table.model_dump_json() if draft.table.ops else "", "source_url": source_url or "",
               "source_pdf": ""}
         if pdf_path:
