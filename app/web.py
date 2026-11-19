@@ -38,11 +38,11 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
                           propose_matches, put_photo, save_recipe, start_worker, stock_amount_for, submit_batch,
                           to_jpeg)
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
-from app.qty import parse_qty
+from app.qty import is_packaging, parse_qty
 from app.nutrition import recipe_macros
 from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
                            rename_place, rows, why_not_remove)
-from app.setup_grocy import SECTIONS, ids, supplies_group
+from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
 from app.today import expiring, summary, today_view
@@ -133,7 +133,7 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
             x = parse_qty(q)
             if not q.strip() or (x is not None and math.isfinite(x) and x > 0):  # blank: to taste; junk: unchanged
                 up["qty"] = x
-        if u is not None:
+        if u is not None and not is_packaging(u):  # refused on the row (_packet_units)
             up["unit"] = u.strip()
         if k is not None and k.strip() != _shown(g.packets):
             up["packets"] = _num(k)
@@ -144,6 +144,14 @@ def _table_from_form(form, old: CfeTable) -> CfeTable:
                                           for n, ((_, lab, _, where), refs) in enumerate(zip(rows, picked))]})
 
 
+PACKET_UNIT = "Use a measure like tbsp or cup; packets go in the packets box."
+
+
+def _packet_units(form, n: int) -> list[int]:
+    """Rows whose amount field names a packaging unit: refused (a packet is no measure; the packets box counts them)."""
+    return [i for i in range(n) if is_packaging(str(form.get(f"unit_{i}") or ""))]
+
+
 def _shown(x: float | None) -> str:
     """How an amount field shows a number (the template's '%g')."""
     return "" if x is None else f"{x:g}"
@@ -152,9 +160,12 @@ def _shown(x: float | None) -> str:
 def _recipe_doubts(uf: dict) -> list[dict]:
     """The check's doubts kept on a saved recipe (its `doubts` userfield) until the table editor saves."""
     try:
-        return json.loads(uf.get("doubts") or "[]")
+        got = json.loads(uf.get("doubts") or "[]")
     except ValueError:
         return []
+    ok = isinstance(got, list) and all(isinstance(d, dict) and isinstance(d.get("ref"), str)
+                                       and isinstance(d.get("reason"), str) for d in got)
+    return got if ok else []  # anything else (edited in Grocy): no doubts
 
 
 def _standing(doubts: list[dict], old: CfeTable, new: CfeTable) -> list[dict]:
@@ -165,13 +176,16 @@ def _standing(doubts: list[dict], old: CfeTable, new: CfeTable) -> list[dict]:
     return [d for d in doubts if a.get(d["ref"]) == b.get(d["ref"])]
 
 
-def _doubt_ctx(doubts: list[dict]) -> dict:
-    """Template context for the doubts: the numbered list, and each doubtful cell's numbers (ref -> [n, ...])."""
+def _doubt_ctx(doubts: list[dict], stored: list[dict] | None = None) -> dict:
+    """Template context for the doubts: the numbered list, each doubtful cell's numbers (ref -> [n, ...]), and the
+    ingredient rows that keep their amount fields: every row doubted in `stored` (the doubts as saved, default
+    `doubts`), so a correction, whose doubt has cleared, is still posted back on the next Update or Save."""
     marks: dict[str, list[int]] = {}
     for n, d in enumerate(doubts, 1):
         if d["ref"]:
             marks.setdefault(d["ref"], []).append(n)
-    return {"doubts": doubts, "marks": marks}
+    fixable = {d["ref"] for d in (doubts if stored is None else stored) if re.fullmatch(r"i\d+", d["ref"])}
+    return {"doubts": doubts, "marks": marks, "fixable": fixable}
 
 
 def _chip_names(table: CfeTable) -> dict[str, str]:
@@ -965,22 +979,29 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         table = _table_from_form(form, old)
         action = str(form.get("action") or "")
         editing = action == "addop" or action.startswith("remove:")  # re-render only
-        errors = [] if editing else _named(validate(table), table)
+        errors = [f"{table.ingredients[i].name}: {PACKET_UNIT}" for i in _packet_units(form, len(table.ingredients))]
+        errors += [] if editing else _named(validate(table), table)
         if editing or errors:
-            doubts = _standing(_recipe_doubts(grocy.userfields("recipes", rid)), old, table)
-            return page(request, "table.html", r=r, table=table, errors=errors, **_doubt_ctx(doubts))
+            stored = _recipe_doubts(grocy.userfields("recipes", rid))
+            return page(request, "table.html", r=r, table=table, errors=errors,
+                        **_doubt_ctx(_standing(stored, old, table), stored))
         grocy.set_userfields("recipes", rid, {"cfe_table": table.model_dump_json(), "doubts": ""})  # all looked at
         follow_amounts(rid, old, table)
         return back(f"/recipes/{rid}")
 
     def follow_amounts(rid: int, old: CfeTable, new: CfeTable) -> None:
         """Rows whose amount the editor changed: their positions take it, in the stock unit through a known
-        conversion, else saved without one for the estimate to fill in (importer.fill_estimates)."""
-        positions = sorted(grocy.objects("recipes_pos", recipe_id=rid), key=lambda p: int(p["id"]))
-        if len(positions) != len(new.ingredients):
-            return  # not made from this table (edited in Grocy): left alone
-        for pos, a, b in zip(positions, old.ingredients, new.ingredients):
+        conversion, else saved without one for the estimate to fill in (importer.fill_estimates). A row finds its
+        position by the line saved with it (save_recipe's note), never by order: Make the table may order rows
+        differently. A row no position or several match is left alone."""
+        positions = grocy.objects("recipes_pos", recipe_id=rid)
+        for a, b in zip(old.ingredients, new.ingredients):
             if (a.qty, a.unit) != (b.qty, b.unit):
+                same = [p for p in positions if p.get("note") == line_text(a, 1)]
+                if len(same) != 1:
+                    log.info("recipe %s: no single position for %r; its stock amount is left", rid, line_text(a, 1))
+                    continue
+                pos = same[0]
                 amount = stock_amount_for(grocy, int(pos["product_id"]), b.qty, b.unit)
                 grocy.update("recipes_pos", int(pos["id"]), {
                     "amount": amount or 0, "note": line_text(b, 1),
@@ -1035,7 +1056,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     source_url=p.source if p.source.startswith(("http://", "https://")) else None,
                     locations=list(places(grocy)), default_location=default_place(grocy),
                     table_errors=[] if tableless else _named(validate(table), table), errors=_named(errors, table),
-                    **_doubt_ctx(doubts))
+                    **_doubt_ctx(doubts, p.doubts))
 
     def next_review(none: str) -> RedirectResponse:
         """The oldest import ready for review, else `none`."""
@@ -1085,6 +1106,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return back(f"/import/{pid}")
         action = form.get("action") or "save"
         table = _table_from_form(form, p.draft.table)
+        refused = _packet_units(form, len(table.ingredients))
         rows: list[dict] = []
         for i, ing in enumerate(table.ingredients):
             f = lambda k: str(form.get(f"{k}_{i}") or "").strip()  # noqa: E731
@@ -1096,9 +1118,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                                                        manual_details(row["manual"]) if ai.mode() == "free" else None)
                 except (ValueError, AIError) as e:
                     row["error"] = str(e)
+            if i in refused:
+                row["error"] = PACKET_UNIT
             rows.append(row)
         errors: list[str] = []
-        if action == "save":
+        if action == "save" and not refused:
             known = dict(p.estimates)
             amounts = [estimate_amount(grocy, ai, p, r["product_id"], ing.qty, ing.unit) if r["product_id"] else None
                        for ing, r in zip(table.ingredients, rows)]  # Claude's guesses, never shown or typed
@@ -1311,6 +1335,10 @@ def main_app() -> FastAPI:
     ai = AI(anthropic.Anthropic(), house, s.ai_monthly_budget, s.ai_economy_at)
     http, store = httpx.Client(timeout=20), PendingStore(s.data_dir / "pending")
     grocy, ha = Grocy(s.grocy_url, s.grocy_api_key), HA(s.ha_url, s.ha_token) if s.ha_url else None
+    try:  # an update brings new userfields (Grocy refuses unknown ones); bootstrap only adds what is missing
+        bootstrap(grocy)
+    except Exception:
+        log.warning("could not set up Grocy; starting anyway (tried again on the next start)", exc_info=True)
     start_worker(store, ai, http, grocy)  # batch reads, queued imports after the 1st, amounts saved without one
     if ha is not None:
         ha_live.start(grocy, house, ha, s)  # phone taps and the washer, over HA's WebSocket

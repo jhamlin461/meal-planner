@@ -27,7 +27,7 @@
 <summary>Packets from the box</summary>
 <p class="hint">How many packets the meal kit sends for each ingredient. Leave blank for what you supply.</p>
 <ul class="rows packet-rows">
-{% for g in table.ingredients %}{% if marks and ("i" ~ loop.index0) in marks %}<li hidden><input type="hidden" name="packets" value="{{ '%g'|format(g.packets) if g.packets else '' }}"></li>{# set beside the doubted row instead #}
+{% for g in table.ingredients %}{% if fixable and ("i" ~ loop.index0) in fixable %}<li hidden><input type="hidden" name="packets" value="{{ '%g'|format(g.packets) if g.packets else '' }}"></li>{# set beside the doubted row instead #}
 {% else %}<li><label><span class="breakable">{{ names["i" ~ loop.index0] }}</span><input name="packets" value="{{ '%g'|format(g.packets) if g.packets else '' }}" type="number" min="0" step="any" inputmode="decimal" aria-label="Packets of {{ g.name }}"></label></li>
 {% endif %}{% endfor %}</ul>
 </details>

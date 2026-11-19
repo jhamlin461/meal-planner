@@ -8,8 +8,8 @@
 <form method="post">
 <button class="default" name="action" value="save" tabindex="-1" aria-hidden="true">Save</button>{# Enter key = Save #}
 {% include "_doubts.html" %}
-{% for g in table.ingredients %}{% set doubted = marks.get("i" ~ loop.index0) %}{% if doubted %}<div class="amount-row">
-  <p class="review-text breakable">{{ g.name }}{{ doubt_marks(doubted) }}</p>
+{% for g in table.ingredients %}{% if ("i" ~ loop.index0) in fixable %}<div class="amount-row">
+  <p class="review-text breakable">{{ g.name }}{{ doubt_marks(marks.get("i" ~ loop.index0)) }}</p>
   {{ amount_fields(loop.index0, g) }}
 </div>
 {% endif %}{% endfor %}

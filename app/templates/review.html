@@ -54,7 +54,7 @@
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
   </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
-  {% if doubted %}{{ amount_fields(i, table.ingredients[i]) }}{% endif %}
+  {% if ("i" ~ i) in fixable %}{{ amount_fields(i, table.ingredients[i]) }}{% endif %}
   {% if row.error %}<p class="error">{{ row.error }}</p>{% endif %}
 </li>
 {% endfor %}</ul>

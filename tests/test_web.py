@@ -1896,7 +1896,7 @@ def test_a_doubted_row_gets_amount_fields_and_correcting_it_clears_the_doubt(env
     assert len(doubt_notes(html)) == 3  # the fields as shown: nothing changed
     html = c.post(f"/import/{pid}", data=review_form(action="update", qty_1="2", unit_1="", packets_1="")).text
     assert doubt_notes(html) == ["No time on the card.", "The card lists salt; no row has it."]
-    assert ("cfe-ingredient", "2 dragon egg") in table_cells(html) and 'name="qty_1"' not in html
+    assert ("cfe-ingredient", "2 dragon egg") in table_cells(html) and amount_inputs(html)["qty_1"] == "2"
     flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
     ai.conversion = ConversionGuess(factor=125, explanation="")
     r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, qty_1="2", unit_1="", packets_1=""),
@@ -1930,3 +1930,118 @@ def test_open_doubts_go_onto_the_recipe_until_the_table_editor_saves(env):
     pos = sorted(g.objects("recipes_pos", recipe_id=rid), key=lambda p: p["id"])
     assert pos[1]["amount"] == 2 and pos[1]["note"] == "2 dragon egg"  # the stock amount follows the new qty
     assert doubt_notes(c.get(f"/recipes/{rid}").text) is None
+
+
+# ---- review round 2: corrections carry through re-renders ------------------------------------------------------
+def amount_inputs(html):
+    """The amount fields a page shows, as the browser posts them back."""
+    return dict(re.findall(r'name="((?:qty|unit|packets)_\d+)" value="([^"]*)"', html))
+
+
+def test_a_correction_carries_through_update_and_create_then_saves(env):
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    ai.guess = ProductGuess(generic_name="x", is_new_generic=True, stock_unit="g", package_amount=None,
+                            location="Pantry", best_before_days=30, g_per_unit=1)
+    html = c.post(f"/import/{pid}", data=review_form(action="update", qty_1="2", unit_1="", packets_1="")).text
+    assert amount_inputs(html) == {"qty_1": "2", "unit_1": "", "packets_1": ""}  # still there to post again
+    assert "The card says 2 dragon eggs." not in doubt_notes(html)  # but its doubt has cleared
+    html = c.post(f"/import/{pid}", data=review_form(action="create:0", new_name_0="Rye flour",
+                                                     **amount_inputs(html))).text  # Create product re-renders too
+    assert amount_inputs(html)["qty_1"] == "2"
+    r = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, **amount_inputs(html)),
+               follow_redirects=False)
+    assert r.status_code == 303
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients[1].qty == 2
+    assert "dragon eggs" not in g.userfields("recipes", rid)["doubts"]
+
+
+def saved_with_doubts(env):
+    """The doubtful soup saved as is: all three doubts open on the recipe."""
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg))
+    [rid] = [int(x["id"]) for x in g.objects("recipes")]
+    return rid, flour, egg
+
+
+def test_an_editor_correction_survives_add_step(env):
+    g, ai, store, c, _ = env
+    rid, *_ = saved_with_doubts(env)
+    t = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    html = c.post(f"/recipes/{rid}/table", data={**chips(t), "action": "addop", "qty_1": "2", "unit_1": "",
+                                                 "packets_1": ""}).text
+    assert amount_inputs(html)["qty_1"] == "2"
+    assert doubt_notes(html) == ["No time on the card.", "The card lists salt; no row has it."]  # the rest stay
+    r = c.post(f"/recipes/{rid}/table", data={**chips(t), "action": "save", **amount_inputs(html)},
+               follow_redirects=False)
+    assert r.status_code == 303
+    assert CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"]).ingredients[1].qty == 2
+
+
+def test_editor_amounts_follow_the_matching_position_not_the_row_order(env):
+    from app.ai import Doubt, TableCheck
+    g, ai, store, c, _ = env
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    d = soup_draft()
+    rid = save_recipe(g, d.model_copy(update={"table": CfeTable(pre=[], ingredients=d.table.ingredients, ops=[])}),
+                      [IngredientMatch(0, flour, 250), IngredientMatch(1, egg, 1)], None, None, need_table=False)
+    rev = CfeTable(pre=[], ingredients=[Ingredient(qty=1, unit="", name="dragon egg"),
+                                        Ingredient(qty=2, unit="cup", name="flour")],
+                   ops=[Op(id="o1", label="mix", inputs=["i0", "i1"])])  # Make the table: rows in another order
+    ai.draft = RecipeDraft(title="Soup", servings=4, steps=["Stir"], table=rev)
+    ai.check = TableCheck(table=rev, doubts=[Doubt(ref="i0", reason="2 eggs?")])
+    assert c.post(f"/recipes/{rid}/make-table", follow_redirects=False).status_code == 303
+    t = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    c.post(f"/recipes/{rid}/table", data={**chips(t), "action": "save", "qty_0": "2", "unit_0": "", "packets_0": ""})
+    pos = {p["product_id"]: p for p in g.objects("recipes_pos", recipe_id=rid)}
+    assert (pos[flour]["amount"], pos[flour]["note"]) == (250, "2 cup flour")  # left alone
+    assert (pos[egg]["amount"], pos[egg]["note"]) == (2, "2 dragon egg")
+
+
+def test_a_packet_typed_as_the_unit_is_refused_on_the_row(env):
+    g, ai, store, c, _ = env
+    pid = doubtful(store)
+    flour, egg = product(g, "Flour"), product(g, "Dragon egg", "piece")
+    ai.conversion = ConversionGuess(factor=125, explanation="")
+    html = c.post(f"/import/{pid}", data=review_form(product_0=flour, product_1=egg, qty_1="1", unit_1="packet",
+                                                     packets_1="")).text
+    assert "Use a measure like tbsp or cup; packets go in the packets box." in html and g.objects("recipes") == []
+    rid, *_ = saved_with_doubts(env)
+    t = CfeTable.model_validate_json(g.userfields("recipes", rid)["cfe_table"])
+    html = c.post(f"/recipes/{rid}/table", data={**chips(t), "action": "save", "qty_1": "1", "unit_1": "pouches",
+                                                 "packets_1": ""}).text
+    assert "Use a measure like tbsp or cup; packets go in the packets box." in html
+    assert g.userfields("recipes", rid)["doubts"]  # not saved
+
+
+@pytest.mark.parametrize("junk", ["{}", "[1, 2]", '[{"ref": 3}]', "not json"])
+def test_doubts_that_are_not_a_list_of_doubts_are_none(env, junk):
+    g, ai, store, c, _ = env
+    rid = brownie_recipe(g)
+    g.set_userfields("recipes", rid, {"doubts": junk})
+    for url in (f"/recipes/{rid}", f"/recipes/{rid}/table"):
+        r = c.get(url)
+        assert r.status_code == 200 and doubt_notes(r.text) is None
+
+
+def test_main_app_sets_up_grocy_before_the_worker_and_starts_without_it(monkeypatch, tmp_path):
+    from app import web
+    calls = []
+    monkeypatch.setattr(web, "load_settings", lambda: Settings("http://grocy.invalid", "k", "", "", None, 6, tmp_path, 3))
+    monkeypatch.setattr(web.anthropic, "Anthropic", lambda: None)
+    monkeypatch.setattr(web, "bootstrap", lambda grocy: calls.append(("bootstrap", type(grocy).__name__)))
+    monkeypatch.setattr(web, "start_worker", lambda *a: calls.append(("worker",)))
+    web.main_app()
+    assert calls == [("bootstrap", "Grocy"), ("worker",)]  # new userfields exist before anything writes them
+
+    def down(grocy):
+        raise GrocyError("Grocy is down")
+    monkeypatch.setattr(web, "bootstrap", down)
+    calls.clear()
+    assert web.main_app() is not None and calls == [("worker",)]  # the app still starts
