@@ -41,9 +41,10 @@ def combined_need(meal_plan: dict[int, float], stock, mins: dict[int, float]) ->
     return out
 
 
-def rebuild_lists(grocy, today: date, shopping_weekday: int) -> dict[int, float]:
+def rebuild_lists(grocy, today: date, shopping_weekday: int, house=None) -> dict[int, float]:
     """Meal plan and Running low lists from one number per product (combined_need), so a product both planned and below
-    its keep-at-least is on one list only (Meal plan), for both."""
+    its keep-at-least is on one list only (Meal plan), for both. Stock is what no meal kit holds (`house`'s kits),
+    except a planned recipe's own kit."""
     start, end = shopping_window(today, shopping_weekday)
     entries = [e for e in grocy.objects("meal_plan")
                if e.get("day") and start <= date.fromisoformat(str(e["day"])[:10]) <= end]
@@ -52,7 +53,9 @@ def rebuild_lists(grocy, today: date, shopping_weekday: int) -> dict[int, float]
     for p in grocy.objects("recipes_pos"):
         positions.setdefault(int(p["recipe_id"]), []).append(p)
     needs = week_needs(entries, positions, base)
-    stock = grocy.stock_amounts()
+    from app.inventory import free_stock  # inventory -> today -> mealplan -> shopping
+    stock = free_stock(grocy, house, {int(e["recipe_id"]) for e in entries if e.get("type") == "recipe"
+                                      and not _done(e)})
     staples = {pid for pid in needs if stock.get(pid, 0) > 0 and str(grocy.userfields("products", pid).get("staple")) == "1"}
     needs = {pid: n for pid, n in needs.items() if pid not in staples}
     mins = {int(p["id"]): float(p["min_stock_amount"]) for p in grocy.objects("products")

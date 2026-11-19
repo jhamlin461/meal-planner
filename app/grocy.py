@@ -116,17 +116,26 @@ class Grocy:
 
     def add_stock(self, product_id: int, amount: float, best_before: date | None,
                   location_id: int | None) -> str | None:
+        return self.add_stock_entries(product_id, amount, best_before, location_id)[0]
+
+    def add_stock_entries(self, product_id: int, amount: float, best_before: date | None,
+                          location_id: int | None) -> tuple[str | None, list[tuple[str, float]]]:
+        """add_stock's booking id and the stock entries it made, as (stock_id, amount): the stock log rows Grocy
+        answers with carry each entry's stock_id (one row per entry it made)."""
         body: dict = {"amount": amount, "transaction_type": "purchase"}
         if best_before:
             body["best_before_date"] = best_before.isoformat()
         if location_id:
             body["location_id"] = location_id
-        return self._transaction(self._req("POST", f"/stock/products/{product_id}/add", json=body))
+        rows = self._req("POST", f"/stock/products/{product_id}/add", json=body) or []
+        return self._transaction(rows), [(str(r["stock_id"]), float(r["amount"])) for r in rows if r.get("stock_id")]
 
-    def consume(self, product_id: int, amount: float) -> str | None:
-        return self._transaction(self._req("POST", f"/stock/products/{product_id}/consume",
-                                           json={"amount": amount, "spoiled": False,
-                                                 "allow_subproduct_substitution": True}))
+    def consume(self, product_id: int, amount: float, stock_entry_id: str | None = None) -> str | None:
+        """`stock_entry_id`: take it from that stock entry only (a stock row's `stock_id`), not Grocy's own order."""
+        body: dict = {"amount": amount, "spoiled": False, "allow_subproduct_substitution": True}
+        if stock_entry_id:
+            body["stock_entry_id"] = stock_entry_id
+        return self._transaction(self._req("POST", f"/stock/products/{product_id}/consume", json=body))
 
     def undo(self, transaction_id: str) -> None:
         """Reverse one booking; a 400 GrocyError when it can't (an add whose stock was used since)."""

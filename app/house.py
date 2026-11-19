@@ -65,6 +65,8 @@ class HouseStore:
                     cache_write_1h INTEGER, batch INTEGER, cost REAL);
                 CREATE INDEX IF NOT EXISTS ai_usage_month ON ai_usage (month);
                 CREATE TABLE IF NOT EXISTS ai_batches (id TEXT PRIMARY KEY, created TEXT, metered INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS meal_kits (id INTEGER PRIMARY KEY AUTOINCREMENT, recipe_id INTEGER,
+                    product_id INTEGER, stock_id TEXT, transaction_id TEXT, amount REAL, added TEXT);
             """)
             if "sent_for" not in [c[1] for c in self._db.execute("PRAGMA table_info(reminders)")]:
                 self._db.execute("ALTER TABLE reminders ADD COLUMN sent_for TEXT")  # house.db from before sent_for
@@ -120,6 +122,26 @@ class HouseStore:
             self._q("DELETE FROM flags WHERE name=?", name)
         else:
             self._q("INSERT OR REPLACE INTO flags VALUES (?,?)", name, value)
+
+    # ---- meal kits: what each "Add ingredients to inventory" booking keeps for its recipe (app/inventory.py reads
+    # how much of it is still in stock from Grocy's stock entries) ---------------------------------------------------
+    def add_kit(self, recipe_id: int, product_id: int, transaction_id: str | None,
+                entries: list[tuple[str, float]]) -> None:
+        """One booking's stock entries, (Grocy stock_id, amount), kept for `recipe_id`."""
+        added = datetime.now().isoformat()
+        with self._lock, self._db:
+            self._db.executemany("INSERT INTO meal_kits (recipe_id, product_id, stock_id, transaction_id, amount, added) "
+                                 "VALUES (?,?,?,?,?,?)",
+                                 [(recipe_id, product_id, sid, transaction_id, a, added) for sid, a in entries])
+
+    def kit_items(self) -> list[dict]:
+        """Every kept booking entry, oldest first."""
+        cols = ("id", "recipe_id", "product_id", "stock_id", "transaction_id", "amount", "added")
+        return [dict(zip(cols, r)) for r in self._q(f"SELECT {', '.join(cols)} FROM meal_kits ORDER BY id")]
+
+    def drop_kit(self, transaction_id: str) -> None:
+        """Forget a booking (its stock was undone)."""
+        self._q("DELETE FROM meal_kits WHERE transaction_id=?", transaction_id)
 
     # ---- the AI meter (app/ai.py prices each call) -----------------------------------------------------------------
     _USAGE = ("INSERT INTO ai_usage (at, month, kind, model, input_tokens, output_tokens, cache_read, cache_write_5m, "

@@ -182,3 +182,17 @@ def test_recipe_picture_put_and_get():
     assert g.recipe_picture("missing.jpg", 400) is None
     g.delete_recipe_picture("recipe-1-ab.jpg")
     assert seen[-1][:2] == ("DELETE", f"/api/files/recipepictures/{b64}")
+
+
+def test_add_stock_entries_reads_stock_ids_and_consume_by_entry():
+    calls = []
+    def handler(req):
+        calls.append((req.url.path, json.loads(req.read() or b"{}")))
+        if req.url.path.endswith("/add"):
+            return httpx.Response(200, json=[{"transaction_id": "x1", "stock_id": "abc", "amount": "2"}])
+        return httpx.Response(200, json=[{"transaction_id": "x2"}])
+    g = Grocy("http://g/api", "k", transport=httpx.MockTransport(handler))
+    assert g.add_stock_entries(3, 2, None, 4) == ("x1", [("abc", 2.0)])
+    assert g.consume(3, 1, stock_entry_id="abc") == "x2" and calls[1][1]["stock_entry_id"] == "abc"
+    g.consume(3, 1)
+    assert "stock_entry_id" not in calls[2][1]

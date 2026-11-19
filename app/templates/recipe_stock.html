@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_packets.html" import packets %}
+{% block title %}Add {{ r.name }} to inventory{% endblock %}
+{% block heading %}<h1>Add ingredients to inventory</h1>{% endblock %}
+{% block content %}
+{# The confirm step for a meal kit: each ingredient as the recipe table words it, with its packets and its place. #}
+<form class="card kit-confirm" method="post" action="/recipes/{{ r.id }}/stock">
+  <input type="hidden" name="servings" value="{{ servings }}">
+  <p class="breakable"><b>{{ r.name }}</b>, {{ servings }} serving{{ "s" if servings != 1 }}. Each one goes to its place and is kept for this recipe as its meal kit.</p>
+  {% if lines %}
+  <ul class="rows kit-lines">
+  {% for l in lines %}<li class="row"><span class="grow breakable">{% if l.qty %}<span class="cfe-amt">{{ l.qty }}</span>{% endif %}{{ packets(l.packets) }}{% if l.qty or l.packets %} {% endif %}{{ l.words }}</span><span class="muted">{{ l.place }}</span></li>
+  {% endfor %}</ul>
+  {% else %}<p class="empty">Nothing here has an amount to add.</p>{% endif %}
+  <div class="card-actions"><a class="btn" href="/recipes/{{ r.id }}?servings={{ servings }}">Cancel</a>
+  {%- if lines %}<button class="btn btn-primary">Add to inventory</button>{% endif %}</div>
+</form>
+{% if skipped %}
+<h2>Skipped</h2>
+<ul class="rows kit-lines">
+{% for s in skipped %}<li class="row"><span class="grow breakable">{{ s.text }}</span><span class="muted">{{ s.why }}</span></li>
+{% endfor %}</ul>
+{% endif %}
+{% endblock %}

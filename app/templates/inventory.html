@@ -61,6 +61,30 @@
 {% endfor %}</ul>
 </section>
 {% endif %}
+{% if kits %}
+{# A recipe's ingredients added to inventory: kept for it, so they are listed here and not under their places. #}
+<h2>Meal kits</h2>
+<ul class="rows kits">
+{% for k in kits %}{% set n = k["items"]|length %}<li><details class="kit">
+  <summary><span class="grow breakable">{{ k.name }}: {{ n }} item{{ "s" if n != 1 }}</span></summary>
+  <ul class="rows stock">
+  {% for r in k["items"] %}<li>
+    <p class="row stock-head"><b class="grow breakable">{{ r.name }}</b><span class="qty">{{ left(r) }}</span></p>
+    <p class="row stock-when"><span class="muted">{{ r.place }}</span>{% if r.when %}<span class="{{ 'error' if r.past else 'muted' }}">{{ r.when }}</span>{% endif %}</p>
+    <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">{{ typed(r) }}<input type="hidden" name="kit" value="{{ k.rid }}">
+      <label for="kit-use-{{ k.rid }}-{{ r.pid }}-{{ r.loc }}">Used</label>
+      <span class="inline-group">
+        <input id="kit-use-{{ k.rid }}-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" max="{{ (r.amount / r.m.factor)|exact }}" inputmode="decimal" required>
+        {%- if r.m.word %}<span>{{ label(r.m) }}</span>{% endif %}
+        <button class="btn">Use</button>
+      </span>
+    </form>
+  </li>
+  {% endfor %}</ul>
+  <p class="kit-end"><a class="btn" href="/recipes/{{ k.rid }}">Open the recipe</a></p>
+</details></li>
+{% endfor %}</ul>
+{% endif %}
 {% for loc, rows in groups.items() %}
 <h2>{{ loc }}</h2>
 <ul class="rows stock">
@@ -106,8 +130,8 @@
 {%- endif %}
 </li>
 {% endfor %}</ul>
-{% else %}
+{% else %}{% if not kits %}
 <p class="empty">Nothing here yet. <a href="/scan">Scan something</a> to add it.</p>
-{% endfor %}
+{% endif %}{% endfor %}
 <p class="inventory-end"><a class="btn" href="/inventory/places">Manage places</a></p>
 {% endblock %}

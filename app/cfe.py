@@ -66,6 +66,12 @@ def packet_text(n: float) -> str:
     return "half a packet" if q == "1/2" else f"{q} packet{'s' if n > 1 and q != '1' else ''}"
 
 
+def packets_of(ing: Ingredient, scale: float = 1.0) -> str:
+    """The packet count shown beside an ingredient ("1 1/2 packets" at 1.5x a 1-packet card), blank when it isn't
+    from the box. Every place that shows packets asks this; layout's `packets` flag says whether the table does."""
+    return packet_text(ing.packets * scale) if ing.packets else ""
+
+
 def _is_ing(ref: str) -> bool:
     return ref.startswith("i") and ref[1:].isdigit()
 
@@ -133,8 +139,9 @@ def ncols(t: CfeTable) -> int:
     return 1 + max(_cols(t).values(), default=0)
 
 
-def layout(t: CfeTable, scale: float = 1.0) -> list[list[Cell]]:
-    """One list per ingredient row holding only the cells that start in that row, left to right.
+def layout(t: CfeTable, scale: float = 1.0, packets: bool = True) -> list[list[Cell]]:
+    """One list per ingredient row holding only the cells that start in that row, left to right. `packets`: whether
+    ingredient cells carry their packet count (the recipe page shows it only when cooking from a meal kit).
 
     Raises ValueError if validate() reports errors. Use ncols(t) for the table width.
     """
@@ -146,7 +153,7 @@ def layout(t: CfeTable, scale: float = 1.0) -> list[list[Cell]]:
     starts: list[list[tuple[int, Cell]]] = [[(0, Cell(
         text=ingredient_text(g, scale), rowspan=1, colspan=1, kind="ingredient", ref=f"i{n}",
         amount=amount_text(g, scale), name=g.name, note=note_text(g.note),
-        packets=packet_text(g.packets * scale) if g.packets else ""))] for n, g in enumerate(t.ingredients)]
+        packets=packets_of(g, scale) if packets else ""))] for n, g in enumerate(t.ingredients)]
     for o in t.ops:
         rows = sorted(_rows(t, o.id))
         starts[rows[0]].append((col(o.id), Cell(text=o.label, rowspan=len(rows), colspan=1, kind="op", ref=o.id,

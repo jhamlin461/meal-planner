@@ -44,6 +44,7 @@ class FakeGrocy:
         self.pictures: dict[str, bytes] = {}  # recipe pictures by file name
         self.bookings: dict[str, tuple] = {}  # transaction id -> ("add"|"consume", [(stock entry, amount)])
         self._next_id = 1
+        self._stock_ids = 0  # each stock entry's stock_id, as Grocy gives one
 
     def put_recipe_picture(self, filename, data):
         self.pictures[filename] = data
@@ -115,25 +116,39 @@ class FakeGrocy:
         self.bookings[tid] = (kind, rows)
         return tid
 
+    def _stock_id(self):
+        self._stock_ids += 1
+        return f"s{self._stock_ids}"
+
     def add_stock(self, product_id, amount, best_before: date | None, location_id):
-        e = {"product_id": product_id, "amount": amount,
+        return self.add_stock_entries(product_id, amount, best_before, location_id)[0]
+
+    def add_stock_entries(self, product_id, amount, best_before: date | None, location_id):
+        e = {"product_id": product_id, "amount": amount, "stock_id": self._stock_id(),
              "best_before_date": best_before.isoformat() if best_before else None, "location_id": location_id}
         self.stock.setdefault(product_id, []).append(e)
-        return self._book("add", [(e, amount)])
+        return self._book("add", [(e, amount)]), [(e["stock_id"], amount)]
 
-    def consume(self, product_id, amount):
-        """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends)."""
+    def consume(self, product_id, amount, stock_entry_id=None):
+        """Own stock first, then its sub products (Grocy's allow_subproduct_substitution, which app.grocy sends);
+        with `stock_entry_id`, only that entry's rows (a split keeps the stock_id), and never more than they hold."""
+        from app.grocy import GrocyError
         left, taken = amount, []
         kids = [p["id"] for p in self.objects("products") if p.get("parent_product_id") == product_id]
-        for pid in [product_id, *kids]:
+        if stock_entry_id and amount > sum(e["amount"] for e in self.stock.get(product_id, [])
+                                           if e.get("stock_id") == stock_entry_id) + 1e-9:
+            raise GrocyError("consume more than the entry holds", 400, "Amount to be consumed cannot be > than the "
+                                                                       "amount of this stock entry")
+        for pid in [product_id] if stock_entry_id else [product_id, *kids]:
             entries = self.stock.get(pid, [])
-            while left > 0 and entries:
-                take = min(left, entries[0]["amount"])
-                entries[0]["amount"] -= take
+            for e in [e for e in entries if not stock_entry_id or e.get("stock_id") == stock_entry_id]:
+                if left <= 1e-12:
+                    break
+                take = min(left, e["amount"])
+                e["amount"] -= take
                 left -= take
-                taken.append((entries[0], take))
-                if entries[0]["amount"] <= 0:
-                    entries.pop(0)
+                taken.append((e, take))
+            entries[:] = [e for e in entries if e["amount"] > 1e-12]
         return self._book("consume", taken)
 
     def undo(self, transaction_id):
@@ -169,7 +184,7 @@ class FakeGrocy:
                 amount -= take
 
     def set_amount(self, product_id, new_amount):
-        self.stock[product_id] = ([{"product_id": product_id, "amount": new_amount,
+        self.stock[product_id] = ([{"product_id": product_id, "amount": new_amount, "stock_id": self._stock_id(),
                                     "best_before_date": None, "location_id": None}]
                                   if new_amount > 0 else [])
 

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError, AIPaused, budget_mode, month
 from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
-from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, line_text, ncols, packet_text, validate
+from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, line_text, ncols, packets_of, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
@@ -42,8 +42,8 @@ from app.importer import (BATCH_MIN, FILL_RETRY, IngredientMatch, PendingStore, 
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.qty import is_packaging, parse_qty
 from app.nutrition import recipe_macros
-from app.inventory import (add_place, clear_stock, default_place, move_family, places, remove_place, remove_product,
-                           rename_place, rows, why_not_remove)
+from app.inventory import (add_place, clear_stock, default_place, kits, move_family, places, remove_place,
+                           remove_product, rename_place, reserved, rows, stock_lines, use, why_not_remove)
 from app.setup_grocy import SECTIONS, bootstrap, ids, supplies_group
 from app.shopping import rebuild_lists, walmart_items
 from app.suggest import suggest, user_recipes
@@ -250,12 +250,13 @@ def _resume_day() -> str:
     return f"{first:%B} 1"
 
 
-def _cfe(table: CfeTable | None, scale: float = 1.0) -> dict | None:
-    """Context for _cfe_table.html, or None when the table is missing or invalid (caller shows the fallback)."""
+def _cfe(table: CfeTable | None, scale: float = 1.0, packets: bool = True) -> dict | None:
+    """Context for _cfe_table.html, or None when the table is missing or invalid (caller shows the fallback).
+    `packets`: whether ingredients show their packet count (cfe.layout)."""
     if table is None or validate(table):
         return None
     try:
-        return {"pre": table.pre, "grid": layout(table, scale), "ncols": ncols(table)}
+        return {"pre": table.pre, "grid": layout(table, scale, packets), "ncols": ncols(table)}
     except ValueError:
         return None
 
@@ -593,7 +594,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return m
 
     def rebuild() -> None:
-        rebuild_lists(grocy, date.today(), settings.shopping_weekday)
+        rebuild_lists(grocy, date.today(), settings.shopping_weekday, house)
 
     def set_min(pid: int, amount: float) -> None:
         gid = generic_of(product_or_404(pid))["id"]
@@ -684,27 +685,30 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     @app.get("/inventory")
     def inventory(request: Request, background: BackgroundTasks, place: int | None = None, msg: str = "",
                   err: str = ""):
-        inv, have = rows(grocy, settings, date.today()), places(grocy)
+        inv, have = rows(grocy, settings, date.today(), house), places(grocy)
         bare = sorted({r[k] for rs in inv.groups.values() for r in rs
-                       for k, m in (("pid", "m"), ("gid", "km")) if r[m].word == r["unit"]})
+                       for k, m in (("pid", "m"), ("gid", "km")) if r[m].word == r["unit"]}
+                      | {i["pid"] for k in inv.kits for i in k["items"] if i["m"].word == i["unit"]})
         if bare and ai.mode() != "free":
             background.add_task(fill_measures, bare)
         chips = {n: have[n] for n in inv.groups if n in have}  # places holding something, in places() order
         place = place if place in chips.values() else None  # an empty or unknown place shows everything
         groups = {n: r for n, r in inv.groups.items() if place is None or chips.get(n) == place}
         return page(request, "inventory.html", soon=inv.soon if place is None else [], groups=groups,
-                    totals=inv.totals, chips=chips, place=place, locations=have, msg=msg, err=err)
+                    kits=inv.kits if place is None else [], totals=inv.totals, chips=chips, place=place,
+                    locations=have, msg=msg, err=err)
 
     @app.post("/pantry/{pid}/consume")
     def pantry_consume(pid: int, amount: float = Form(gt=0), place: int | None = Form(None),
-                       word: str | None = Form(None, alias="measure")):
+                       word: str | None = Form(None, alias="measure"), kit: int | None = Form(None)):
+        """Used some: a place row's from the stock no meal kit holds, a kit item's (`kit`: its recipe) from the kit
+        first; never more than there is ("all of it" may round past it)."""
         try:
             m = typed(product_or_404(pid), word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
-        use = min(msr.to_stock(amount, m), grocy.stock_amounts().get(pid, 0.0))  # "all of it" may round past stock
-        if use > 0:
-            grocy.consume(pid, use)
+        with plan_lock:
+            use(grocy, house, pid, msr.to_stock(amount, m), kit)
         return inventory_back(place)
 
     @app.post("/pantry/{pid}/amount")
@@ -714,8 +718,9 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             m = typed(product_or_404(pid), word)
         except ValueError as e:
             return inventory_back(place, err=str(e))
-        own = sum(float(e["amount"]) for e in grocy.stock_entries() if int(e["product_id"]) == pid)  # as prefilled
-        grocy.set_amount(pid, msr.from_field(amount, m, own))
+        held = reserved(grocy, house).get(pid, 0.0)  # the total shown and typed leaves meal kits out
+        own = sum(float(e["amount"]) for e in grocy.stock_entries() if int(e["product_id"]) == pid) - held
+        grocy.set_amount(pid, msr.from_field(amount, m, own) + held)
         return inventory_back(place)
 
     @app.post("/inventory/{pid}/measure")
@@ -816,6 +821,11 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             return {"status": "manual", "code": code, "name": ""} if ai.mode() == "free" else {"status": "unknown"}
         return r
 
+    def best_before(p: dict) -> date | None:
+        """The product's default best-before from today; None (Grocy's own) for never or none."""
+        days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
+        return date.today() + timedelta(days=days) if days > 0 else None
+
     def place_of(p: dict) -> str:
         """The product's own place by name (the fallback place if its location is gone)."""
         loc = _int(p.get("location_id"))
@@ -885,8 +895,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                 gid = _int(p.get("parent_product_id"))  # and for its generic, which Running low and Bought use
                 if gid and not _num(grocy.userfields("products", gid).get("package_amount")):
                     grocy.set_userfields("products", gid, size)
-            days = int(float(p.get("default_best_before_days") or 0))  # -1 = never expires
-            tid = grocy.add_stock(pid, want, date.today() + timedelta(days=days) if days > 0 else None, have[place])
+            tid = grocy.add_stock(pid, want, best_before(p), have[place])
             done = want
         else:
             done = min(want, grocy.stock_amounts().get(pid, 0.0))  # Grocy refuses more than is in stock
@@ -961,12 +970,15 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         return page(request, "recipes.html", recipes=rs, waiting=waiting)
 
     @app.get("/recipes/{rid}")
-    def recipe(request: Request, rid: int, servings: int | None = None, made: str = ""):
-        note = "Made from the saved recipe text — the original page couldn't be reached." if made == "text" else None
-        return recipe_page(request, rid, servings, note=note)
+    def recipe(request: Request, rid: int, servings: int | None = None, made: str = "",
+               kit: int | None = Query(None, ge=0, le=1), msg: str = "", undo: list[str] = Query([])):
+        """`kit`: the table's packets switch (1 Meal kit, 0 Our pantry; else whichever inventory matches). `msg` and
+        `undo` (transaction ids): after adding the ingredients to inventory, with an Undo for that add."""
+        note = "Made from the saved recipe text — the original page couldn't be reached." if made == "text" else msg
+        return recipe_page(request, rid, servings, note=note or None, kit=kit, undo=undo if msg else [])
 
     def recipe_page(request: Request, rid: int, servings: int | None = None, error: str | None = None,
-                    status_code: int = 200, note: str | None = None):
+                    status_code: int = 200, note: str | None = None, kit: int | None = None, undo: list[str] = ()):
         r = recipe_or_404(rid)
         base = float(r.get("base_servings") or 2)
         servings = max(1, servings or round(base))
@@ -976,14 +988,19 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         products = {int(p["id"]): p for p in grocy.objects("products")}
         info = {pid: {**grocy.userfields("products", pid), "name": products[pid]["name"]}
                 for pid in {int(p["product_id"]) for p in positions} if pid in products}
-        cfe = _cfe(load_table(uf), scale)
+        table = load_table(uf)
+        has_kit = rid in kits(grocy, house)
+        packets = has_kit if kit is None else bool(kit)  # packets only when cooking from the box
+        cfe = _cfe(table, scale, packets)
         table_hash = hashlib.sha1(uf.get("cfe_table", "").encode()).hexdigest()[:8]  # an edited table starts clean
         fallback = [] if cfe else [ingredient_text(i, scale) for i in position_ingredients(positions, products)]
         return page(request, "recipe.html", status_code, r=r, servings=servings, cfe=cfe, fallback=fallback,
                     error=error, cross=f"cross:{rid}:{table_hash}",
                     macros=recipe_macros(positions, info, base) if positions else None,
                     source_url=uf.get("source_url"), sections=SECTIONS, today=date.today().isoformat(),
-                    ai_free=ai_mode() == "free", note=note, **_doubt_ctx(_recipe_doubts(uf)))
+                    ai_free=ai_mode() == "free", note=note, undo=undo, packets=packets, kit=kit,
+                    boxed=bool(cfe) and any(i.packets for i in table.ingredients),
+                    **_doubt_ctx(_recipe_doubts(uf)))
 
     @app.post("/recipes/{rid}/make-table")
     def make_table_post(request: Request, rid: int):  # plain def: Claude takes a while, FastAPI threadpools it
@@ -1044,8 +1061,71 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     servings: str = Form("")):
         recipe_or_404(rid)
         with plan_lock:
-            plan_meal(grocy, day, section, rid, _servings(servings), settings)
+            plan_meal(grocy, day, section, rid, _servings(servings), settings, house=house)
         return back("/plan")
+
+    # ---- a recipe's ingredients added to inventory, as its meal kit ----------------------------------------------
+    def kit_scale(r: dict, servings: int | None) -> tuple[int, float]:
+        base = float(r.get("base_servings") or 2)  # as the recipe page reads it
+        servings = max(1, servings or round(base))
+        return servings, servings / base
+
+    @app.get("/recipes/{rid}/stock")
+    def recipe_stock(request: Request, rid: int, servings: int | None = None):
+        """The confirm step: what will be added, in the table's words, and where; nothing is booked here."""
+        r = recipe_or_404(rid)
+        servings, scale = kit_scale(r, servings)
+        lines, skipped = stock_lines(grocy, rid, scale)
+        return page(request, "recipe_stock.html", r=r, servings=servings, lines=lines, skipped=skipped)
+
+    @app.post("/recipes/{rid}/stock")
+    def recipe_stock_post(rid: int, servings: int = Form(ge=1)):
+        """Book each ingredient on its product, in its place with its best-before, kept as the recipe's meal kit
+        (added again: it joins the same kit). Each booking is kept as soon as it is made, so a failure part way
+        leaves every booked one in the kit and its Undo."""
+        r = recipe_or_404(rid)
+        servings, scale = kit_scale(r, servings)
+        products = {int(p["id"]): p for p in grocy.objects("products")}
+        tids = []
+        with plan_lock:
+            for line in stock_lines(grocy, rid, scale)[0]:
+                tid, entries = grocy.add_stock_entries(line["pid"], line["amount"], best_before(products[line["pid"]]),
+                                                       line["loc"])
+                house.add_kit(rid, line["pid"], tid, entries)
+                tids += [tid] if tid else []
+            rebuild()
+        n = len(tids)
+        msg = f"Added {n} ingredient{'s' if n != 1 else ''}." if n else "Nothing to add."
+        return back(f"/recipes/{rid}?" + urlencode([("servings", servings), ("msg", msg)] + [("undo", t) for t in tids]))
+
+    @app.post("/recipes/{rid}/stock/undo")
+    def recipe_stock_undo(rid: int, tid: list[str] = Form([])):
+        """Take an add back out, kit and all; only that recipe's kit bookings, so no other booking can be undone here.
+        One already used (in part) stays, in the kit, and is named."""
+        recipe_or_404(rid)
+        names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
+        mine = {k["transaction_id"]: int(k["product_id"]) for k in house.kit_items() if int(k["recipe_id"]) == rid}
+        done, kept = 0, []
+        with plan_lock:
+            for t in dict.fromkeys(tid):
+                if t not in mine:
+                    continue
+                try:
+                    grocy.undo(t)
+                except GrocyError as e:
+                    if e.status != 400:
+                        raise
+                    kept.append(names.get(mine[t], "an ingredient"))
+                    continue
+                house.drop_kit(t)
+                done += 1
+            rebuild()
+        if not kept:
+            msg = f"Took {done} ingredient{'s' if done != 1 else ''} back out." if done else "Nothing to undo."
+        else:
+            which = kept[0] if len(kept) == 1 else f"{', '.join(kept[:-1])} and {kept[-1]}"
+            msg = (f"Took {done} back out. " if done else "") + f"Couldn't undo {which}: some was already used."
+        return back(f"/recipes/{rid}?" + urlencode({"msg": msg}))
 
     def table_for(rid: int) -> CfeTable:
         """The saved table, or a starting point built from the recipe's positions (no ops yet)."""
@@ -1141,7 +1221,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                     doubts: list[dict] = ()):
         gens = sorted(_generics(grocy), key=lambda g: g["name"].lower())
         for ing, row in zip(table.ingredients, rows):
-            row["text"], row["packets"] = line_text(ing, 1), packet_text(ing.packets) if ing.packets else ""
+            row["text"], row["packets"] = line_text(ing, 1), packets_of(ing)
         tableless = p.tableless and not table.ops  # read without Claude: the table can be made later
         return page(request, "review.html", p=p, rows=rows, generics=gens, table=table, cfe=_cfe(table),
                     photo=store.photo_path(p.id) is not None, tableless=tableless, ai_free=ai.mode() == "free",
@@ -1291,7 +1371,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
                   servings: str = Form("")):
         recipe_or_404(recipe_id)
         with plan_lock:
-            plan_meal(grocy, day, section, recipe_id, _servings(servings), settings)
+            plan_meal(grocy, day, section, recipe_id, _servings(servings), settings, house=house)
         return back(f"/plan?week={_monday(day).isoformat()}")
 
     def entry_week(entry_id: int) -> str:
@@ -1304,14 +1384,14 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def plan_remove(entry_id: int):
         week = entry_week(entry_id)
         with plan_lock:
-            unplan_meal(grocy, entry_id, settings)
+            unplan_meal(grocy, entry_id, settings, house=house)
         return back(f"/plan?week={week}")
 
     @app.post("/plan/{entry_id}/cook")
     def plan_cook(entry_id: int):
         week = entry_week(entry_id)
         with plan_lock:
-            short = cook(grocy, entry_id)
+            short = cook(grocy, entry_id, house)
         return back("/plan?" + urlencode([("week", week)] + [("short", n) for n in short]))
 
     @app.post("/plan/suggest")

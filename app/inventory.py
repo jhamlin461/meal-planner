@@ -1,9 +1,13 @@
 """Inventory: food and household supplies by place. Places are Grocy's own locations; nothing here caches them."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
+from pydantic import ValidationError
+
 from app import measure
+from app.cfe import CfeTable, amount_text, line_text, note_text, packets_of
 from app.grocy import GrocyError
+from app.qty import is_packaging
 from app.setup_grocy import LOCATIONS, ids, supplies_group
 from app.today import _day
 
@@ -70,7 +74,8 @@ def move_family(grocy, pid: int, from_location: int, to_location: int) -> None:
 class Inventory:
     soon: list[dict]  # food past or near its date, Today's words
     groups: dict[str, list[dict]]  # place name -> rows, in places() order, empty places left out
-    totals: dict[int, float]  # product id -> its stock across places
+    totals: dict[int, float]  # product id -> its stock across places, less what meal kits hold
+    kits: list[dict] = field(default_factory=list)  # one per recipe: {rid, name, items}, items as rows show them
 
 
 def _when(bb, verb: str, today: date) -> tuple[str, bool]:
@@ -91,10 +96,11 @@ def _int(v) -> int | None:
         return None
 
 
-def rows(grocy, settings, today: date) -> Inventory:
+def rows(grocy, settings, today: date, house=None) -> Inventory:
     """Food: one row per product per place with stock. Supplies: one row per generic per place holding it or its
     brands (that place's share; Running low counts the total), or one row at its default place when it has none.
-    Each row's `m` is its product's household measure (its stock unit until it has one)."""
+    Each row's `m` is its product's household measure (its stock unit until it has one). What meal kits hold is
+    listed under its recipe in `kits` and left out of the places (Use soon, Grocy's, still has it)."""
     products = {int(p["id"]): p for p in grocy.objects("products")}
     i = ids(grocy)
     units, locs, group = {v: k for k, v in i.unit.items()}, {v: k for k, v in i.location.items()}, supplies_group(grocy)
@@ -116,8 +122,19 @@ def rows(grocy, settings, today: date) -> Inventory:
     found: dict[tuple[int, int], dict] = {}
     totals: dict[int, float] = {}
     family: dict[int, float] = {}  # a supply generic -> its own and its brands' stock, all places
-    for e in grocy.stock_entries():
+    entries = grocy.stock_entries()
+    holds = _holds(house, entries)
+    held: dict[str, float] = {}  # stock_id -> what kits hold of it, taken off its entries below
+    for k, have in holds:
+        held[k["stock_id"]] = held.get(k["stock_id"], 0.0) + have
+    for e in entries:
         pid, loc, amount = int(e["product_id"]), _int(e.get("location_id")) or 0, float(e["amount"])
+        kept = min(amount, held.get(str(e.get("stock_id")), 0.0))
+        if kept > 0:
+            held[str(e["stock_id"])] -= kept
+            amount -= kept
+            if amount <= 1e-9:
+                continue  # all of it is a kit's
         totals[pid] = totals.get(pid, 0.0) + amount
         if is_food(pid):
             r = found.setdefault((pid, loc), row(pid, loc, "food"))
@@ -148,7 +165,173 @@ def rows(grocy, settings, today: date) -> Inventory:
     groups: dict[str, list[dict]] = {}
     for r in sorted(out, key=lambda r: (order.get(locs.get(r["loc"]), len(order)), r["bb"], r["name"].lower())):
         groups.setdefault(locs.get(r["loc"], "Other"), []).append(r)
-    return Inventory(soon, groups, totals)
+    return Inventory(soon, groups, totals, _kit_view(grocy, holds, entries, products, units, locs, order, today))
+
+
+def _kit_view(grocy, holds, entries, products, units, locs, order, today) -> list[dict]:
+    """Inventory's Meal kits: per recipe (by name), its items per product and place, with their best-before."""
+    where: dict[str, tuple[int, str]] = {}  # stock_id -> (place, soonest best-before)
+    for e in entries:
+        sid, bb = str(e.get("stock_id")), str(e.get("best_before_date") or NEVER)[:10]
+        where[sid] = (_int(e.get("location_id")) or 0, min(bb, where.get(sid, (0, NEVER))[1]))
+    names = {int(r["id"]): r["name"] for r in grocy.objects("recipes")}
+    kits: dict[int, dict[tuple[int, int], dict]] = {}
+    for k, have in holds:
+        rid, pid = int(k["recipe_id"]), int(k["product_id"])
+        loc, bb = where[k["stock_id"]]
+        p = products.get(pid, {"id": pid})
+        unit = units.get(_int(p.get("qu_id_stock")), "")
+        it = kits.setdefault(rid, {}).setdefault((pid, loc), {
+            "pid": pid, "rid": rid, "loc": loc, "name": p.get("name", f"product {pid}"), "amount": 0.0, "bb": NEVER,
+            "place": locs.get(loc, "Other"), "unit": unit, "m": measure.of(grocy, None, p, unit)})
+        it["amount"] += have
+        it["bb"] = min(it["bb"], bb)
+    out = []
+    for rid, items in kits.items():
+        for it in items.values():
+            it["when"], it["past"] = _when(it["bb"], "Best before", today) if it["bb"] != NEVER else ("", False)
+        out.append({"rid": rid, "name": names.get(rid, "A removed recipe"),
+                    "items": sorted(items.values(), key=lambda i: (order.get(i["place"], len(order)),
+                                                                   i["name"].lower()))})
+    return sorted(out, key=lambda k: k["name"].lower())
+
+
+# ---- meal kits: a recipe's ingredients added to inventory, kept for that recipe ----------------------------------
+def _holds(house, entries: list[dict]) -> list[tuple[dict, float]]:
+    """Each kept kit entry (house.kit_items, oldest first) with how much of it is still in stock: its booked amount,
+    less what was used since (Grocy's entry shrinks or goes; a split or moved one keeps its stock_id). Used up: left
+    out, so a kit whose stock is all gone is gone."""
+    if house is None:
+        return []
+    left: dict[str, float] = {}
+    for e in entries:
+        if e.get("stock_id"):
+            left[str(e["stock_id"])] = left.get(str(e["stock_id"]), 0.0) + float(e["amount"])
+    out = []
+    for k in house.kit_items():
+        have = min(float(k["amount"]), left.get(k["stock_id"], 0.0))
+        if have > 1e-9:
+            left[k["stock_id"]] -= have
+            out.append((k, have))
+    return out
+
+
+def kits(grocy, house) -> dict[int, dict[int, float]]:
+    """recipe id -> product id -> what its meal kit still holds."""
+    out: dict[int, dict[int, float]] = {}
+    for k, have in _holds(house, grocy.stock_entries()):
+        items = out.setdefault(int(k["recipe_id"]), {})
+        items[int(k["product_id"])] = items.get(int(k["product_id"]), 0.0) + have
+    return out
+
+
+def reserved(grocy, house) -> dict[int, float]:
+    """product id -> what all meal kits hold of it."""
+    out: dict[int, float] = {}
+    for items in kits(grocy, house).values():
+        for pid, a in items.items():
+            out[pid] = out.get(pid, 0.0) + a
+    return out
+
+
+def free_stock(grocy, house, recipes=()) -> dict[int, float]:
+    """Stock no meal kit holds (grocy.stock_amounts less the kits', never below 0); the kits of `recipes` count as
+    stock (a planned recipe cooks from its own box). ponytail: a kit is booked on the recipe's product (a generic);
+    one on a brand would still count in its generic's rolled-up stock."""
+    held: dict[int, float] = {}
+    for rid, items in kits(grocy, house).items():
+        if rid not in recipes:
+            for pid, a in items.items():
+                held[pid] = held.get(pid, 0.0) + a
+    return {pid: max(0.0, a - held.get(pid, 0.0)) for pid, a in grocy.stock_amounts().items()}
+
+
+def use(grocy, house, pid: int, amount: float, recipe_id: int | None = None) -> float:
+    """Take up to `amount` of a product out of stock; returns what was taken. `recipe_id`'s meal kit first, then
+    stock no kit holds (its own before its brands', soonest date first), never another recipe's kit. A product no
+    kit holds is left to Grocy's own order, as before kits."""
+    entries = grocy.stock_entries()
+    holds = [(k, have) for k, have in _holds(house, entries) if int(k["product_id"]) == pid]
+    if not holds:
+        take = min(amount, grocy.stock_amounts().get(pid, 0.0))
+        if take > 1e-9:
+            grocy.consume(pid, take)
+        return max(take, 0.0)
+    family = {pid} | {int(p["id"]) for p in grocy.objects("products") if _int(p.get("parent_product_id")) == pid}
+    total: dict[str, float] = {}
+    owner: dict[str, tuple[bool, str, int]] = {}  # stock_id -> (a brand's?, soonest best-before, product)
+    for e in entries:
+        if int(e["product_id"]) in family and e.get("stock_id"):
+            sid, bb = str(e["stock_id"]), str(e.get("best_before_date") or NEVER)[:10]
+            total[sid] = total.get(sid, 0.0) + float(e["amount"])
+            owner[sid] = (int(e["product_id"]) != pid, min(bb, owner.get(sid, (0, NEVER, 0))[1]), int(e["product_id"]))
+    held: dict[str, float] = {}
+    for k, have in holds:
+        held[k["stock_id"]] = held.get(k["stock_id"], 0.0) + have
+    left = amount
+
+    def take(sid: str, avail: float) -> float:
+        nonlocal left
+        t = min(left, avail)
+        if t <= 1e-9:
+            return 0.0
+        grocy.consume(owner[sid][2], t, stock_entry_id=sid)
+        left -= t
+        total[sid] -= t
+        return t
+
+    for k, have in holds:
+        if recipe_id is not None and int(k["recipe_id"]) == recipe_id:
+            held[k["stock_id"]] -= take(k["stock_id"], have)
+    for sid in sorted(total, key=lambda s: (owner[s], s)):
+        take(sid, total[sid] - held.get(sid, 0.0))
+    return amount - left
+
+
+def _counted_in_packets(p: dict, stock: str, m: measure.Measure) -> bool:
+    """A product counted in pieces of packets ("sauce packet"): a packet is one piece of it."""
+    return stock == "piece" and (is_packaging(m.word) or any(is_packaging(w) for w in p.get("name", "").lower().split()))
+
+
+def stock_lines(grocy, rid: int, scale: float) -> tuple[list[dict], list[dict]]:
+    """What adding recipe `rid`'s ingredients at `scale` (servings / base servings) books, and what cooking it takes:
+    lines {pid, amount (stock units), qty, words, packets, place, loc} in the recipe table's words ("2 tbsp",
+    "umami ginger sauce", "1 packet"), and the skipped {text, why}: no product, or no stock amount. An amount is the position's
+    stored one, scaled (a packet's is its measured amount); a product counted in packets takes 1 piece per packet."""
+    positions = sorted(grocy.objects("recipes_pos", recipe_id=rid), key=lambda p: int(p["id"]))
+    products = {int(p["id"]): p for p in grocy.objects("products")}
+    units = {v: k for k, v in ids(grocy).unit.items()}
+    have = places(grocy)
+    locs = {v: k for k, v in have.items()}
+    raw = grocy.userfields("recipes", rid).get("cfe_table")
+    try:
+        ings = list(CfeTable.model_validate_json(raw).ingredients) if raw else []
+    except ValidationError:
+        ings = []
+    lines, skipped = [], []
+    for pos in positions:
+        ing = next((g for g in ings if line_text(g, 1) == pos.get("note")), None)  # as save_recipe noted it
+        if ing:
+            ings.remove(ing)
+        p = products.get(_int(pos.get("product_id")))
+        said = line_text(ing, scale) if ing else pos.get("note") or (p or {}).get("name") or "An ingredient"
+        if p is None:
+            skipped.append({"text": said, "why": "No product to add it to"})
+            continue
+        stock = units.get(_int(p.get("qu_id_stock")), "")
+        m = measure.of(grocy, None, p, stock)
+        amount = float(pos.get("amount") or 0) * scale
+        if ing and ing.packets and _counted_in_packets(p, stock, m):
+            amount = ing.packets * scale
+        if amount <= 1e-9:
+            skipped.append({"text": said, "why": "No amount to add"})
+            continue
+        place = locs.get(_int(p.get("location_id"))) or default_place(grocy)
+        lines.append({"pid": int(p["id"]), "amount": amount, "place": place, "loc": have.get(place),
+                      "qty": amount_text(ing, scale) if ing else measure.show(amount, m),
+                      "words": ing.name + note_text(ing.note) if ing else p["name"],
+                      "packets": packets_of(ing, scale) if ing else ""})
+    return lines, skipped
 
 
 def _brands(grocy, pid: int) -> list[dict]:

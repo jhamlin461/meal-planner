@@ -28,7 +28,7 @@ def _is_leftover_dinner(day: date, section: str) -> bool:
 
 
 def plan_meal(grocy, day: date, section: str, recipe_id: int, servings: int | None, settings,
-              today: date | None = None) -> int:
+              today: date | None = None, house=None) -> int:
     sec = ids(grocy).section
     entry_id = grocy.create("meal_plan", {
         "day": day.isoformat(), "type": "recipe", "recipe_id": recipe_id,
@@ -39,11 +39,11 @@ def plan_meal(grocy, day: date, section: str, recipe_id: int, servings: int | No
         grocy.create("meal_plan", {
             "day": (day + timedelta(days=1)).isoformat(), "type": "note",
             "section_id": sec["Lunch"], "note": LEFTOVER_PREFIX + name, "done": 0})
-    rebuild_lists(grocy, today or date.today(), settings.shopping_weekday)
+    rebuild_lists(grocy, today or date.today(), settings.shopping_weekday, house)
     return entry_id
 
 
-def unplan_meal(grocy, entry_id: int, settings, today: date | None = None) -> None:
+def unplan_meal(grocy, entry_id: int, settings, today: date | None = None, house=None) -> None:
     entry = grocy.get_object("meal_plan", entry_id)
     if entry is None:
         return
@@ -59,35 +59,31 @@ def unplan_meal(grocy, entry_id: int, settings, today: date | None = None) -> No
             if str(r["day"])[:10] == nxt and int(r["section_id"]) == sec["Lunch"] and r["note"] == note:
                 grocy.delete("meal_plan", int(r["id"]))
                 break  # only one leftover note per dinner
-    rebuild_lists(grocy, today or date.today(), settings.shopping_weekday)
+    rebuild_lists(grocy, today or date.today(), settings.shopping_weekday, house)
 
 
-def cook(grocy, entry_id: int) -> list[str]:
+def cook(grocy, entry_id: int, house=None) -> list[str]:
+    """Take the recipe's ingredients out of stock (its meal kit first, see inventory.use); the names of those short."""
+    from app.inventory import stock_lines, use  # inventory -> today -> mealplan
     entry = grocy.get_object("meal_plan", entry_id)
     if entry is None or entry.get("type") != "recipe" or int(float(entry.get("done") or 0)):
         return []
     rid = int(entry["recipe_id"])
     recipe = grocy.get_object("recipes", rid) or {}
     factor = float(entry["recipe_servings"]) / (float(recipe.get("base_servings") or 0) or 1.0)
-    stock = grocy.stock_amounts()
     names = {int(p["id"]): p["name"] for p in grocy.objects("products")}
     needs: dict[int, float] = {}
-    for pos in grocy.objects("recipes_pos", recipe_id=rid):  # a product can repeat across positions
-        pid = int(pos["product_id"])
-        needs[pid] = needs.get(pid, 0.0) + float(pos["amount"]) * factor
+    for line in stock_lines(grocy, rid, factor)[0]:  # what adding it to inventory books; a product can repeat
+        needs[line["pid"]] = needs.get(line["pid"], 0.0) + line["amount"]
     grocy.update("meal_plan", entry_id, {"done": 1})  # first: a retry after a failed consume must not deduct twice
     short = []
     for pid, need in needs.items():
-        have = stock.get(pid, 0.0)
-        use = min(need, have)
         try:
-            if use > 0:
-                grocy.consume(pid, use)
-            failed = False
+            took, failed = use(grocy, house, pid, need, rid), False
         except (GrocyError, httpx.HTTPError):
             log.warning("cook %s: consume of product %s failed", entry_id, pid, exc_info=True)
-            failed = True
-        if failed or need - have > 1e-6:  # either way the pantry needs a look
+            took, failed = 0.0, True
+        if failed or need - took > 1e-6:  # either way the pantry needs a look
             short.append(names.get(pid, str(pid)))
     return short
 
