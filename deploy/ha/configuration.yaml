@@ -1,9 +1,0 @@
-# Merge into Home Assistant's configuration.yaml. Replace <lxc-ip> with the LXC's LAN address.
-sensor:
-  - platform: rest
-    name: meal_planner_expiring
-    resource: http://<lxc-ip>:8000/api/expiring
-    scan_interval: 1800
-    value_template: "{{ value_json.count }}"
-    json_attributes:
-      - message

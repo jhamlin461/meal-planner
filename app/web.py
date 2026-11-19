@@ -1,6 +1,5 @@
 """Web UI: pantry, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
 import hashlib
-import hmac
 import itertools
 import logging
 import math
@@ -15,7 +14,7 @@ from typing import Literal
 import anthropic
 import httpx
 import jinja2
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -331,31 +330,6 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
     def today_snooze(kind: Literal["chore", "task", "battery"], id: int):
         rm.snooze(house, ha, f"{kind}:{id}", datetime.now())
         return back("/")
-
-    # ---- Home Assistant hooks (header X-House-Secret; no HOOK_SECRET set = hooks off) ----------------------------
-    def hook_secret(x_house_secret: str = Header("")):
-        if not settings.hook_secret or not hmac.compare_digest(x_house_secret.encode(), settings.hook_secret.encode()):
-            raise HTTPException(403, "Wrong or missing X-House-Secret")
-
-    class ActionIn(BaseModel):
-        action: str
-
-    @app.post("/api/hook/action", dependencies=[Depends(hook_secret)])
-    def hook_action(body: ActionIn):
-        status = rm.action(grocy, house, ha, body.action, datetime.now())
-        if status is None:
-            return JSONResponse({"status": "error", "message": "not a house action"}, status_code=400)
-        if status == "unknown-person":
-            return JSONResponse({"status": "error", "message": "unknown person"}, status_code=404)
-        return {"status": status}
-
-    @app.post("/api/events/washer-finished", dependencies=[Depends(hook_secret)])
-    def washer_finished():
-        return {"status": rm.washer_finished(grocy, house, datetime.now())}
-
-    @app.post("/api/events/washer-started", dependencies=[Depends(hook_secret)])
-    def washer_started():
-        return {"status": rm.washer_started(grocy, house, ha)}
 
     kinds = {  # kind -> (grocy entity, form template, what to call it)
         "chores": ("chores", "chore", "chore_form.html", "chore"),

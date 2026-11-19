@@ -67,11 +67,6 @@ while :; do
   ha_ok "$(get HA_URL)" "$(get HA_TOKEN)" && break
   echo "  Home Assistant rejected that URL or token, try again."
 done
-if [[ -z $(get HOOK_SECRET) ]]; then
-  secret=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-  put HOOK_SECRET "$secret"
-  echo "Add this line to Home Assistant's secrets.yaml:  house_secret: $secret"
-fi
 
 docker compose up -d --build
 
