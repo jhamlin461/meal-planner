@@ -92,12 +92,12 @@ form.inline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; mar
 .rail { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--rail);
   padding-bottom: env(safe-area-inset-bottom); }
 .rail ul { list-style: none; margin: 0; padding: 0; }
-.rail > ul { display: grid; grid-template-columns: repeat(4, 1fr); }
+.rail > ul { display: grid; grid-template-columns: repeat(5, 1fr); }
 .rail > ul > li > a { min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 2px; color: var(--muted); text-decoration: none; font-size: .75rem; }
 .rail a[aria-current] { color: var(--action); }
 .rail-sub { display: none; }
-/* Scan is an action, not a place: only the inventory pages (Pantry, Supplies) show it beside the page title,
+/* Scan is an action, not a place: only Inventory shows it beside the page title,
    wrapping below a title too long to share the line. */
 .title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
   margin: 0 0 16px; }
@@ -265,7 +265,7 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 /* Four product details read as two pairs, never three and one. */
 @media (min-width: 360px) { .fields.pairs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-/* Pantry: the use-soon list is the one block on a surface; stock is plain rows, actions tucked under each. */
+/* Inventory: the use-soon list is the one block on a surface; stock is plain rows, actions tucked under each. */
 .card > h2:first-child { margin-top: 0; }
 .soon .rows > li:last-child { border-bottom: 0; }
 .stock .stock-head { margin: 0; }
@@ -273,6 +273,20 @@ h3.sub { font-size: 1.05rem; margin: 16px 2px 4px; }
 .stock-when { margin: 0; font-size: .875rem; }
 .stock form.inline { margin: 6px 0 0; }
 .stock-more summary { min-height: 48px; width: fit-content; font-size: .9375rem; }
+/* Use (or Used one) and More share a line; More sits at the end and, opened, takes the row below. */
+.stock-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 12px; }
+.stock-actions > form { margin: 6px 0 0; }
+.stock-more { margin: 6px 0 0 auto; }
+.stock-more[open] { flex-basis: 100%; }
+.stock-more[open] summary { margin-left: auto; }
+/* Place filters: plain links in a row that wraps, never a sideways scroller; the one shown is filled. */
+.place-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.place-chips a { min-height: 48px; max-width: 100%; display: inline-flex; align-items: center; padding: 0 18px;
+  border: 1px solid var(--line); border-radius: 24px; background: var(--field); color: var(--text);
+  text-decoration: none; overflow-wrap: anywhere; }
+.place-chips a[aria-current] { background: var(--action); border-color: var(--action); color: #fff; font-weight: 600; }
+@media (hover: hover) { .place-chips a:not([aria-current]):hover { background: var(--line); } }
+.inventory-end { margin: 24px 0 0; }
 .stock-more form.inline:first-of-type { margin-top: 0; }
 
 /* Scan: mode switch, then the camera full width, then what happened as a card. */
@@ -384,13 +398,13 @@ input[type=file]::file-selector-button { min-height: 36px; margin-right: 12px; p
 .photo-full img { display: block; width: 100%; max-height: calc(92vh - 88px); object-fit: contain; border-radius: 10px; }
 .photo-full .btn { width: 100%; margin-top: 12px; }
 
-/* Cards that repeat (chores, supplies) sit in a grid, as many across as fit; their actions line up at the bottom. */
+/* Cards that repeat (chores) sit in a grid, as many across as fit; their actions line up at the bottom. */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 10px; margin: 0 0 10px; }
 .cards > .card { display: flex; flex-direction: column; margin: 0; }
 .cards > .card > .card-actions { margin-top: auto; }
 
 /* Desktop: each kind of page gets its own width. Wide pages (recipes, plan, shopping, today, a recipe) up to
-   1400 px with their own columns; roomy ones (chores, supplies, pantry, me) up to 960 px. */
+   1400 px with their own columns; roomy ones (chores, inventory, me) up to 960 px. */
 @media (min-width: 1280px) {
   main.wide { max-width: 1400px; }
   main.roomy { max-width: 960px; }

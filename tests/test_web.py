@@ -79,39 +79,28 @@ def _switcher(html, label):
     return re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', nav[:nav.index("</nav>")])
 
 
-def test_tabs_are_today_meals_chores_me(env):
-    html = env[3].get("/pantry").text
-    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/home", "Chores"), ("/me", "Me")]
+def test_tabs_are_today_meals_inventory_chores_me(env):
+    html = env[3].get("/recipes").text
+    assert _tabs(html) == [("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores"),
+                           ("/me", "Me")]
     assert 'href="/plan" aria-current="page"' in html
-    assert env[3].get("/home").status_code == 200
+    assert 'href="/home" aria-current="page"' in env[3].get("/home").text
 
 
-def test_meals_switcher_has_four_pages(env):
-    html = env[3].get("/pantry").text
-    assert [(h, t) for h, _, t in _switcher(html, "Meals pages")] == [("/plan", "Plan"), ("/pantry", "Pantry"),
-                                                                     ("/recipes", "Recipes"), ("/shopping", "Shopping")]
-    assert [t for h, a, t in _switcher(html, "Meals pages") if 'aria-current="page"' in a] == ["Pantry"]
+def test_meals_switcher_has_three_pages(env):
+    html = env[3].get("/recipes").text
+    assert [(h, t) for h, _, t in _switcher(html, "Meals pages")] == [("/plan", "Plan"), ("/recipes", "Recipes"),
+                                                                     ("/shopping", "Shopping")]
+    assert [t for h, a, t in _switcher(html, "Meals pages") if 'aria-current="page"' in a] == ["Recipes"]
     assert 'href="/plan" aria-current="page"' in html and "subnav" not in html and "has-subnav" not in html
-
-
-def test_chores_switcher_has_two_pages(env):
-    c = env[3]
-    for url, current in [("/home", "Chores"), ("/home/supplies", "Supplies")]:
-        html = c.get(url).text
-        assert [(h, t) for h, _, t in _switcher(html, "Chores pages")] == [("/home", "Chores"),
-                                                                          ("/home/supplies", "Supplies")], url
-        assert [t for h, a, t in _switcher(html, "Chores pages") if "aria-current" in a] == [current], url
-        assert 'href="/home" aria-current="page"' in html, url
-    assert "Supplies you keep at home will show here." in c.get("/home/supplies").text
 
 
 def test_scan_button_only_on_inventory_pages(env):
     c = env[3]
     row = re.compile(r'<div class="title-row"><h1[^>]*>.*?</h1>\s*<a class="button title-action" href="([^"]+)">'
                      r'.*?barcode-scan.*?Scan</a></div>', re.S)
-    for url, href in [("/pantry", "/scan"), ("/home/supplies", "/scan?from=chores")]:
-        html = c.get(url).text
-        assert row.findall(html) == [href] and html.count("<h1") == 1, url
+    html = c.get("/inventory").text
+    assert row.findall(html) == ["/scan"] and html.count("<h1") == 1
     for url in ["/plan", "/recipes", "/shopping", "/import", "/home", "/home/chores/new", "/scan", "/scan?from=chores"]:
         html = c.get(url).text
         assert "title-action" not in html and html.count("<h1") == 1, url
@@ -126,21 +115,17 @@ def test_scan_button_only_on_inventory_pages(env):
 
 def test_rail_has_no_scan_entries(env):
     c = env[3]
-    for url in ["/plan", "/pantry", "/home", "/home/supplies", "/scan", "/scan?from=chores"]:
+    for url in ["/plan", "/inventory", "/home", "/scan", "/scan?from=chores"]:
         rail = c.get(url).text
         rail = rail[rail.index('class="rail"'):rail.index("</nav>")]
         assert "/scan" not in rail and "barcode-scan" not in rail, url
 
 
-def test_scan_page_keeps_section_switcher(env):
+def test_scan_page_belongs_to_inventory(env):
     c = env[3]
-    html = c.get("/scan?from=chores").text
-    assert [t for _, _, t in _switcher(html, "Chores pages")] == ["Chores", "Supplies"]
-    assert not [t for _, a, t in _switcher(html, "Chores pages") if "aria-current" in a]
-    assert 'aria-label="Meals pages"' not in html and 'href="/home" aria-current="page"' in html
-    html = c.get("/scan").text
-    assert [t for _, _, t in _switcher(html, "Meals pages")] == ["Plan", "Pantry", "Recipes", "Shopping"]
-    assert not [t for _, a, t in _switcher(html, "Meals pages") if "aria-current" in a]
+    for url in ("/scan", "/scan?from=chores"):  # from=chores is still accepted
+        html = c.get(url).text
+        assert 'class="segmented pages"' not in html and 'href="/inventory" aria-current="page"' in html, url
 
 
 def _render_base(path, query=""):
@@ -158,7 +143,6 @@ def test_switcher_matches_whole_path_segments():
         return [t for _, a, t in _switcher(_render_base(path), label) if "aria-current" in a]
     assert current("/plan") == ["Plan"] and current("/recipes/7") == ["Recipes"]
     assert current("/plans") == [] and current("/shoppinglist") == []
-    assert current("/home", "Chores pages") == ["Chores"] and current("/home/supplies", "Chores pages") == ["Supplies"]
 
 
 def test_me_page_theme_and_device(env):
@@ -183,18 +167,18 @@ def test_chores_page_sections(env):
 
 
 def test_no_footer_theme_button(env):
-    for url in ["/", "/pantry", "/home"]:
+    for url in ["/", "/inventory", "/home"]:
         assert "theme-switch" not in env[3].get(url).text, url
 
 
 def test_theme_cookie_switches_to_light(env):
     c = env[3]
-    assert 'data-theme="dark"' in c.get("/pantry").text
-    r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/pantry"},
+    assert 'data-theme="dark"' in c.get("/inventory").text
+    r = c.post("/settings/theme", data={"theme": "light"}, headers={"referer": "http://testserver/inventory"},
                follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/pantry"
+    assert r.status_code == 303 and r.headers["location"] == "/inventory"
     assert "max-age=34560000" in r.headers["set-cookie"].lower()
-    assert 'data-theme="light"' in c.get("/pantry").text
+    assert 'data-theme="light"' in c.get("/inventory").text
     assert c.post("/settings/theme", data={"theme": "pink"}).status_code == 422
     r = c.post("/settings/theme", data={"theme": "dark"}, headers={"referer": "http://evil.example//evil.example/x"},
                follow_redirects=False)
@@ -217,16 +201,16 @@ def test_pages_render(env):
     ai.draft = soup_draft()
     c.post("/import", data={"urls": "https://example.com/soup"})
     pid = store.all()[0].id
-    for url in ["/pantry", "/scan", "/recipes", f"/recipes/{rid}", f"/recipes/{rid}/table", "/import",
+    for url in ["/inventory", "/scan", "/recipes", f"/recipes/{rid}", f"/recipes/{rid}/table", "/import",
                 f"/import/{pid}", "/static/style.css", "/static/app.js", "/static/manifest.webmanifest"]:
         assert c.get(url).status_code == 200, url
     assert c.get("/recipes/999").status_code == 404 and c.get("/import/" + "0" * 32).status_code == 404
 
 
 def test_base_has_pwa_bits_and_nav(env):
-    html = env[3].get("/pantry").text
+    html = env[3].get("/plan").text
     for bit in ['name="viewport"', 'rel="manifest"', 'apple-touch-icon', 'apple-mobile-web-app-capable" content="yes"',
-                'href="/plan"', 'href="/pantry"', 'href="/scan"', 'href="/recipes"', 'href="/shopping"']:
+                'href="/plan"', 'href="/inventory"', 'href="/recipes"', 'href="/shopping"']:
         assert bit in html, bit
 
 
@@ -350,9 +334,9 @@ def test_pantry_use_soon_and_actions(env):
     pid = product(g, "Yogurt")
     g.add_stock(pid, 500, date(2026, 11, 20), i.location["Fridge"])
     g.volatile_result["due_products"] = [{"product_id": pid, "amount": 500, "best_before_date": "2026-11-20"}]
-    html = c.get("/pantry").text
-    assert html.index("Use soon") < html.index("Fridge") and html.count("Yogurt") >= 2
-    assert c.post(f"/pantry/{pid}/consume", data={"amount": 100}, follow_redirects=False).headers["location"] == "/pantry"
+    html = c.get("/inventory").text
+    assert html.index("Use soon") < html.index("<h2>Fridge</h2>") and html.count("Yogurt") >= 2
+    assert c.post(f"/pantry/{pid}/consume", data={"amount": 100}, follow_redirects=False).headers["location"] == "/inventory"
     assert g.stock[pid][0]["amount"] == 400
     c.post(f"/pantry/{pid}/move", data={"from_location": i.location["Fridge"], "to_location": i.location["Freezer"],
                                         "amount": 400})
@@ -667,7 +651,7 @@ def test_review_save_runs_off_the_event_loop_and_only_once(tmp_path):
         first.start()
         assert started.wait(5)
         t0 = time.monotonic()
-        assert c.get("/pantry").status_code == 200 and time.monotonic() - t0 < 2  # loop not blocked by the save
+        assert c.get("/inventory").status_code == 200 and time.monotonic() - t0 < 2  # loop not blocked by the save
         second = threading.Thread(target=save, args=("second",))  # double-tapped Save
         second.start()
         time.sleep(0.3)
@@ -740,7 +724,7 @@ def test_cook_route_flashes_shortage(env):
     c.post("/plan", data={"day": _future_day(1).isoformat(), "section": "Dinner", "recipe_id": rid})
     [e] = g.objects("meal_plan", type="recipe")
     r = c.post(f"/plan/{e['id']}/cook")  # follows the redirect back to /plan
-    assert "You were short on: Flour" in r.text and 'href="/pantry"' in r.text
+    assert "You were short on: Flour" in r.text and 'href="/inventory"' in r.text
     assert g.objects("meal_plan", type="recipe")[0]["done"] == 1
     pid2, rid2 = flour_recipe(g, stock=1000)
     c.post("/plan", data={"day": _future_day(2).isoformat(), "section": "Dinner", "recipe_id": rid2})
@@ -896,7 +880,7 @@ def test_cross_site_posts_are_refused(env):
     r = c.post("/shopping/extra", data={"name": "Milk"}, headers={"Sec-Fetch-Site": "cross-site"},
                follow_redirects=False)
     assert r.status_code == 403 and not g.objects("shopping_list")
-    assert c.get("/pantry", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+    assert c.get("/inventory", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
     for h in ({}, {"Sec-Fetch-Site": "same-origin"}):  # curl/HA send no header; the app's own pages same-origin
         assert c.post("/shopping/extra", data={"name": "Milk"}, headers=h, follow_redirects=False).status_code == 303
     assert len(g.objects("shopping_list")) == 2
@@ -999,11 +983,11 @@ def test_bought_without_package_size_adds_row_amount(env):
     assert g.stock_amounts()[pid] == 300
 
 
-def test_pantry_machine_read_amounts_are_not_rounded_up(env):
+def test_inventory_machine_read_amounts_are_not_rounded_up(env):
     g, _, _, c, _ = env
     pid = product(g, "Rice")
     g.add_stock(pid, 2189.1366, None, ids(g).location["Pantry"])
-    html = c.get("/pantry").text
+    html = c.get("/inventory").text
     assert 'name="amount" value="2189.1366"' in html and 'max="2189.1366"' in html
 
 
@@ -1247,14 +1231,14 @@ def test_supplies_view_used_one(env):
     glad = supply(g, "Glad bags", min_stock=0, stock=3, parent_product_id=bags)
     hefty = supply(g, "Hefty bags", min_stock=0, stock=2, parent_product_id=bags)
     sponge = supply(g, "Sponges", min_stock=0, stock=3)
-    html = c.get("/home/supplies").text
+    html = c.get("/inventory").text
     assert "Trash bags" in html and "Sponges" in html and "Glad bags" not in html and "Hefty bags" not in html
-    assert re.search(r'Trash bags</b></p>\s*<p class="muted">5 left\.</p>', html)  # the total across brands
-    assert '<p class="muted">3 left.</p>' in html and "pieces</span>" in html
+    assert 'Trash bags</b><span class="qty">5 left</span>' in html  # its brands' stock, one row
+    assert 'Sponges</b><span class="qty">3 left</span>' in html and "pieces</span>" in html
     assert f'action="/home/supplies/{sponge}/used"' in html and "Used one" in html and "Keep at least" in html
     assert f'/home/supplies/{glad}/' not in html
     r = c.post(f"/home/supplies/{bags}/used", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/home/supplies")
+    assert r.status_code == 303 and r.headers["location"] == "/inventory?msg=Used+one+Trash+bags."
     assert g.stock_amounts()[bags] == 4  # no package size: one unit, taken from a brand
     g.set_userfields("products", bags, {"package_amount": 10})
     c.post(f"/home/supplies/{bags}/used")
@@ -1263,7 +1247,9 @@ def test_supplies_view_used_one(env):
         c.post(f"/home/supplies/{bags}/used")
     assert g.stock_amounts()[bags] == 0
     assert c.post(f"/home/supplies/{bags}/used").status_code == 200  # nothing left: no error
-    assert '<p class="warn">None left. Running low.</p>' in c.get("/home/supplies").text
+    html = c.get("/inventory").text
+    assert 'Trash bags</b><span class="qty">None left</span>' in html
+    assert '<p class="stock-when warn">Running low.</p>' in html
     low = ids(g).list["Running low"]
     assert [(r["product_id"], r["amount"]) for r in g.objects("shopping_list", shopping_list_id=low)] == [(bags, 2)]
     assert hefty not in [r["product_id"] for r in g.objects("shopping_list", shopping_list_id=low)]
@@ -1302,10 +1288,11 @@ def test_remaining_pages_use_shell(env, tmp_path):
     down = TestClient(create_app(DownGrocy(httpx.ConnectError("refused")), FakeAI(),
                                  httpx.Client(transport=httpx.MockTransport(no_network)), settings,
                                  PendingStore(tmp_path / "down"))).get("/recipes")
-    pages = {url: c.get(url).text for url in ("/pantry", "/scan", "/import", f"/import/{pid}", f"/recipes/{rid}/table")}
+    pages = {url: c.get(url).text for url in ("/inventory", "/scan", "/import", f"/import/{pid}", f"/recipes/{rid}/table")}
     pages["down"] = down.text
     for url, html in pages.items():
-        assert 'data-section="kitchen"' in html and "style=" not in html, url
+        section = "inventory" if url in ("/inventory", "/scan") else "kitchen"
+        assert f'data-section="{section}"' in html and "style=" not in html, url
         assert "·" not in html and "→" not in html, url  # no middle dots or arrows in copy
 
 
@@ -1319,7 +1306,7 @@ def test_scan_prompts_are_in_page(env):
     assert "prompt(" not in js and "we'll remember it." in js and "Keep at least how many?" in js
 
 
-def test_pantry_keeps_supplies_out_and_reads_like_supplies(env):
+def test_inventory_food_rows_read_like_supplies(env):
     g, _, _, c, _ = env
     i = ids(g)
     eggs = product(g, "Eggs", "piece")
@@ -1329,8 +1316,8 @@ def test_pantry_keeps_supplies_out_and_reads_like_supplies(env):
     supply(g, "Toilet paper", stock=6)
     g.volatile_result["due_products"] = [{"product_id": eggs, "amount": 12,
                                           "best_before_date": (date.today() + timedelta(days=2)).isoformat()}]
-    html = c.get("/pantry").text
-    assert "Toilet paper" not in html and "<h2>Garage</h2>" not in html
+    html = c.get("/inventory").text
+    assert html.index("<h2>Garage</h2>") < html.index("Toilet paper")  # supplies share the page, by place
     assert "12 left" in html and "500 g left" in html and "12 piece" not in html
     day = f"{date.today() + timedelta(days=2):%A}"
     assert f"Use by {day}" in html and f"Best before {day}" in html
@@ -1582,5 +1569,5 @@ def test_wide_pages_split_into_columns(env):
     assert html.index('class="servings"') < html.index("</h1>") + 200 < html.index('class="cfe-wrap"')  # in the title row
     for url in ("/shopping", "/"):
         assert '<div class="split">' in c.get(url, cookies={"who": "kitchen"}).text, url
-    for url in ("/home", "/home/supplies", "/pantry", "/me"):
+    for url in ("/home", "/inventory", "/me"):
         assert '<main class="roomy">' in c.get(url, cookies={"who": "kitchen"}).text, url

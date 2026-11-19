@@ -40,7 +40,7 @@
   <a class="btn" href="/plan?week={{ next.isoformat() }}">Next week{{ icon("chevron-right") }}</a>
   <form method="post" action="/plan/suggest"><input type="hidden" name="week" value="{{ monday.isoformat() }}"><button class="btn btn-primary">Suggest week</button></form>
 </div>
-{% if short %}<p class="card warn" role="status">You were short on: {{ short|join(", ") }}. <a href="/pantry">Correct the pantry</a></p>{% endif %}
+{% if short %}<p class="card warn" role="status">You were short on: {{ short|join(", ") }}. <a href="/inventory">Correct the inventory</a></p>{% endif %}
 {% if error %}<p class="card error" role="alert">{{ error }}</p>{% endif %}
 {% if picks is not none %}
 <section class="card suggestions" aria-labelledby="sugg">

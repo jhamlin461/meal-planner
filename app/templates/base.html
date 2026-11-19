@@ -1,11 +1,8 @@
 {% from "_icon.html" import icon %}
 {%- set path = request.url.path -%}
-{%- set chores_scan = path.startswith("/scan") and request.query_params.get("from") == "chores" -%}
-{%- set section = section|default("today" if path == "/" else "me" if path in ("/me", "/who", "/home/people") else "home" if path == "/home" or path.startswith("/home/") or chores_scan else "kitchen") -%}
-{%- set pages = [("/plan", "Plan"), ("/pantry", "Pantry"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [("/home", "Chores"), ("/home/supplies", "Supplies")] if section == "home" else [] -%}
-{%- set scan_href = "/scan?from=chores" if section == "home" else "/scan" -%}
-{%- set on_scan = path.startswith("/scan") -%}
-{%- macro current(href) %}{% if not on_scan and (path == href or path.startswith(href + "/")) and (href != "/home" or path == "/home") %} aria-current="page"{% endif %}{% endmacro -%}
+{%- set section = section|default("today" if path == "/" else "me" if path in ("/me", "/who", "/home/people") else "inventory" if path == "/inventory" or path.startswith(("/inventory/", "/scan")) else "home" if path == "/home" or path.startswith("/home/") else "kitchen") -%}
+{%- set pages = [("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")] if section == "kitchen" else [] -%}
+{%- macro current(href) %}{% if path == href or path.startswith(href + "/") %} aria-current="page"{% endif %}{% endmacro -%}
 {%- set theme = "light" if request.cookies.get("theme") == "light" else "dark" -%}
 <!doctype html>
 <html lang="en" data-theme="{{ theme }}">
@@ -25,7 +22,7 @@
 <body data-section="{{ section }}">
 <nav class="rail" aria-label="Main">
 <ul>
-{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}
+{% for key, href, label, ico in [("today", "/", "Today", "white-balance-sunny"), ("kitchen", "/plan", "Meals", "silverware-fork-knife"), ("inventory", "/inventory", "Inventory", "fridge-outline"), ("home", "/home", "Chores", "broom"), ("me", "/me", "Me", "account-outline")] %}
 <li><a href="{{ href }}"{% if section == key %} aria-current="page"{% endif %}>{{ icon(ico) }}<span>{{ label }}</span></a>
 {%- if section == key and pages %}
 <ul class="rail-sub" aria-label="{{ label }}">
@@ -36,12 +33,12 @@
 </ul>
 </nav>
 <main{% block main_attrs %}{% endblock %}>
-{% if pages %}<nav class="segmented pages" aria-label="{{ 'Chores' if section == 'home' else 'Meals' }} pages">
+{% if pages %}<nav class="segmented pages" aria-label="Meals pages">
 {%- for href, text in pages %}<a href="{{ href }}"{{ current(href) }}>{{ text }}</a>{% endfor -%}
 </nav>{% endif %}
-{% if pages and not on_scan %}<div class="title-row">{% block heading %}{% endblock %}
-{%- if path in ("/pantry", "/home/supplies") %}
-<a class="button title-action" href="{{ scan_href }}">{{ icon("barcode-scan") }}Scan</a>{% endif %}</div>
+{% if pages or path == "/inventory" %}<div class="title-row">{% block heading %}{% endblock %}
+{%- if path == "/inventory" %}
+<a class="button title-action" href="/scan">{{ icon("barcode-scan") }}Scan</a>{% endif %}</div>
 {%- else %}{{ self.heading() }}{% endif %}
 {% block content %}{% endblock %}
 </main>

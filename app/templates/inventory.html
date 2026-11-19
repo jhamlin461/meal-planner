@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Inventory{% endblock %}
+{% block main_attrs %} class="roomy"{% endblock %}
+{% macro unit(u) %}{{ "pieces" if u == "piece" else u }}{% endmacro %}
+{% macro left(n, u) %}{% if n > 0 %}{{ n|num }}{% if u and u != "piece" %} {{ u }}{% endif %} left{% else %}None left{% endif %}{% endmacro %}
+{% macro keep() %}{% if place %}<input type="hidden" name="place" value="{{ place }}">{% endif %}{% endmacro %}
+{% macro move(r, action) %}
+    <form class="inline" method="post" action="{{ action }}">{{ keep() }}
+      <input type="hidden" name="from_location" value="{{ r.loc }}">{% if r.kind == "food" %}<input type="hidden" name="amount" value="{{ r.amount|exact }}">{% endif %}
+      <label for="move-{{ r.pid }}-{{ r.loc }}">Move to</label>
+      <span class="inline-group">
+        <select id="move-{{ r.pid }}-{{ r.loc }}" name="to_location">{% for name, id in locations.items() %}<option value="{{ id }}"{% if id == r.loc %} selected{% endif %}>{{ name }}</option>{% endfor %}</select>
+        <button class="btn">Move</button>
+      </span>
+    </form>
+{%- endmacro %}
+{% block heading %}<h1>Inventory</h1>{% endblock %}
+{% block content %}
+{% if msg %}<p class="card" role="status">{{ msg }}</p>{% endif %}
+{% if groups %}
+<nav class="place-chips" aria-label="Places">
+<a href="/inventory"{% if not place %} aria-current="page"{% endif %}>All</a>
+{%- for name, id in chips.items() %}
+<a href="/inventory?place={{ id }}"{% if place == id %} aria-current="page"{% endif %}>{{ name }}</a>
+{%- endfor %}
+</nav>
+{% endif %}
+{% if soon %}
+<section class="card soon" aria-labelledby="soon">
+<h2 id="soon">Use soon</h2>
+<ul class="rows">
+{% for s in soon %}<li class="row"><span class="grow breakable">{{ s.name }}</span>{% if s.when %}<span class="{{ 'error' if s.past else 'warn' }}">{{ s.when }}</span>{% endif %}</li>
+{% endfor %}</ul>
+</section>
+{% endif %}
+{% for loc, rows in groups.items() %}
+<h2>{{ loc }}</h2>
+<ul class="rows stock">
+{% for r in rows %}<li>
+  <p class="row stock-head"><b class="grow breakable">{{ r.name }}</b><span class="qty">{{ left(r.amount, r.unit) }}</span></p>
+{%- if r.kind == "food" %}
+  {% if r.when %}<p class="stock-when {{ 'error' if r.past else 'muted' }}">{{ r.when }}</p>{% endif %}
+  <div class="stock-actions">
+  <form class="inline" method="post" action="/pantry/{{ r.pid }}/consume">{{ keep() }}
+    <label for="use-{{ r.pid }}-{{ r.loc }}">Used</label>
+    <span class="inline-group">
+      <input id="use-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" max="{{ totals[r.pid]|exact }}" inputmode="decimal" required>
+      {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+      <button class="btn">Use</button>
+    </span>
+  </form>
+  <details class="stock-more"><summary>More</summary>
+    <form class="inline" method="post" action="/pantry/{{ r.pid }}/amount">{{ keep() }}
+      <label for="total-{{ r.pid }}-{{ r.loc }}">Total</label>
+      <span class="inline-group">
+        <input id="total-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" value="{{ totals[r.pid]|exact }}" step="any" min="0" inputmode="decimal" required>
+        {%- if r.unit %}<span>{{ unit(r.unit) }}</span>{% endif %}
+        <button class="btn">Set total</button>
+      </span>
+    </form>
+    {{ move(r, "/pantry/%s/move" % r.pid) }}
+  </details>
+  </div>
+{%- else %}{% set split = r.total != r.amount %}
+  {% if r.low or split %}<p class="stock-when {{ 'warn' if r.low else 'muted' }}">{% if split %}{{ r.total|num }} in all.{% if r.low %} {% endif %}{% endif %}{% if r.low %}Running low.{% endif %}</p>{% endif %}
+  <div class="stock-actions">
+  <form method="post" action="/home/supplies/{{ r.pid }}/used">{{ keep() }}<button class="btn"{% if r.total <= 0 %} disabled{% endif %}>Used one</button></form>
+  <details class="stock-more"><summary>More</summary>
+    {% if r.amount > 0 %}{{ move(r, "/home/supplies/%s/move" % r.pid) }}{% endif %}
+    <form class="inline" method="post" action="/home/supplies/{{ r.pid }}/min">{{ keep() }}
+      <label for="min-{{ r.pid }}-{{ r.loc }}">Keep at least</label>
+      <span class="inline-group">
+        <input id="min-{{ r.pid }}-{{ r.loc }}" type="number" name="amount" step="any" min="0" value="{{ r.min|exact }}" inputmode="decimal" required>
+        {%- if r.unit %}<span>{{ r.unit }}{{ "s" if r.unit == "piece" and r.min != 1 }}</span>{% endif %}
+        <button class="btn">Save</button>
+      </span>
+    </form>
+  </details>
+  </div>
+{%- endif %}
+</li>
+{% endfor %}</ul>
+{% else %}
+<p class="empty">Nothing here yet. <a href="/scan">Scan something</a> to add it.</p>
+{% endfor %}
+<p class="inventory-end"><a class="btn" href="/inventory/places">Manage places</a></p>
+{% endblock %}

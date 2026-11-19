@@ -1,11 +1,15 @@
+import re
+from datetime import date, timedelta
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.importer import PendingStore, process
-from app.inventory import add_place, default_place, places, remove_place, rename_place
-from app.setup_grocy import LOCATIONS, bootstrap, ids
+from app.inventory import add_place, default_place, places, remove_place, rename_place, rows
+from app.setup_grocy import LOCATIONS, bootstrap, ids, supplies_group
 from app.web import create_app
 from tests.fakes import FakeAI, FakeGrocy
 from tests.test_budget import import_app, jsonld_http
@@ -129,3 +133,158 @@ def test_remove_place_needs_a_real_target_and_keeps_one():
     with pytest.raises(ValueError, match="Keep at least one place."):
         remove_place(g, bid, bid)
     assert list(places(g)) == ["Basement"]
+
+
+# ---- the Inventory page -------------------------------------------------------------------------------------------
+SETTINGS = Settings("", "", "", "KEY", None, 6, Path("."), 3)
+
+
+def food(g, name, place, amount=0, unit="g", bb=None):
+    i = ids(g)
+    pid = g.create("products", {"name": name, "qu_id_stock": i.unit[unit], "location_id": i.location[place]})
+    if amount:
+        g.add_stock(pid, amount, bb, i.location[place])
+    return pid
+
+
+def supply(g, name, place, amount=0, min_stock=0, **kw):
+    i = ids(g)
+    pid = g.create("products", {"name": name, "qu_id_stock": i.unit["piece"], "location_id": i.location[place],
+                                "product_group_id": supplies_group(g), "min_stock_amount": min_stock, **kw})
+    if amount:
+        g.add_stock(pid, amount, None, i.location[place])
+    return pid
+
+
+def text(html):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+
+
+def test_inventory_groups_food_and_supplies_by_place(env):
+    g, c = env
+    yogurt = food(g, "Greek yogurt", "Fridge", 500, bb=date.today() + timedelta(days=20))
+    towels = supply(g, "Paper towels", "Closet", 3, min_stock=2)
+    soap = supply(g, "Dish soap", "Under sink", min_stock=1)  # none anywhere: still shows, at its default place
+    food(g, "Rice", "Pantry")  # no stock: food doesn't show
+    inv = rows(g, SETTINGS, date.today())
+    assert list(inv.groups) == ["Fridge", "Under sink", "Closet"]  # places() order, empty places left out
+    [y] = inv.groups["Fridge"]
+    assert (y["pid"], y["name"], y["amount"], y["unit"], y["kind"]) == (yogurt, "Greek yogurt", 500, "g", "food")
+    [t] = inv.groups["Closet"]
+    assert (t["pid"], t["amount"], t["total"], t["min"], t["low"], t["kind"]) == (towels, 3, 3, 2, False, "supply")
+    [s] = inv.groups["Under sink"]
+    assert (s["pid"], s["amount"], s["total"], s["low"]) == (soap, 0, 0, True)
+    html = c.get("/inventory").text
+    assert "Rice" not in html and html.index("<h2>Fridge</h2>") < html.index("<h2>Under sink</h2>") \
+        < html.index("<h2>Closet</h2>")
+    assert f'action="/pantry/{yogurt}/consume"' in html and f'action="/pantry/{yogurt}/amount"' in html
+    assert f'action="/home/supplies/{towels}/used"' in html and f'action="/home/supplies/{towels}/min"' in html
+    assert f'action="/pantry/{towels}/amount"' not in html  # no Set total for supplies
+    assert "Running low" in text(html) and "Used one" in html and "<summary>More</summary>" in html
+    assert 'href="/inventory/places"' in html and "Manage places" in html
+
+
+def test_supply_row_under_place_with_most_stock(env):
+    """Pre-flight ruling (replaces "under the place with most stock"): a supply has one row per place holding it or
+    its brands, with that place's share, and Running low uses the generic's total across places."""
+    g, c = env
+    bags = supply(g, "Trash bags", "Garage", min_stock=6, cumulate_min_stock_amount_of_sub_products=1)
+    supply(g, "Glad bags", "Garage", 3, parent_product_id=bags)
+    supply(g, "Hefty bags", "Closet", 2, parent_product_id=bags)
+    inv = rows(g, SETTINGS, date.today())
+    [garage], [closet] = inv.groups["Garage"], inv.groups["Closet"]
+    assert (garage["pid"], garage["amount"], garage["total"], garage["low"]) == (bags, 3, 5, True)
+    assert (closet["pid"], closet["amount"], closet["total"], closet["low"]) == (bags, 2, 5, True)
+    html = c.get("/inventory").text
+    assert "Glad bags" not in html and "Hefty bags" not in html
+    assert html.count('<b class="grow breakable">Trash bags</b>') == 2 and "5 in all" in text(html)
+
+
+def test_inventory_place_chip_filters(env):
+    g, c = env
+    food(g, "Greek yogurt", "Fridge", 500)
+    supply(g, "Paper towels", "Closet", 3)
+    p = places(g)
+    html = c.get("/inventory").text
+    chips = html[html.index('class="place-chips"'):]
+    chips = chips[:chips.index("</nav>")]
+    assert re.findall(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', chips) == [
+        ("/inventory", "All"), (f"/inventory?place={p['Fridge']}", "Fridge"),
+        (f"/inventory?place={p['Closet']}", "Closet")]
+    assert '<a href="/inventory" aria-current="page">All</a>' in chips and chips.count("aria-current") == 1
+    html = c.get(f"/inventory?place={p['Closet']}").text
+    assert "<h2>Closet</h2>" in html and "<h2>Fridge</h2>" not in html and "Greek yogurt" not in html
+    assert f'<a href="/inventory?place={p["Closet"]}" aria-current="page">Closet</a>' in html
+    assert f'name="place" value="{p["Closet"]}"' in html  # its forms come back to the same filter
+    html = c.get(f"/inventory?place={p['Freezer']}").text  # a place with nothing in it: everything
+    assert "<h2>Closet</h2>" in html and "<h2>Fridge</h2>" in html
+
+
+def test_old_pantry_and_supplies_urls_redirect(env):
+    _, c = env
+    for url in ("/pantry", "/home/supplies"):
+        r = c.get(url, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/inventory", url
+    for url in ("/pantry", "/home/supplies"):
+        r = c.get(f"{url}?msg=Used+one+Sponges.", follow_redirects=False)
+        assert r.headers["location"] == "/inventory?msg=Used+one+Sponges.", url
+
+
+def test_inventory_forms_return_to_inventory(env):
+    g, c = env
+    p = places(g)
+    yogurt = food(g, "Greek yogurt", "Fridge", 500)
+    bags = supply(g, "Trash bags", "Garage", min_stock=2)
+    hefty = supply(g, "Hefty bags", "Closet", 4, parent_product_id=bags)
+    fridge = f"/inventory?place={p['Fridge']}"
+
+    def post(url, **data):
+        r = c.post(url, data=data, follow_redirects=False)
+        assert r.status_code == 303, url
+        return r.headers["location"]
+
+    assert post(f"/pantry/{yogurt}/consume", amount=100) == "/inventory"
+    assert post(f"/pantry/{yogurt}/consume", amount=100, place=p["Fridge"]) == fridge
+    assert post(f"/pantry/{yogurt}/amount", amount=250, place=p["Fridge"]) == fridge
+    assert g.stock_amounts()[yogurt] == 250
+    assert post(f"/pantry/{yogurt}/move", from_location=p["Fridge"], to_location=p["Freezer"], amount=250) == "/inventory"
+    assert post(f"/home/supplies/{bags}/used") == "/inventory?msg=Used+one+Trash+bags."
+    assert post(f"/home/supplies/{bags}/used", place=p["Closet"]) == \
+        f"/inventory?place={p['Closet']}&msg=Used+one+Trash+bags."
+    assert post(f"/home/supplies/{bags}/min", amount=3) == "/inventory"
+    assert g.get_object("products", bags)["min_stock_amount"] == 3
+    assert post(f"/home/supplies/{bags}/move", from_location=p["Closet"], to_location=p["Garage"]) == "/inventory"
+    assert {e["location_id"] for e in g.stock[hefty]} == {p["Garage"]} and g.stock_amounts()[bags] == 2
+    assert "Used one Trash bags." in c.get("/inventory?msg=Used+one+Trash+bags.").text
+
+
+def test_nav_tabs(env):
+    _, c = env
+    html = c.get("/inventory").text
+    nav = html[html.index('class="rail"'):html.index("</nav>")]
+    assert re.findall(r'<li><a href="([^"]+)"[^>]*>.*?<span>([^<]+)</span>', nav) == [
+        ("/", "Today"), ("/plan", "Meals"), ("/inventory", "Inventory"), ("/home", "Chores"), ("/me", "Me")]
+    assert 'href="/inventory" aria-current="page"' in nav
+    plan = c.get("/plan").text
+    meals = plan[plan.index('aria-label="Meals pages"'):]
+    assert re.findall(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', meals[:meals.index("</nav>")]) == [
+        ("/plan", "Plan"), ("/recipes", "Recipes"), ("/shopping", "Shopping")]
+    for url in ("/inventory", "/home", "/plan", "/scan", "/scan?from=chores", "/inventory/places"):
+        html = c.get(url).text
+        assert 'href="/pantry"' not in html and 'href="/home/supplies"' not in html and ">Supplies<" not in html, url
+    assert 'class="segmented pages"' not in c.get("/home").text  # Chores is one page
+    for url in ("/scan", "/scan?from=chores", "/inventory/places"):
+        assert 'href="/inventory" aria-current="page"' in c.get(url).text, url
+
+
+def test_inventory_no_inline_styles_and_scan_action(env):
+    g, c = env
+    html = c.get("/inventory").text
+    assert "style=" not in html and "·" not in html and "→" not in html
+    assert re.search(r'<div class="title-row"><h1>Inventory</h1>\s*<a class="button title-action" href="/scan">', html)
+    assert "Nothing here yet. Scan something to add it." in text(html) and '<a href="/scan">Scan something</a>' in html
+    food(g, "Greek yogurt", "Fridge", 500)
+    html = c.get("/inventory").text
+    assert "style=" not in html and "Nothing here yet" not in html
+    for url in ("/plan", "/home", "/scan", "/inventory/places"):
+        assert "title-action" not in c.get(url).text, url

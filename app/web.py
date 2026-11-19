@@ -1,4 +1,4 @@
-"""Web UI: pantry, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
+"""Web UI: inventory, scanning, recipes and recipe import (server-rendered; Grocy holds all data)."""
 import hashlib
 import itertools
 import logging
@@ -38,15 +38,14 @@ from app.importer import (BATCH_MIN, IngredientMatch, PendingStore, add_conversi
 from app.qty import is_packaging
 from app.mealplan import cook, plan_meal, unplan_meal, week_view
 from app.nutrition import recipe_macros
-from app.inventory import add_place, default_place, places, remove_place, rename_place
+from app.inventory import add_place, default_place, move_family, places, remove_place, rename_place, rows
 from app.setup_grocy import SECTIONS, ids, supplies_group
 from app.shopping import rebuild_meal_plan_list, rebuild_running_low, walmart_items
 from app.suggest import suggest, user_recipes
-from app.today import _day, expiring, summary, today_view
+from app.today import expiring, summary, today_view
 from app.walmart import cart_url, packages_needed, parse_item_id, search_url
 
 HERE = Path(__file__).parent
-NEVER = "2999-12-31"  # Grocy's best-before for "never expires"
 UPLOAD_MAX = 10 * 1024 * 1024  # a recipe photo from the phone
 log = logging.getLogger(__name__)
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -512,16 +511,16 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         with plan_lock:
             rebuild_running_low(grocy)
 
+    def inventory_back(place: int | None, msg: str = "") -> RedirectResponse:
+        q = urlencode({k: v for k, v in (("place", place), ("msg", msg)) if v})
+        return back("/inventory" + (f"?{q}" if q else ""))
+
     @app.get("/home/supplies")
-    def supplies(request: Request, msg: str = ""):
-        units, stock = unit_names(), grocy.stock_amounts()  # a generic's amount includes its brands
-        rows = [{"id": p["id"], "name": p["name"], "amount": stock.get(int(p["id"]), 0.0),
-                 "min": float(p.get("min_stock_amount") or 0), "unit": units.get(_int(p.get("qu_id_stock")), "")}
-                for p in hm.supplies(grocy) if not p.get("parent_product_id")]
-        return page(request, "supplies.html", msg=msg, supplies=sorted(rows, key=lambda r: r["name"].lower()))
+    def supplies(msg: str = ""):
+        return inventory_back(None, msg)
 
     @app.post("/home/supplies/{pid}/used")
-    def supply_used(pid: int):
+    def supply_used(pid: int, place: int | None = Form(None)):
         """One unit (a bag, a roll), whatever the package size; never more than is in stock (Grocy refuses that)."""
         p = product_or_404(pid)  # a generic: Grocy takes the stock from its brands
         with plan_lock:
@@ -529,13 +528,20 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
             if use > 0:
                 grocy.consume(pid, use)
             rebuild_running_low(grocy)
-        msg = f"Used one {p['name']}." if use > 0 else f"No {p['name']} left to use."
-        return back("/home/supplies?" + urlencode({"msg": msg}))
+        return inventory_back(place, f"Used one {p['name']}." if use > 0 else f"No {p['name']} left to use.")
 
     @app.post("/home/supplies/{pid}/min")
-    def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False)):
+    def supply_min(pid: int, amount: float = Form(ge=0, allow_inf_nan=False), place: int | None = Form(None)):
         set_min(pid, amount)  # 0 = never goes on Running low
-        return back("/home/supplies")
+        return inventory_back(place)
+
+    @app.post("/home/supplies/{pid}/move")
+    def supply_move(pid: int, from_location: int = Form(), to_location: int = Form(), place: int | None = Form(None)):
+        """A supply row is its generic in one place: move its own and its brands' stock from there."""
+        product_or_404(pid)
+        if from_location != to_location:
+            move_family(grocy, pid, from_location, to_location)
+        return inventory_back(place)
 
     class MinIn(BaseModel):
         amount: float = Field(gt=0, allow_inf_nan=False)
@@ -554,66 +560,36 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
         r.set_cookie("theme", theme, max_age=400 * 24 * 3600, samesite="lax")
         return r
 
-    # ---- pantry -------------------------------------------------------------------------------------------------
+    # ---- inventory ----------------------------------------------------------------------------------------------
     @app.get("/pantry")
-    def pantry(request: Request):
-        products = {int(p["id"]): p for p in grocy.objects("products")}
-        i = ids(grocy)
-        units, locs = unit_names(), {v: k for k, v in i.location.items()}
-        name = lambda pid: products.get(int(pid), {}).get("name", f"product {pid}")  # noqa: E731
-        group, today = supplies_group(grocy), date.today()
-        # brands copy their generic's group, so a product's own group is enough
-        food = lambda pid: str(products.get(int(pid), {}).get("product_group_id")) != str(group)  # noqa: E731
+    def pantry(msg: str = ""):
+        return inventory_back(None, msg)
 
-        def when(bb, verb: str) -> tuple[str, bool]:
-            """("Use by Friday" / "Best before Friday", past?) in Today's words."""
-            try:
-                d = date.fromisoformat(str(bb)[:10])
-            except ValueError:
-                return "", False
-            if d < today:
-                return "Past its date", True
-            return f"{verb} {'by ' if verb == 'Use' and d > today else ''}{_day(d, today)}", False
-
-        vol = grocy.volatile(settings.expiry_warn_days)
-        soon = [{"name": name(r["product_id"]), "when": w, "past": past}
-                for key in ("expired_products", "overdue_products", "due_products") for r in vol.get(key) or []
-                if food(r["product_id"]) for w, past in [when(r.get("best_before_date"), "Use")]]
-        rows: dict[tuple[int, int], dict] = {}
-        totals: dict[int, float] = {}
-        for e in grocy.stock_entries():
-            pid, loc = int(e["product_id"]), _int(e.get("location_id")) or 0
-            if not food(pid):
-                continue  # household supplies live under Chores, Supplies
-            row = rows.setdefault((pid, loc), {"pid": pid, "loc": loc, "name": name(pid), "amount": 0.0, "bb": NEVER,
-                                               "unit": units.get(_int(products.get(pid, {}).get("qu_id_stock")), "")})
-            row["amount"] += float(e["amount"])
-            row["bb"] = min(row["bb"], str(e.get("best_before_date") or NEVER)[:10])
-            totals[pid] = totals.get(pid, 0.0) + float(e["amount"])
-        groups: dict[str, list[dict]] = {}
-        for row in sorted(rows.values(), key=lambda r: (r["bb"], r["name"].lower())):
-            if row["amount"] > 0:
-                row["when"], row["past"] = when(row["bb"], "Best before") if row["bb"] != NEVER else ("", False)
-                groups.setdefault(locs.get(row["loc"], "Other"), []).append(row)
-        order = {n: k for k, n in enumerate(places(grocy))}
-        groups = dict(sorted(groups.items(), key=lambda kv: order.get(kv[0], len(order))))
-        return page(request, "pantry.html", soon=soon, groups=groups, totals=totals, locations=places(grocy))
+    @app.get("/inventory")
+    def inventory(request: Request, place: int | None = None, msg: str = ""):
+        inv, have = rows(grocy, settings, date.today()), places(grocy)
+        chips = {n: have[n] for n in inv.groups if n in have}  # places holding something, in places() order
+        place = place if place in chips.values() else None  # an empty or unknown place shows everything
+        groups = {n: r for n, r in inv.groups.items() if place is None or chips.get(n) == place}
+        return page(request, "inventory.html", soon=inv.soon if place is None else [], groups=groups,
+                    totals=inv.totals, chips=chips, place=place, locations=have, msg=msg)
 
     @app.post("/pantry/{pid}/consume")
-    def pantry_consume(pid: int, amount: float = Form(gt=0)):
+    def pantry_consume(pid: int, amount: float = Form(gt=0), place: int | None = Form(None)):
         grocy.consume(pid, amount)
-        return back("/pantry")
+        return inventory_back(place)
 
     @app.post("/pantry/{pid}/amount")
-    def pantry_amount(pid: int, amount: float = Form(ge=0)):
+    def pantry_amount(pid: int, amount: float = Form(ge=0), place: int | None = Form(None)):
         grocy.set_amount(pid, amount)
-        return back("/pantry")
+        return inventory_back(place)
 
     @app.post("/pantry/{pid}/move")
-    def pantry_move(pid: int, from_location: int = Form(), to_location: int = Form(), amount: float = Form(gt=0)):
+    def pantry_move(pid: int, from_location: int = Form(), to_location: int = Form(), amount: float = Form(gt=0),
+                    place: int | None = Form(None)):
         if from_location != to_location:
             grocy.transfer(pid, amount, from_location, to_location)
-        return back("/pantry")
+        return inventory_back(place)
 
     # ---- places -------------------------------------------------------------------------------------------------
     def places_page(request: Request, status_code: int = 200, error: str | None = None):
