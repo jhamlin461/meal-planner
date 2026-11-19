@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import AI, AIError, AIPaused, budget_mode, month
 from app.barcode import NeedsDetails, Resolved, _generics, create_manual, relink, resolve, resolve_from_photo
-from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, metric, ncols, validate
+from app.cfe import CfeTable, Ingredient, Op, ingredient_text, layout, ncols, validate
 from app.config import Settings, load_settings
 from app.grocy import Grocy, GrocyError
 from app.ha import HA, HAError
@@ -253,7 +253,7 @@ def create_app(grocy, ai, http: httpx.Client, settings: Settings, store: Pending
 
     def load_table(uf: dict) -> CfeTable | None:
         try:
-            return metric(CfeTable.model_validate_json(uf["cfe_table"])) if uf.get("cfe_table") else None  # old US tables too
+            return CfeTable.model_validate_json(uf["cfe_table"]) if uf.get("cfe_table") else None
         except ValidationError:
             return None
 

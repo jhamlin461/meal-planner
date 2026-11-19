@@ -55,7 +55,7 @@
     <input name="new_name_{{ i }}" value="{{ row.new_name }}" class="grow" aria-label="New product name">
     <button class="btn" name="action" value="create:{{ i }}">Create new product</button>
   </div>{% else %}<input type="hidden" name="new_name_{{ i }}" value="{{ row.new_name }}">{% endif %}
-  {% if row.convert %}<p class="muted">Your stock counts this in {{ row.stock_unit }}, the recipe in {{ row.unit }}. How many {{ row.stock_unit }} is 1 {{ row.unit }}?{% if row.preview %} That makes {{ row.preview }} {{ row.stock_unit }} for this recipe.{% endif %}</p>
+  {% if row.convert %}<p class="muted">Your pantry tracks this product in {{ row.stock_unit }}, so it needs to know how much 1 {{ row.unit }} is.{% if not ai_free %} Suggest fills it in for you.{% endif %}{% if row.preview %} That makes {{ row.preview }} {{ row.stock_unit }} for this recipe.{% endif %}</p>
   <div class="row">
     <span class="inline-group"><span>1 {{ row.unit }} =</span>
     <input type="text" name="factor_{{ i }}" value="{{ row.factor }}" size="6" inputmode="decimal" aria-label="Conversion factor">

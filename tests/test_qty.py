@@ -44,17 +44,3 @@ def test_cloves_are_not_pieces():
     assert normalize_unit("cloves") == "cloves" and normalize_unit("clove") == "clove"
     assert to_stock_amount(4, normalize_unit("cloves"), "piece", []) is None
     assert normalize_unit("each") == "piece" and normalize_unit("whole") == "piece"
-
-
-def test_to_metric():
-    from app.qty import to_metric
-    assert to_metric(0.75, "cup") == (180, "ml") and to_metric(0.5, "tsp") == (2.5, "ml")
-    assert to_metric(10, "oz") == (283.5, "g") and to_metric(1, "Tbsp") == (15, "ml") and to_metric(None, "cup") == (None, "ml")
-    assert to_metric(2, "clove") == (2, "clove") and to_metric(200, "g") == (200, "g") and to_metric(1, "pinch") == (1, "pinch")
-
-
-def test_celsius():
-    from app.qty import celsius
-    assert celsius("bake 350°F 30–40 min") == "bake 175°C 30–40 min" and celsius("heat to 425 °F") == "heat to 220°C"
-    assert celsius("Preheat to 400 degrees F.") == "Preheat to 205°C." and celsius("cook 5 min") == "cook 5 min"
-    assert celsius("Preheat to 350°F (170°C)") == "Preheat to 170°C"

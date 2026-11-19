@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.qty import celsius, format_qty, to_metric
+from app.qty import format_qty
 
 
 class Ingredient(BaseModel):
@@ -35,16 +35,8 @@ class Cell(BaseModel):
     where: str = ""
 
 
-def metric(t: CfeTable) -> CfeTable:
-    """The table in g, ml and °C (the household cooks metric); counts like clove or pinch stay as they are."""
-    ings = [i.model_copy(update=dict(zip(("qty", "unit"), to_metric(i.qty, i.unit)))) for i in t.ingredients]
-    ops = [o.model_copy(update={"label": celsius(o.label)}) for o in t.ops]
-    return t.model_copy(update={"pre": [celsius(x) for x in t.pre], "ingredients": ings, "ops": ops})
-
-
 def ingredient_text(ing: Ingredient, scale: float) -> str:
-    x = ing.qty * scale if ing.qty is not None else None
-    qty = "" if x is None else f"{round(x, 1):g}" if ing.unit in ("g", "ml") and x < 10 else format_qty(x)
+    qty = format_qty(ing.qty * scale) if ing.qty is not None else ""
     unit = "" if ing.unit == "piece" else ing.unit
     return " ".join(p for p in (qty, unit, ing.name) if p)
 
