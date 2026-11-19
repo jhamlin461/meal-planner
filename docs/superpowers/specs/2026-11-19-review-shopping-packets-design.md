@@ -102,6 +102,23 @@ actually arrives. Running low is a shopping concern for food as well as supplies
    no gram value is ever shown or typed.) Free mode: a product without a measure yet shows its stock unit until Claude is
    back.
 
+12. **Meal kits** (owner, 2026-11-19: "Maybe include a separate 'source' option for EveryPlate meals? I'm not sure how
+   to best separate those ingredients since they are for a specific purpose" — chose: kept per recipe). Adding a
+   recipe's ingredients to inventory (goal 6) creates that recipe's **meal kit**: each item is booked in its real place
+   (chicken in the Fridge) but reserved for that recipe.
+   - Inventory shows a **Meal kits** group, one entry per recipe ("Herby pork chops: 7 items", opening to the items);
+     kit items are not listed among the general place groups, and still appear in Use soon.
+   - Cooking that recipe consumes its kit's items first, then general stock for anything still needed.
+   - Shopping, Running low, Keep at least and every other recipe's "in stock" count use general stock only (stock minus
+     what kits reserve), so a box never hides a shortage or gets used by another recipe.
+   - Cook from what we have treats a recipe with a kit in inventory as fully stocked and suggests it first.
+   - The Undo after adding a kit removes the kit.
+13. **Packets only when cooking from a kit** (owner, 2026-11-19: "a check to see if a recipe belongs to a meal kit? If
+   so, use packets (if available). If not, use standard measurements"). The recipe page shows packets beside amounts when
+   a kit for that recipe is in inventory, and standard measurements only otherwise; a "Meal kit / Our pantry" switch at
+   the top of the table starts on whichever matches inventory. Both values stay stored. (Review and the add-to-inventory
+   confirm keep showing packets — they are about the box.)
+
 ## Non-goals
 
 - No change to how steps are crossed off, the scanner, chores, or Home Assistant.

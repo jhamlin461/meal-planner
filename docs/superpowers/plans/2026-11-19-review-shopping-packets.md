@@ -214,9 +214,27 @@ helper), tests.
   products 1 per packet (spec call 7); redirects to the recipe with "Added 6 ingredients." and an Undo form posting the
   transaction ids to `POST /recipes/{rid}/stock/undo` (uses `grocy.undo`, reports any that can't be undone).
 
+- **Meal kits (spec goal 12, owner decision mid-run).** The add creates a kit: the app's HouseStore (SQLite, `app/house.py`)
+  gets a `meal_kits` table (recipe_id, product_id, stock entry id(s) or transaction id, amount, added date) recording
+  what each booking reserved. `inventory.reserved(grocy, house) -> dict[int, float]` (product → amount reserved by kits
+  still in stock) and `inventory.free_stock(grocy, house) -> dict[int, float]` (stock minus reserved, never below 0).
+  - Inventory: a "Meal kits" group (one disclosure per recipe: "Herby pork chops: 7 items", items with their place and
+    best-before); kit amounts are left out of the place groups; Use soon still includes kit items.
+  - `mealplan.cook`: for a recipe with a kit, consume the kit's stock entries first (Grocy consume by `stock_entry_id`),
+    then general stock; the kit is gone when its entries are used. Using a kit item by hand (Inventory Use) also
+    shrinks or ends the reservation.
+  - `shopping` (meal-plan shortfall, Running low / Keep at least, Task 6's `combined_need`) and `suggest.build_context`
+    fulfillment use `free_stock` instead of raw stock; a recipe with its own kit counts the kit too (`"has_kit": True`).
+  - Undo after adding removes the kit with the stock.
+- **Packets only from a kit (spec goal 13).** The recipe table shows packet pills only when the recipe has a kit in
+  inventory; a "Meal kit / Our pantry" segmented switch at the top of the table (`?kit=1|0`, no JS needed) starts on
+  whichever matches. Review and the add-to-inventory confirm keep showing packets.
+
 - [ ] Tests first: `test_add_ingredients_confirm_lists_and_skips`; `test_add_ingredients_books_scaled_amounts` (Review
-  Focus 5); `test_add_ingredients_undo`; `test_add_ingredients_never_on_save` (import Save adds no stock).
-- [ ] Implement (frontend-design). Full suite green. Commit: `feat: add a recipe's ingredients to inventory`.
+  Focus 5); `test_add_ingredients_undo` (kit gone too); `test_add_ingredients_never_on_save` (import Save adds no stock);
+  `test_kit_items_listed_under_meal_kits_not_places`; `test_cook_uses_kit_entries_first`;
+  `test_other_recipes_and_shopping_ignore_kit_stock`; `test_packets_shown_only_with_a_kit_and_switch_overrides`.
+- [ ] Implement (frontend-design). Full suite green. Commit: `feat: add a recipe's box as a meal kit, kept for that recipe`.
 
 ### Task 8: Cook from what we have
 
@@ -230,6 +248,8 @@ helper), tests.
   stocked recipes first, then most stocked, then expiring stock; no repeats in the week; avoid recipes cooked in the last
   3 weeks unless nothing else is fully stocked"; free mode uses `local_picks(..., from_stock=True)` with that ranking.
 - Plan: a "Cook from what we have" action next to Suggest (same review-before-adding flow as Suggest today).
+- Meal kits (Task 7): fulfillment uses free stock (`inventory.free_stock`); a recipe with a kit in inventory counts as
+  fully stocked and is suggested first (reason "Your meal kit is here").
 
 - [ ] Tests first: `test_fulfillment_scales_to_servings_and_ignores_unknown_amounts`; `test_local_picks_from_stock_order`;
   `test_from_stock_prompt_flag`; `test_plan_has_cook_from_stock_action`.
